@@ -1,0 +1,8 @@
+{"delay":80,"kind":"sys","text":"init · model=claude-sonnet-4-6 · session=mockquic"}
+{"delay":200,"kind":"status","status":"working"}
+{"delay":120,"kind":"asst-stream","text":"Sure — "}
+{"delay":80,"kind":"asst-stream","text":"the answer is "}
+{"delay":80,"kind":"asst-stream","text":"42.\n"}
+{"delay":120,"kind":"asst","text":"Sure — the answer is 42.","preview":"Sure — the answer is 42."}
+{"delay":50,"kind":"tokens","in":120,"out":12,"ctx":3500}
+{"delay":80,"kind":"result","cost":0.0021,"status":"idle","num_turns":1}

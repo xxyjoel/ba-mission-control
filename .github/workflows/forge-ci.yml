@@ -1,0 +1,70 @@
+name: forge-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect & run tests
+        run: |
+          if [[ -f package.json ]] && grep -q '"test"' package.json; then
+            npm ci && npm test
+          elif [[ -f pyproject.toml ]] || [[ -f setup.py ]]; then
+            pip install -e . && pytest -q
+          elif [[ -f Cargo.toml ]]; then
+            cargo test --quiet
+          elif [[ -f go.mod ]]; then
+            go test ./...
+          else
+            echo "No test framework detected; skipping."
+          fi
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Non-blocking to start: surfaces advisories without gating the build.
+      # Tighten to a failing gate once the tree is clean at this level.
+      - name: npm audit (moderate+)
+        run: npm audit --audit-level=moderate || true
+
+  security:
+    name: security-review (forge)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Marker for forge-security-reviewer
+        run: |
+          mkdir -p tasks/.events
+          echo "ci push $(date -u +%FT%TZ) sha=${GITHUB_SHA}" >> tasks/.events/ci-security.log
+          echo "::notice ::Push the marker into the forge-security-reviewer queue locally with /forge-security-pass."
+
+  forge-status:
+    name: forge status dashboard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show tasks/_index.md in the run log
+        run: |
+          if [[ -f tasks/_index.md ]]; then
+            cat tasks/_index.md
+          else
+            echo "No tasks/_index.md yet."
+          fi

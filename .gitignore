@@ -1,0 +1,38 @@
+node_modules/
+.DS_Store
+*.log
+
+# Forge — locally-installed git hooks (point to absolute paths in ~/.claude/forge/).
+# Each clone runs `~/.claude/forge/install.sh --project .` to re-symlink.
+.githooks/
+
+# Forge bookkeeping — local state, never tracked.
+tasks/.events/
+tasks/.telemetry/
+tasks/.cost/
+tasks/.energy/
+
+# Session-health telemetry — local state, never tracked.
+.project-health/
+
+# Secrets & local runtime state — NEVER commit. The app persists a
+# settings.json that can hold a Slack webhook URL, plus per-session
+# transcripts and cost/session state. Belt-and-suspenders against an
+# accidental `git add` from a contributor's real config dir.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+**/settings.json
+sessions.json
+costs-week.json
+templates.json
+.mc/
+# Local plan scratch (project-scoped plans live here but are not shipped).
+.claude/plans/
+
+# Forge task registry — internal dev state, not part of the public product.
+tasks/

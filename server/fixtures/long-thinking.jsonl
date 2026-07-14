@@ -1,0 +1,10 @@
+{"delay":80,"kind":"sys","text":"init · model=claude-opus-4-7 · session=mockthnk"}
+{"delay":200,"kind":"status","status":"working"}
+{"delay":500,"kind":"think","text":"The user is asking which testing library to use for Ink TUIs. Let me consider the options carefully.\n\nink-testing-library is the de facto standard — maintained by Ink's author, snapshot-friendly, supports stdin injection.\n\nink-test-utils is older and less actively maintained.\n\nRolling our own would mean writing a stripped-down stdout capture + stdin mock. Possible but a lot of yak-shaving.\n\nI'll recommend ink-testing-library and explain why.","preview":"The user is asking which testing library to use for Ink TUIs. Let me consider..."}
+{"delay":150,"kind":"asst-stream","text":"For Ink TUIs the standard answer "}
+{"delay":80,"kind":"asst-stream","text":"is `ink-testing-library`. "}
+{"delay":120,"kind":"asst-stream","text":"It's maintained by Ink's author, "}
+{"delay":80,"kind":"asst-stream","text":"supports stdin injection, and works with snapshot assertions.\n"}
+{"delay":250,"kind":"asst","text":"For Ink TUIs the standard answer is `ink-testing-library`. It's maintained by Ink's author, supports stdin injection, and works with snapshot assertions. Add it as a devDependency and use `render()` + `lastFrame()` to assert on rendered output.","preview":"For Ink TUIs the standard answer is `ink-testing-library`."}
+{"delay":50,"kind":"tokens","in":680,"out":124,"ctx":8400}
+{"delay":80,"kind":"result","cost":0.0312,"status":"idle","num_turns":1}

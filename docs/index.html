@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlueArch Mission Control — fleet command for your Claude Code agents</title>
+  <meta name="description" content="A keyboard-first terminal TUI for running up to 10 real Claude Code agent sessions at once — with live cost, context, and sub-agent tracking. Open source, self-hosted, made in the USA.">
+  <meta property="og:title" content="BlueArch Mission Control">
+  <meta property="og:description" content="Fleet command for your Claude Code agents. Open source, self-hosted, made in the USA.">
+  <meta property="og:image" content="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/hero.gif">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+  <nav>
+    <div class="wrap">
+      <span class="brand">BlueArch <b>Mission Control</b></span>
+      <span class="links">
+        <a href="#features">Features</a>
+        <a href="#compare">vs tmux / cmux</a>
+        <a href="#install">Install</a>
+        <a href="https://github.com/xxyjoel/ba-mission-control">GitHub</a>
+      </span>
+    </div>
+  </nav>
+
+  <!-- ── Hero ─────────────────────────────────────────── -->
+  <header class="hero">
+    <div class="wrap">
+      <h1>Ten agents,<br>one keyboard.</h1>
+      <p class="tag">
+        A keyboard-first terminal TUI for running up to 10 <strong>real</strong> Claude Code
+        sessions at once — with live cost, context, and sub-agent tracking.
+        No GUI. No Electron. No prefix keys.
+      </p>
+      <p class="slogan">Open source · self-hosted · made in the USA 🇺🇸</p>
+
+      <div class="cta">
+        <a class="btn btn-primary" href="#install">Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/xxyjoel/ba-mission-control">★ Star on GitHub</a>
+      </div>
+
+      <div class="badges">
+        <img alt="License AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg">
+        <img alt="npm" src="https://img.shields.io/npm/v/@bluearch/mission-control.svg">
+        <img alt="Node >=20" src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg">
+      </div>
+
+      <div class="cta">
+        <span class="npx"><span class="prompt">$</span> npx @bluearch/mission-control</span>
+      </div>
+
+      <div class="shot">
+        <img alt="Mission Control demo"
+             src="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/hero.gif">
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Open-source band ─────────────────────────────── -->
+  <section class="band">
+    <div class="wrap">
+      <h2>Runs entirely on <span class="accent">your</span> machine</h2>
+      <p class="lead" style="margin:0 auto;">
+        No telemetry. No network service. No account beyond your own Claude login.
+        Auditable, local-only, and yours to theme.
+      </p>
+      <div class="pills">
+        <span class="pill"><b>100%</b> open source (AGPL-3.0)</span>
+        <span class="pill"><b>0</b> telemetry</span>
+        <span class="pill"><b>localhost</b> only</span>
+        <span class="pill"><b>7</b> built-in themes</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Who it's for ─────────────────────────────────── -->
+  <section>
+    <div class="wrap">
+      <h2>Who it's <span class="accent">for</span></h2>
+      <p class="lead">
+        macOS &amp; Linux developers using Claude Code who run more than one agent at a
+        time — and want fleet-level awareness without babysitting each tab. If you're
+        terminal-first, keyboard-first, and want your tooling open and self-hosted,
+        this is built for you.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Features ─────────────────────────────────────── -->
+  <section id="features">
+    <div class="wrap">
+      <h2>Fleet-level <span class="accent">awareness</span></h2>
+      <p class="lead">Every session is a real <code>claude</code> subprocess. Everything is measured, not simulated.</p>
+      <div class="grid">
+        <div class="card">
+          <div class="ico">$</div>
+          <h3>Live cost &amp; context</h3>
+          <p>Per-agent token, cost, and context-window tracking straight from Claude's own usage — with weekly spend and budget caps.</p>
+        </div>
+        <div class="card">
+          <div class="ico">⋔</div>
+          <h3>Sub-agent fan-out</h3>
+          <p>See when an agent spawns parallel sub-agents, with fan-out count and folded token accounting. No other tool shows this.</p>
+        </div>
+        <div class="card">
+          <div class="ico">▸</div>
+          <h3>Triage at a glance</h3>
+          <p>Each card answers "does this need me, when, and what next" — todo burndown plus a status-driven next-action verb.</p>
+        </div>
+        <div class="card">
+          <div class="ico">↵</div>
+          <h3>Zoom into any session</h3>
+          <p>Drop into a full PTY view of any agent — scroll history, toggle stats and tools panels, send input — then pop back to the grid.</p>
+        </div>
+        <div class="card">
+          <div class="ico">✓</div>
+          <h3>Approval routing</h3>
+          <p>Permission prompts surface on the card and route to a keystroke. Cycle plan / auto / acceptEdits modes without leaving the fleet.</p>
+        </div>
+        <div class="card">
+          <div class="ico">◈</div>
+          <h3>Themes &amp; restore</h3>
+          <p>Seven palettes including green-phosphor <b>Matrix</b>. Save &amp; restore sessions across restarts. Yours to re-theme.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Comparison ───────────────────────────────────── -->
+  <section id="compare">
+    <div class="wrap">
+      <h2>Why not <span class="accent">tmux</span> or <span class="accent">cmux</span>?</h2>
+      <p class="lead">Not a generic multiplexer, not a native app — a TUI that understands Claude Code agents. Runs alongside tmux and over SSH.</p>
+      <table class="cmp">
+        <thead>
+          <tr><th></th><th>tmux</th><th>cmux</th><th class="us">Mission Control</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>What it is</td><td>multiplexer</td><td>macOS GUI app</td><td>terminal TUI</td></tr>
+          <tr><td>Runs anywhere (SSH, any terminal)</td><td class="yes">✓</td><td class="no">local macOS</td><td class="yes">✓</td></tr>
+          <tr><td>Purpose-built for Claude Code</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Per-agent cost / context tracking</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+          <tr><td>Sub-agent fan-out awareness</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+          <tr><td>No prefix keys, zero config</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>No GUI / no Electron</td><td class="yes">✓</td><td class="no">native</td><td class="yes">✓</td></tr>
+          <tr><td>Open source &amp; self-hosted</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Install ──────────────────────────────────────── -->
+  <section id="install">
+    <div class="wrap">
+      <h2>Get <span class="accent">started</span></h2>
+      <p class="lead">Requires Node 20+, the <code>claude</code> CLI on your PATH, and a 24-bit-color terminal.</p>
+      <pre><span class="c"># Run it now, no install</span>
+<span class="g">npx</span> @bluearch/mission-control
+
+<span class="c"># …or install the mc command globally</span>
+<span class="g">npm</span> install -g @bluearch/mission-control
+<span class="g">mc</span></pre>
+      <pre><span class="c"># From source (contributors)</span>
+<span class="g">git</span> clone https://github.com/xxyjoel/ba-mission-control.git
+<span class="g">cd</span> ba-mission-control
+<span class="g">npm</span> install &amp;&amp; npm start</pre>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>
+        <a href="https://github.com/xxyjoel/ba-mission-control">GitHub</a> ·
+        <a href="https://github.com/xxyjoel/ba-mission-control/blob/main/LICENSE">AGPL-3.0</a> ·
+        <a href="https://github.com/xxyjoel/ba-mission-control/blob/main/CONTRIBUTING.md">Contribute</a>
+      </p>
+      <p class="usa">BlueArch Mission Control — made in the USA 🇺🇸</p>
+    </div>
+  </footer>
+
+</body>
+</html>

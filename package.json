@@ -1,0 +1,63 @@
+{
+  "name": "@bluearch/mission-control",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "BlueArch Mission Control — keyboard-first terminal TUI for managing up to 10 live Claude Code agent sessions.",
+  "license": "AGPL-3.0-only",
+  "author": "BlueArch",
+  "homepage": "https://xxyjoel.github.io/ba-mission-control",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xxyjoel/ba-mission-control.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xxyjoel/ba-mission-control/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tui",
+    "ink",
+    "terminal",
+    "agents",
+    "ai-agents",
+    "tmux-alternative",
+    "self-hosted"
+  ],
+  "bin": {
+    "mc": "bin/mc.mjs"
+  },
+  "files": [
+    "bin",
+    "tui",
+    "server",
+    "scripts/fix-node-pty.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "tsx bin/mc.mjs",
+    "dev": "tsx watch bin/mc.mjs",
+    "dev:sandbox": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx bin/mc.mjs",
+    "dev:sandbox:watch": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx watch bin/mc.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "test:watch": "MC_NO_TRANSCRIPT=1 find tests -name '*.test.*' -type f -exec node --import tsx --test --test-timeout=30000 --test-force-exit --watch {} +",
+    "postinstall": "node scripts/fix-node-pty.mjs"
+  },
+  "dependencies": {
+    "@xterm/headless": "6.0.0",
+    "ink": "^5.0.1",
+    "node-pty": "1.1.0",
+    "react": "^18.3.1",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "ink-testing-library": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

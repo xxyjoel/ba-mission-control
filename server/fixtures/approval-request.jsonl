@@ -1,0 +1,11 @@
+{"delay":80,"kind":"sys","text":"init · model=claude-sonnet-4-6 · session=mockaprv"}
+{"delay":200,"kind":"status","status":"working"}
+{"delay":150,"kind":"asst-stream","text":"I'll open the plan file in Sublime Text so you can edit it directly."}
+{"delay":200,"kind":"approval","tool":"Bash","summary":"subl ~/.claude/plans/some-thoungts-on-potential-witty-dove.md","input":{"command":"subl ~/.claude/plans/some-thoungts-on-potential-witty-dove.md"}}
+{"delay":50,"kind":"wait-user"}
+{"delay":120,"kind":"sys","text":"approval received — proceeding with Bash"}
+{"delay":200,"kind":"tool","tool":"Bash","text":"subl ~/.claude/plans/some-thoungts-on-potential-witty-dove.md"}
+{"delay":300,"kind":"tool-result","text":""}
+{"delay":150,"kind":"asst","text":"Done — the plan file should be open in Sublime now.","preview":"Done — the plan file should be open in Sublime now."}
+{"delay":50,"kind":"tokens","in":420,"out":36,"ctx":4800}
+{"delay":80,"kind":"result","cost":0.0048,"status":"idle","num_turns":1}

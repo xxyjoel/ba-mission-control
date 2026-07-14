@@ -1,0 +1,10 @@
+{"delay":80,"kind":"sys","text":"init · model=claude-sonnet-4-6 · session=mocktool"}
+{"delay":200,"kind":"status","status":"working"}
+{"delay":120,"kind":"asst-stream","text":"Let me check the file."}
+{"delay":200,"kind":"tool","tool":"Read","text":"/etc/hosts"}
+{"delay":300,"kind":"tool-result","text":"127.0.0.1\tlocalhost\n::1\tlocalhost"}
+{"delay":150,"kind":"asst-stream","text":"\nFound it. "}
+{"delay":80,"kind":"asst-stream","text":"Your hosts file has the standard loopback entries."}
+{"delay":120,"kind":"asst","text":"Found it. Your hosts file has the standard loopback entries — 127.0.0.1 and ::1 both map to localhost.","preview":"Found it. Your hosts file has the standard loopback entries."}
+{"delay":50,"kind":"tokens","in":340,"out":48,"ctx":4200}
+{"delay":80,"kind":"result","cost":0.0064,"status":"idle","num_turns":1}
