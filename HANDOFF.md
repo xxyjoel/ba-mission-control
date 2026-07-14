@@ -60,7 +60,12 @@ carry personal paths (now gitignored for plans). Also added: SECURITY.md
 private-vulnerability-reporting channel + supported-versions, `.github/
 dependabot.yml` (weekly npm + actions), and `docs/RELEASE-CHECKLIST.md`
 consolidating the remaining human/account steps (history decision, GitHub
-security settings, npm publish, tagging).
+security settings, npm publish, tagging). Later adds: `.github/FUNDING.yml`,
+a Homebrew formula scaffold (`packaging/homebrew/mission-control.rb` + setup
+README; needs `npm publish` then the tarball sha256), README Homebrew install
+tier, and the social-preview card. NOTE: global `mc` is an `npm link` symlink
+(`/opt/homebrew/bin/mc` → this repo), so it runs whatever branch is checked
+out — restart `mc` after switching branches to pick up e.g. the Matrix theme.
 
 **2026-07-12 — feat: surface parallel sub-agents on cards + count their token/cost spend**
 — Uncommitted, suite green (75 files). Two related threads, both about sub-agent

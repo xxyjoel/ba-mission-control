@@ -66,6 +66,10 @@ npx @bluearch/mission-control
 # …or install the `mc` command globally:
 npm install -g @bluearch/mission-control
 mc
+
+# …or via Homebrew:
+brew tap xxyjoel/tap
+brew install mission-control
 ```
 
 Prefer to hack on it? See [From source](#from-source) below and
