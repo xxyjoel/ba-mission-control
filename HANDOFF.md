@@ -24,9 +24,11 @@ Shipped this session:
 5. **Marketing** — README hero (tagline, made-in-USA slogan, badges, hero-GIF
    slot), "Who this is for", "Why not tmux or cmux?" table, npx quick-start,
    themes section. `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`,
-   PR template. VHS `tapes/hero.tape` + workflow docs. Single-page GitHub Pages
-   landing at `docs/index.html` (Matrix aesthetic; brand tokens isolated in
-   `docs/assets/tokens.css`).
+   PR template. VHS tapes (hero/zoom/themes/dashboard) + workflow docs.
+   Single-page GitHub Pages landing at `docs/index.html` (Matrix aesthetic;
+   brand tokens isolated in `docs/assets/tokens.css`). Social-preview card
+   `assets/social-preview.svg` (1280×640; rasterize to PNG per assets/README.md;
+   wired as the landing `og:image`).
 **OPEN / INPUTS NEEDED before publish:** (a) **BlueArch brand kit** (fonts +
 palette) to finalize `docs/assets/tokens.css` and the landing design — currently
 seeded from the Matrix/BlueArch palettes. (b) **Generate the demo GIFs**:

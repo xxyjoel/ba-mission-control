@@ -40,13 +40,20 @@ GIF and adjust the sleeps so each step is readable — the mock stream's pacing
 and your terminal's startup time affect where events land. Keep `Width`/`Height`
 consistent across tapes so the assets look like a set.
 
-## Tapes to add
+## The tapes
 
-Only `hero.tape` is committed as the reference. Add the remaining three by
-copying it and changing the `Output`, the launched fixture, and the interaction:
+All four are committed. Each drives an `MC_MOCK` fixture and writes one GIF:
 
-- **zoom.tape** — launch, `Enter` to zoom, `Ctrl+y` scroll mode (w/s/b/f/g/G),
-  `Ctrl+u` stats panel, `Ctrl+k` tools panel, `Ctrl+q` to exit.
-- **themes.tape** — `:theme tokyo`, `:theme gruvbox`, `:theme matrix`, … to show
-  the palette gallery.
-- **dashboard.tape** — `d` to open the fleet dashboard, sort columns.
+- **hero.tape** — grid fills with agents, navigation, zoom, Matrix theme (the
+  README hero).
+- **zoom.tape** — `Enter` to zoom, `Ctrl+y` scroll mode (w/s/b/f/g/G), `Ctrl+u`
+  stats panel, `Ctrl+k` tools panel, `Ctrl+q` to exit.
+- **themes.tape** — cycles the palette gallery (Tokyo Night → Gruvbox →
+  Catppuccin → Amber → Matrix → BlueArch).
+- **dashboard.tape** — `d` opens the fleet dashboard; row navigation.
+
+Render all four at once:
+
+```sh
+for t in tapes/*.tape; do vhs "$t"; done
+```
