@@ -66,8 +66,9 @@ function preflight() {
 const auth = preflight();
 
 // Read settings.maxSlots up-front so the Fleet is sized correctly on boot.
-// App.jsx still loads its own copy for live UI mutations; changing maxSlots
-// from inside mc requires a restart to apply (the Fleet array is fixed-size).
+// App.jsx also applies live changes at runtime via fleet.setSlots() (grow
+// freely; shrink only above the highest occupied slot), so a mid-session
+// edit takes effect without a restart.
 const bootSettings = loadSettings();
 
 // Overlay any cached model probe onto the static catalog BEFORE the app

@@ -2,10 +2,11 @@
 //
 // The UI addresses agents by `slot`. Each slot is either an empty
 // placeholder or a live Agent instance. Subscribers receive a snapshot
-// on every state change. The slot count is settable per-instance via
-// `new Fleet({ slots })` — the caller reads `settings.maxSlots` from
-// disk before construction. Hot-changing the cap mid-session is
-// intentionally NOT supported; live agents would have nowhere to go.
+// on every state change. The slot count is set per-instance via
+// `new Fleet({ slots })` (the caller reads `settings.maxSlots` from disk
+// before construction) and can be changed live with `setSlots(n)` —
+// growing appends empty slots; shrinking only drops trailing EMPTY slots,
+// never a live agent (so the floor is the highest occupied slot).
 
 import { EventEmitter } from 'node:events';
 import { Agent } from './agent.mjs';
@@ -179,5 +180,30 @@ export class Fleet extends EventEmitter {
     a.costCapUSD = Number(usd) || 0;
     this.emit('change', this.snapshot());
     return true;
+  }
+
+  // Resize the live fleet when `settings.maxSlots` changes, so the setting
+  // takes effect without an mc restart. Growing appends empty slots.
+  // Shrinking only removes trailing EMPTY slots — never a live agent — so
+  // the effective floor is the highest occupied slot (a request below that
+  // is clamped, and the returned value tells the caller what actually took).
+  // Clamped to the same 1..64 band as the constructor. Emits 'change'.
+  setSlots(n) {
+    const target = Math.max(1, Math.min(64, n | 0 || DEFAULT_SLOTS));
+    if (target === this.slots) return this.slots;
+    if (target > this.slots) {
+      for (let i = this.slots; i < target; i++) this.agents.push(null);
+      this.slots = target;
+    } else {
+      let highestOccupied = 0;
+      for (let i = 0; i < this.agents.length; i++) {
+        if (this.agents[i]) highestOccupied = i + 1;
+      }
+      const floored = Math.max(target, highestOccupied, 1);
+      this.agents.length = floored; // truncates trailing nulls only
+      this.slots = floored;
+    }
+    this.emit('change', this.snapshot());
+    return this.slots;
   }
 }

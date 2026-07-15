@@ -40,7 +40,7 @@ class FakeFleet extends EventEmitter {
   snapshot() { return { ...this._snap, now: Date.now() }; }
   agentBySlot(s) { return this._snap.agents[s - 1]; }
   agentById(id) { return this._snap.agents.find(a => a.id === id) || null; }
-  setCostCap() {} killAll() {} launch() {} resume() {} kill() {}
+  setCostCap() {} setSlots(n) { return n; } killAll() {} launch() {} resume() {} kill() {}
   broadcast() { return 0; } setSlotCostCap() { return true; }
 }
 

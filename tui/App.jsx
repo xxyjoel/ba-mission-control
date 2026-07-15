@@ -272,6 +272,17 @@ export default function App({ fleet, auth: initialAuth }) {
     fleet.setCostCap(settings.costCapUSD || 0);
   }, [settings.costCapUSD, fleet]);
 
+  // Apply "Maximum live sessions" (maxSlots) to the live fleet the moment it
+  // changes — no restart needed. The fleet grows freely and refuses to shrink
+  // below the highest occupied slot; if the request was clamped, tell the user.
+  useEffect(() => {
+    const want = settings.maxSlots || 10;
+    const got = fleet.setSlots(want);
+    if (got !== want) {
+      pushToast(`max sessions kept at ${got} — close sessions in higher slots to shrink further`, 'warn');
+    }
+  }, [settings.maxSlots, fleet]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Periodic GC of lastSeen entries for dead sessions.
   useEffect(() => {
     const t = setInterval(() => { costStoreRef.current.gc(snapshot.agents); }, 30000);

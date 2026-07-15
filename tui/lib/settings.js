@@ -108,7 +108,7 @@ export const SETTINGS_SCHEMA = [
     { key: 'defaultPermission', label: 'Default permission mode', kind: 'cycle', options: ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'], desc: 'Default for new sessions only — change a live session via :perm <mode>. bypassPermissions removes all guardrails.' },
   ]},
   { id: 'layout', title: 'LAYOUT', items: [
-    { key: 'maxSlots',      label: 'Maximum live sessions', kind: 'number', min: 1, max: 64, step: 1, unit: ' slots', desc: 'Bumping above 10 requires arrow nav or :goto N for slots 11+. Applied on next mc restart.' },
+    { key: 'maxSlots',      label: 'Maximum live sessions', kind: 'number', min: 1, max: 64, step: 1, unit: ' slots', desc: 'Applies live. Bumping above 10 requires arrow nav or :goto N for slots 11+. Shrinking is limited to above your highest active session.' },
     { key: 'density',       label: 'Density',          kind: 'cycle',  options: ['compact', 'regular', 'spacious'] },
     { key: 'gridCols',      label: 'Grid columns',     kind: 'cycle',  options: [3, 4, 5] },
     { key: 'windowsPerPane', label: 'Max windows per pane', kind: 'number', min: 0, max: 32, step: 1, unit: ' cards', desc: 'Cards per pane before the grid pages ([ / ] to switch). 0 = fill as many as fit. Also capped by terminal height so a pane never clips.' },

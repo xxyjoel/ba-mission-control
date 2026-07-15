@@ -42,6 +42,7 @@ class FakeFleet extends EventEmitter {
   agentBySlot() { return null; }
   agentById() { return null; }
   setCostCap() {}
+  setSlots(n) { return n; }
   killAll() {}
 }
 

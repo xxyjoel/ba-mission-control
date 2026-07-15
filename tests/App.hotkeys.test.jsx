@@ -48,6 +48,7 @@ class FakeFleet extends EventEmitter {
   agentBySlot(s) { return this._snap.agents[s - 1]; }
   agentById(id) { return this._snap.agents.find(a => a.id === id) || null; }
   setCostCap() {}
+  setSlots(n) { return n; }
   killAll() {}
   // Stubs so the App can call them without exploding
   launch() {}
