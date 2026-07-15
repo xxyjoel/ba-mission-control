@@ -2,6 +2,18 @@
 
 ## Current state
 
+**2026-07-15 — fix: "Maximum live sessions" (maxSlots) applies live**
+— Suite green (76 files). maxSlots persisted but the Fleet was sized once at
+boot, so changing it in Settings did nothing until an mc restart (read as
+broken). Added `Fleet.setSlots(n)` (grow appends empty slots; shrink floors at
+the highest occupied slot; clamped [1,64]; emits change) wired from App.jsx on
+`settings.maxSlots` change, mirroring the `setCostCap` effect; toasts if a
+shrink was clamped. Updated the setting desc + boot comment. The 3 App
+`FakeFleet` stubs gained `setSlots`. NOTE: an unrelated "fix api error" request
+is paused — the `jsonlConnector.mjs:338` api_error handling looks intentional
+(stays 'working' through transient retries, errors only when exhausted), so it
+needs the specific symptom before touching.
+
 **2026-07-13 — chore: open-source launch prep + clean-history public release**
 — Suite green (76 files). Publishing as `@bluearch/mission-control` under
 **AGPL-3.0** as a squashed clean-history release that **includes** the sub-agent
