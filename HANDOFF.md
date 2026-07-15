@@ -9,10 +9,17 @@ broken). Added `Fleet.setSlots(n)` (grow appends empty slots; shrink floors at
 the highest occupied slot; clamped [1,64]; emits change) wired from App.jsx on
 `settings.maxSlots` change, mirroring the `setCostCap` effect; toasts if a
 shrink was clamped. Updated the setting desc + boot comment. The 3 App
-`FakeFleet` stubs gained `setSlots`. NOTE: an unrelated "fix api error" request
-is paused — the `jsonlConnector.mjs:338` api_error handling looks intentional
-(stays 'working' through transient retries, errors only when exhausted), so it
-needs the specific symptom before touching.
+`FakeFleet` stubs gained `setSlots`.
+
+**2026-07-15 — fix: transient api retries no longer spam red "api error" log lines**
+— Suite green (76). `jsonlConnector.mjs` api_error handling kept the card
+`working` through claude's transient retries (correct) but still pushed a red
+`kind:'err'` tail line for EVERY one — flooding the log with alarming "api
+error" lines on healthy sessions (1200+ ECONNRESETs in a single session). Now a
+transient retry emits a calm `kind:'sys'` "api retry · CODE (n/max)" line;
+only exhausted retries (`attempt >= max`) stay red `err` + errored status. Test
+`jsonlConnector` mid-retry updated (asserts `sys`, not `err`); exhausted case
+unchanged.
 
 **2026-07-13 — chore: open-source launch prep + clean-history public release**
 — Suite green (76 files). Publishing as `@bluearch/mission-control` under

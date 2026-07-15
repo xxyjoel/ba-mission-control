@@ -352,16 +352,23 @@ function handleSystem(ev, agent) {
     // so the user reads it as retrying, not as failed work.
     agent.apiErrorCount = (agent.apiErrorCount || 0) + 1;
     agent.lastApiErrorTs = Date.now();
-    pushTail(agent, {
-      kind: 'err',
-      text: `api error${code ? ' · ' + code : ''}${attempt ? ` (retry ${attempt}/${max || '?'})` : ''}`,
-    });
     if (max > 0 && attempt >= max) {
-      // Retries exhausted — this is a real, terminal error.
+      // Retries exhausted — a real, terminal error. Red 'err' line + errored card.
+      pushTail(agent, {
+        kind: 'err',
+        text: `api error${code ? ' · ' + code : ''} — retries exhausted (${attempt}/${max})`,
+      });
       agent.status = 'error';
     } else {
-      // Still retrying — claude is alive and working. Surface the retry in
-      // the activity line so the card explains the slowdown without going red.
+      // Still retrying — claude is alive and working. Emit a CALM 'sys' line, not
+      // a red 'err' one: a transient ECONNRESET/overload claude auto-retries isn't
+      // failed work, and painting every one red flooded the log with alarming
+      // "api error" lines (1200+ ECONNRESETs seen in a single session). The retry
+      // also shows in the activity line so the card explains the slowdown.
+      pushTail(agent, {
+        kind: 'sys',
+        text: `api retry${code ? ' · ' + code : ''}${attempt ? ` (${attempt}/${max || '?'})` : ''}`,
+      });
       agent.status = 'working';
       agent.activity = `retrying api · ${code || 'error'} ${attempt || '?'}/${max || '?'}`.slice(0, 200);
     }

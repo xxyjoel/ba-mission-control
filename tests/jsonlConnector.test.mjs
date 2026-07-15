@@ -278,10 +278,11 @@ test('parseEvent: system turn_duration → status idle', () => {
   assert.equal(a.status, 'idle');
 });
 
-test('parseEvent: system api_error mid-retry → tail (err) + stays working', () => {
+test('parseEvent: system api_error mid-retry → calm sys line + stays working', () => {
   // Transient ECONNRESET-style error claude is still retrying (attempt < max):
-  // the card must NOT go red — claude is alive and working. Regression guard
-  // for the "errored while working" report (every transient retry flashed red).
+  // the card must NOT go red AND the log line must NOT be a red 'err' line —
+  // claude is alive and working. Regression guard for the "flood of red api
+  // error lines during healthy retries" report.
   const a = makeAgent();
   const changed = parseEvent({
     type: 'system',
@@ -292,9 +293,10 @@ test('parseEvent: system api_error mid-retry → tail (err) + stays working', ()
   }, a);
   assert.equal(changed, true);
   assert.equal(a.status, 'working');
-  assert.equal(a.tail[0].kind, 'err');
+  assert.equal(a.tail[0].kind, 'sys', 'transient retry must be a calm sys line, not red err');
   assert.match(a.tail[0].text, /ECONNRESET/);
-  assert.match(a.tail[0].text, /retry 1\/10/);
+  assert.match(a.tail[0].text, /1\/10/);
+  assert.doesNotMatch(a.tail[0].text, /^api error/, 'transient line reads as retry, not error');
   assert.match(a.activity, /retrying api/);
 });
 
@@ -324,7 +326,7 @@ test('parseEvent: system api_error retries exhausted → status error', () => {
   assert.equal(a.status, 'error');
   assert.equal(a.tail[0].kind, 'err');
   assert.match(a.tail[0].text, /rate_limit/);
-  assert.match(a.tail[0].text, /retry 5\/5/);
+  assert.match(a.tail[0].text, /exhausted \(5\/5\)/);
 });
 
 test('parseEvent: system local_command → sys tail entry', () => {
