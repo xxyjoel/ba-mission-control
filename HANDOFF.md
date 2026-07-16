@@ -2,6 +2,25 @@
 
 ## Current state
 
+**2026-07-16 — 🚀 PUBLIC: clean-history repo is live and open source**
+— The project is public at github.com/xxyjoel/ba-mission-control (AGPL-3.0).
+Because ~30 closed/merged PRs + the `v0.2.0` tag would have exposed the old
+pre-squash history (personal paths/email) and PRs/tags can't be deleted on
+GitHub, we did NOT flip the original repo — instead: (1) deleted all 17
+non-main branches, (2) renamed the original private repo →
+`ba-mission-control-private` (keeps full history + PRs + tag as a private
+backup), (3) created a FRESH public `ba-mission-control`, (4) pushed **main
+only** — the 7-commit clean squash, no tags, no other refs. Verified against
+the live public remote: **0 PII blobs, 0 secret blobs**, `main` is the only
+branch, no tags. `origin` now points at the public repo (private backup is not
+wired as a remote here). REMAINING to finish the launch (public repo now
+exists): GitHub settings (Pages → main /docs, secret scanning + push
+protection, branch protection, topics, upload social-preview.png); generate
+`assets/*.gif` (`vhs tapes/*.tape`) + rasterize social-preview.svg→png; npm
+publish + Homebrew tap + sha256; brand kit → tokens.css; CoC email; tag
+v1.0.0. NOTE: forge `tasks/` is gitignored on the public repo (dev-internal);
+the private backup retains it. This HANDOFF is the tracked progress record.
+
 **2026-07-15 — fix: "Maximum live sessions" (maxSlots) applies live**
 — Suite green (76 files). maxSlots persisted but the Fleet was sized once at
 boot, so changing it in Settings did nothing until an mc restart (read as
