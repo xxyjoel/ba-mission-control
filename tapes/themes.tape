@@ -16,12 +16,17 @@ Enter
 Sleep 4s
 
 # Populate a couple of cards so the palette change is visible across the grid.
+# "~" gives the NewSession modal a valid dir to launch (cwd cosmetic under MC_MOCK).
 Type "n"
 Sleep 800ms
+Type "~"
+Sleep 500ms
 Enter
 Sleep 2s
 Type "n"
 Sleep 800ms
+Type "~"
+Sleep 500ms
 Enter
 Sleep 2s
 
