@@ -15,17 +15,24 @@ Type "MC_MOCK=long-thinking npm start"
 Enter
 Sleep 4s
 
-# Spin up a few sessions so the dashboard has rows to sort.
+# Spin up a few sessions so the dashboard has rows to sort. "~" gives the
+# NewSession modal a valid dir to launch (cwd cosmetic under MC_MOCK).
 Type "n"
 Sleep 700ms
+Type "~"
+Sleep 400ms
 Enter
 Sleep 1500ms
 Type "n"
 Sleep 700ms
+Type "~"
+Sleep 400ms
 Enter
 Sleep 1500ms
 Type "n"
 Sleep 700ms
+Type "~"
+Sleep 400ms
 Enter
 Sleep 2s
 

@@ -16,9 +16,12 @@ Type "MC_MOCK=tool-loop npm start"
 Enter
 Sleep 4s
 
-# Launch one session and zoom into it.
+# Launch one session and zoom into it. The NewSession modal needs a valid dir
+# before Enter launches; "~" resolves (cwd is cosmetic under MC_MOCK).
 Type "n"
-Sleep 1s
+Sleep 800ms
+Type "~"
+Sleep 500ms
 Enter
 Sleep 3s
 Enter
