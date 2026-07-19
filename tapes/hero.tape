@@ -18,13 +18,20 @@ Type "MC_MOCK=quick-reply npm start"
 Enter
 Sleep 4s
 
-# Open a couple of sessions to populate the grid.
+# Open a couple of sessions to populate the grid. The NewSession modal needs a
+# valid directory before Enter launches; "~" (home) always resolves. Under
+# MC_MOCK the cwd is cosmetic — every launch replays the fixture, not a real
+# claude subprocess.
 Type "n"
-Sleep 1s
+Sleep 800ms
+Type "~"
+Sleep 500ms
 Enter
 Sleep 3s
 Type "n"
-Sleep 1s
+Sleep 800ms
+Type "~"
+Sleep 500ms
 Enter
 Sleep 3s
 
