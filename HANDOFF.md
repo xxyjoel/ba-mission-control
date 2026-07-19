@@ -2,6 +2,26 @@
 
 ## Current state
 
+**2026-07-18 — PH-release prep: security review, social preview PNG, demo GIFs**
+— On branch `fix/fleetlog-escape-strip-and-social-preview` (PR pending). (1)
+**Security review** (full tree + full git history): no glass-worm/invisible-Unicode,
+no secret keys in tree OR history, clean supply chain. One **Medium fixed** —
+`FleetLog.jsx` rendered untrusted `claude` stream output (asst/user/bcast/err)
+raw; now routes every kind through `humanize()` (strips OSC/CSI/C0), closing a
+terminal-escape passthrough from the passive fleet view. Report at
+`docs/audit/SECURITY-REVIEW-2026-07-18.md`. FleetLog suite green (7/7). Minor
+open: 7 public commits carry `joelproctor@…local` author email (metadata only —
+recommend `git config user.email` to noreply, NOT a history rewrite). (2)
+**Visuals generated** (finishes two REMAINING launch items below): rasterized a
+clean 1280×640 `assets/social-preview.png` via `@resvg/resvg-js` (fixed the SVG's
+chip overlap + drew the flag as vector since color emoji won't rasterize); and
+recorded all four `assets/*.gif` (hero/zoom/themes/dashboard) via VHS against
+`MC_MOCK` fixtures. Fixed every tape's session-launch flow (the NewSession modal
+needs a valid dir → type `~` before Enter). Recorded with an isolated `$HOME` so
+no real `~/.config/claude-mc` state is touched and no DEV/sandbox banner shows.
+GOTCHA: VHS needs `vhs`+`ttyd`+`ffmpeg` (brew) and a system Chrome; isolate via
+`HOME=/tmp/<name>` NOT `MC_CONFIG_DIR` (the latter triggers the sandbox banner).
+
 **2026-07-16 — 🚀 PUBLIC: clean-history repo is live and open source**
 — The project is public at github.com/xxyjoel/ba-mission-control (AGPL-3.0).
 Because ~30 closed/merged PRs + the `v0.2.0` tag would have exposed the old
