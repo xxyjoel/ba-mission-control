@@ -9,10 +9,12 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { fmtClock, trunc, humanize, padCol } from './lib/format.js';
 
-// Tier-2 kinds get routed through humanize() so the FleetLog scan
-// surfaces signal (which session, which kind, short summary) instead
-// of raw file paths / UUIDs / JSON payloads.
-const TIER2_KINDS = new Set(['tool', 'sys', 'think']);
+// SECURITY: EVERY kind routes through humanize() before render. It strips
+// terminal escape / OSC / C0 control sequences — asst/user/bcast text comes
+// straight from the untrusted `claude` stream, so raw escapes (e.g. OSC-52
+// clipboard writes, screen clears) would otherwise reach the host terminal
+// from this passive fleet view, no zoom required. humanize() also collapses
+// raw file paths / UUIDs / JSON payloads so the scan surfaces signal, not noise.
 
 function glyphForKind(k) {
   if (k === 'tool')  return '▸';
@@ -102,12 +104,7 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
               {l.tool && (l.kind === 'tool' || l.kind === 'err') &&
                 <Text color={l.kind === 'err' ? theme.red : theme.dim}>{l.tool} </Text>}
               <Text color={l.kind === 'err' ? theme.red : l.kind === 'sys' ? theme.dim : theme.fg} wrap="truncate">
-                {trunc(
-                  TIER2_KINDS.has(l.kind)
-                    ? humanize(l.preview || l.text || '')
-                    : (l.preview || l.text || ''),
-                  textBudget
-                )}
+                {trunc(humanize(l.preview || l.text || ''), textBudget)}
               </Text>
             </Box>
           );
