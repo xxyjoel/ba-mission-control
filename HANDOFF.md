@@ -2,6 +2,19 @@
 
 ## Current state
 
+**2026-07-20 — fix: token/cost totals were ~3.5x inflated (duplicate message.id)**
+— On branch `fix/token-dedup-message-id`. Claude Code persists MULTIPLE JSONL
+lines per assistant message (streaming snapshots share `message.id`, get fresh
+line uuids); `jsonlConnector.handleAssistant` summed every one, so the card's
+`in↓`/`out↑` and `costSession` over-counted. Measured on a real 1031-line
+session: 346 assistant records / **142 unique messages** → card showed `in↓
+4.8M` vs true **1.38M**, cost ~$258 vs true **$73.70**. Fix: de-dupe usage/cost
+by `message.id` with a DELTA model (each message lands its FINAL usage exactly
+once — correct for identical dupes AND partial→final growth). `context` unchanged
+(`=` overwrite, not `+=`). 56/56 connector tests green (+2 dedup tests).
+TODO(dedup-tail): the same duplicate records also re-push assistant text to the
+fleet-log tail (triplicate lines on real sessions) — deferred, same key.
+
 **2026-07-18 — PH-release prep: security review, social preview PNG, demo GIFs**
 — On branch `fix/fleetlog-escape-strip-and-social-preview` (PR pending). (1)
 **Security review** (full tree + full git history): no glass-worm/invisible-Unicode,
