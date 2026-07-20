@@ -77,6 +77,10 @@ Prefer to hack on it? See [From source](#from-source) below and
 
 ## Themes
 
+<p align="center">
+  <img alt="Cycling themes live — Tokyo Night, Gruvbox, Catppuccin, Amber, Matrix" src="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/themes.gif" width="800">
+</p>
+
 Six built-in palettes ship out of the box — **BlueArch** (default), Tokyo Night,
 Gruvbox Dark, Catppuccin Mocha, Solarized Dark, Amber (CRT), and the
 green-phosphor **Matrix** theme. Switch live with `:theme <name>` (e.g.
@@ -331,6 +335,10 @@ Configurable in Settings → GENERAL:
 
 ### Zoom (focused session)
 
+<p align="center">
+  <img alt="Zoom view — scrollback, stats and tools panels, live diff" src="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/zoom.gif" width="800">
+</p>
+
 `↵` on a live card opens the Zoom view. Claude's own "update available" banner
 is lifted out of the body and shown as a discrete `⬆ update` chip on the right
 of the zoom header so it doesn't encroach on the conversation — toggle with
@@ -548,6 +556,10 @@ on-disk session store.
 Built on top of the reliability layer below.
 
 ### Fleet dashboard (`D` or `:dash`)
+
+<p align="center">
+  <img alt="Fleet dashboard — sortable table of all live agents" src="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/dashboard.gif" width="800">
+</p>
 
 A single-screen table — one row per live agent — for triage when you
 have more than a handful of slots running. Columns: slot, name, model,
