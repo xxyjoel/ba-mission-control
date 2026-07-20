@@ -260,6 +260,50 @@ test('parseEvent: sidechain assistant → does NOT overwrite ctx, still counts t
   assert.equal(a.tokensOut, 20);
 });
 
+test('parseEvent: duplicate message.id → usage counted ONCE (streaming-snapshot dedup)', () => {
+  // Claude Code persists several JSONL lines per assistant message (streaming
+  // snapshots share message.id). Summing every record over-counted tokens/cost
+  // ~3.5x on real sessions. Same id + same usage must land exactly once.
+  const a = makeAgent();
+  const rec = () => ({
+    type: 'assistant',
+    message: {
+      id: 'msg_dup1', model: 'claude-opus-4-7',
+      content: [{ type: 'text', text: 'reply' }], stop_reason: 'end_turn',
+      usage: { input_tokens: 100, cache_creation_input_tokens: 200, cache_read_input_tokens: 1000, output_tokens: 50 },
+    },
+  });
+  parseEvent(rec(), a);
+  parseEvent(rec(), a);  // duplicate snapshot
+  parseEvent(rec(), a);  // triplicate
+  assert.equal(a.tokensIn, 300, 'in↓ counted once, not 3x');
+  assert.equal(a.tokensCacheRead, 1000, 'cache read counted once');
+  assert.equal(a.tokensOut, 50, 'out↑ counted once');
+  const oneCost = a.costSession;
+  assert.ok(oneCost > 0);
+  // A DIFFERENT message id accumulates normally on top.
+  const a2 = makeAgent();
+  parseEvent(rec(), a2);
+  assert.equal(a2.costSession, oneCost, 'cost is counted once per unique message.id');
+});
+
+test('parseEvent: same message.id with growing usage → FINAL wins (partial→final)', () => {
+  // If snapshots grow (partial then final), the delta model lands the final total.
+  const a = makeAgent();
+  const at = (out) => ({
+    type: 'assistant',
+    message: {
+      id: 'msg_grow', model: 'claude-opus-4-7',
+      content: [{ type: 'text', text: 'reply' }], stop_reason: 'end_turn',
+      usage: { input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: out },
+    },
+  });
+  parseEvent(at(10), a);   // partial
+  parseEvent(at(50), a);   // final
+  assert.equal(a.tokensOut, 50, 'final output wins, not 10 and not 60');
+  assert.equal(a.tokensIn, 100, 'input counted once');
+});
+
 test('parseEvent: assistant without usage → no token change', () => {
   const a = makeAgent({ tokensIn: 5 });
   parseEvent({
