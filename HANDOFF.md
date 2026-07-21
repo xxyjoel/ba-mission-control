@@ -2,6 +2,25 @@
 
 ## Current state
 
+**2026-07-21 — fix: advertised install path was broken 3 ways (customer couldn't install)**
+— On branch `fix/homebrew-tap-org`. A real customer (cristi) hit "Repository not
+found" on `brew tap xxyjoel/tap`, then "No available formula" on the correct
+`bluearchio/tap`. Root cause is threefold and only partly a doc bug: (1) README +
+`packaging/homebrew/` pointed at `xxyjoel/tap` — the real tap is `bluearchio/tap`
+(the one that already ships `bluearch-aws-*` formulae); (2) `mission-control.rb`
+was never added to that tap; (3) **`@bluearch/mission-control` was never published
+to npm** (registry 404s) — so `npx`, `npm i -g`, AND the formula's tarball URL all
+fail. Net: `git clone` from source is currently the ONLY working install.
+DECISION (user): `bluearchio` is canonical for install; app-repo URLs stay
+`xxyjoel` for now. THIS BRANCH fixes only the in-repo docs (tap refs → bluearchio;
+rewrote packaging README's "create the tap" → "add formula to existing tap").
+STILL BLOCKING install (outward-facing, NOT done here): `npm publish --access
+public` (needs @bluearch npm org membership — the true root cause), then inject
+real sha256 into a *tap copy* of the formula and push to `bluearchio/homebrew-tap`.
+GOTCHA: keep the `REPLACE_WITH_…` sha256 placeholder in THIS repo — it changes per
+release; only the tap copy gets a real hash. Exact command sequence handed off in
+the session that created this branch.
+
 **2026-07-20 — fix: token/cost totals were ~3.5x inflated (duplicate message.id)**
 — On branch `fix/token-dedup-message-id`. Claude Code persists MULTIPLE JSONL
 lines per assistant message (streaming snapshots share `message.id`, get fresh

@@ -4,20 +4,16 @@
 installs the published npm package as a native `brew` command — matching the
 "Homebrew tier" install path (like cmux offers).
 
-## One-time: create the tap repo
+## One-time: add the formula to the tap
 
-Homebrew taps are just Git repos named `homebrew-<tap>`:
-
-1. Create a public repo `xxyjoel/homebrew-tap`.
-2. Copy the formula into it at `Formula/mission-control.rb`.
-3. Push.
+The tap already exists at `bluearchio/homebrew-tap` (it ships the
+`bluearch-aws-*` formulae). Mission Control just needs its formula added
+alongside them at `Formula/mission-control.rb`:
 
 ```sh
-gh repo create xxyjoel/homebrew-tap --public -d "Homebrew tap for BlueArch tools"
-git clone https://github.com/xxyjoel/homebrew-tap && cd homebrew-tap
-mkdir -p Formula
+git clone https://github.com/bluearchio/homebrew-tap && cd homebrew-tap
 cp ../ba-mission-control/packaging/homebrew/mission-control.rb Formula/
-git add Formula && git commit -m "mission-control 1.0.0" && git push
+git add Formula/mission-control.rb && git commit -m "mission-control 1.0.0" && git push
 ```
 
 ## Per-release: publish npm, then set the sha256
@@ -36,7 +32,7 @@ Bump `url` + `sha256` on each new version (or automate with
 ## Users install with
 
 ```sh
-brew tap xxyjoel/tap
+brew tap bluearchio/tap
 brew install mission-control
 mc
 ```

@@ -68,7 +68,7 @@ npm install -g @bluearch/mission-control
 mc
 
 # …or via Homebrew:
-brew tap xxyjoel/tap
+brew tap bluearchio/tap
 brew install mission-control
 ```
 
