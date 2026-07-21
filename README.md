@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg"></a>
   <a href="https://www.npmjs.com/package/@bluearch/mission-control"><img alt="npm" src="https://img.shields.io/npm/v/@bluearch/mission-control.svg"></a>
-  <img alt="Node >=20" src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg">
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg">
   <img alt="Platform: macOS | Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg">
   <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg">
 </p>
