@@ -53,6 +53,8 @@ over SSH.
 | Per-agent cost / context / token tracking | ❌ | ❌ | ✅ |
 | Sub-agent fan-out awareness (`⋔`) | ❌ | ❌ | ✅ |
 | Approval / permission routing | ❌ | partial | ✅ |
+| Resume all active sessions | ❌ | ❌ | ✅ |
+| Broadcast slash commands to all agents | ❌ | ❌ | ✅ |
 | No prefix keys, zero config to start | ❌ | ✅ | ✅ |
 | No GUI / no Electron | ✅ | native (no Electron) | ✅ |
 | Open source & self-hosted | ✅ | ✅ | ✅ |
