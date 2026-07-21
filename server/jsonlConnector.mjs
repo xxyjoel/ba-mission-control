@@ -291,21 +291,44 @@ function handleAssistant(ev, agent) {
     const incIn    = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     const incCache = u.cache_read_input_tokens || 0;
     const incOut   = u.output_tokens || 0;
-    if (incIn)    agent.tokensIn        = (agent.tokensIn        || 0) + incIn;
-    if (incCache) agent.tokensCacheRead = (agent.tokensCacheRead || 0) + incCache;
-    if (incOut)   agent.tokensOut       = (agent.tokensOut       || 0) + incOut;
+    const incCost  = deriveCost(u, msg.model);
+    // De-dupe by message.id. Claude Code persists MULTIPLE JSONL lines for a
+    // single assistant message (streaming snapshots share `message.id` but each
+    // gets a fresh line uuid). Summing every record over-counted tokens AND cost
+    // ~3.5x on real sessions (measured: 346 records / 142 unique messages, in↓
+    // 4.8M vs true 1.38M). Apply only the DELTA vs what this message.id has
+    // already contributed, so each message lands its FINAL usage exactly once —
+    // correct for identical duplicates and for partial→final growth alike.
+    const mid = msg.id;
+    if (mid) {
+      if (!agent._usageByMsg) agent._usageByMsg = new Map();
+      const p = agent._usageByMsg.get(mid) || { in: 0, cache: 0, out: 0, cost: 0 };
+      const dIn = incIn - p.in, dCache = incCache - p.cache, dOut = incOut - p.out, dCost = incCost - p.cost;
+      agent.tokensIn        = (agent.tokensIn        || 0) + dIn;
+      agent.tokensCacheRead = (agent.tokensCacheRead || 0) + dCache;
+      agent.tokensOut       = (agent.tokensOut       || 0) + dOut;
+      agent.costSession     = (agent.costSession     || 0) + dCost;
+      if (dIn + dCache + dOut !== 0) updateSpark(agent, dIn + dCache + dOut);
+      agent._usageByMsg.set(mid, { in: incIn, cache: incCache, out: incOut, cost: incCost });
+    } else {
+      // No message.id (shouldn't occur for assistant records) — additive
+      // fallback rather than dropping the usage.
+      if (incIn)    agent.tokensIn        = (agent.tokensIn        || 0) + incIn;
+      if (incCache) agent.tokensCacheRead = (agent.tokensCacheRead || 0) + incCache;
+      if (incOut)   agent.tokensOut       = (agent.tokensOut       || 0) + incOut;
+      agent.costSession = (agent.costSession || 0) + incCost;
+      updateSpark(agent, incIn + incCache + incOut);
+    }
     // Context = the live conversation window, which is ONLY the main thread.
     // Sub-agent (Task) turns carry `isSidechain:true` and their own, smaller
     // `usage` — letting one overwrite agent.context makes the ctx gauge dive to
-    // the sub-agent's size mid-turn. Current claude writes sidechains to a
-    // separate subagents/*.jsonl the tailer never reads, so this is defensive,
-    // but it keeps the gauge correct if an inline sidechain ever reaches us.
+    // the sub-agent's size mid-turn. `=` overwrite (not +=), so duplicate records
+    // just re-set the same value — no dedup needed here.
     if (!ev.isSidechain && u.input_tokens != null) agent.context = incIn + incCache;
-    agent.costSession = (agent.costSession || 0) + deriveCost(u, msg.model);
-    // tok/min sparkline — the PTY pipeline used to skip this entirely, so
-    // the fleet t/min readout was a constant ~8000/agent (#26). Same
-    // normalizer as agent.mjs via server/spark.mjs.
-    updateSpark(agent, incIn + incCache + incOut);
+    // TODO(dedup-tail): the same duplicate records also re-push assistant text /
+    // tool rows to the tail (triplicate fleet-log lines on real sessions). Guard
+    // the tail pushes on the same message.id — deferred to keep this fix scoped
+    // to the token/cost accounting the user reported.
     changed = true;
   }
 

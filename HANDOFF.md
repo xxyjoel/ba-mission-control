@@ -2,6 +2,44 @@
 
 ## Current state
 
+**2026-07-21 — fix: advertised install path was broken 3 ways (customer couldn't install)**
+— On branch `fix/homebrew-tap-org`. A real customer (cristi) hit "Repository not
+found" on `brew tap xxyjoel/tap`, then "No available formula" on the correct
+`bluearchio/tap`. Root cause is threefold and only partly a doc bug: (1) README +
+`packaging/homebrew/` pointed at `xxyjoel/tap` — the real tap is `bluearchio/tap`
+(the one that already ships `bluearch-aws-*` formulae); (2) `mission-control.rb`
+was never added to that tap; (3) **`@bluearch/mission-control` was never published
+to npm** (registry 404s) — so `npx`, `npm i -g`, AND the formula's tarball URL all
+fail. Net: `git clone` from source is currently the ONLY working install.
+DECISION (user): `bluearchio` is canonical for install; app-repo URLs stay
+`xxyjoel` for now. THIS BRANCH (docs-only, no publish): (a) tap refs → bluearchio; rewrote packaging
+README's "create the tap" → "add formula to existing tap"; (b) **README Quick
+Start now leads with a WORKING install that needs no npm publish** —
+`npx github:xxyjoel/ba-mission-control` / `npm i -g github:xxyjoel/ba-mission-control`
+(verified: installs 74 pkgs, compiles node-pty, `mc` boots). The `@bluearch`
+registry install + `brew install` are demoted to a "coming soon" note. So
+customers can install TODAY. STILL BLOCKING the *registry/brew* paths (outward-
+facing, NOT done here, gated on npm account): `@bluearch` npm scope doesn't exist
+(`npm org create bluearch`), then `npm login` + `npm publish`, then inject real
+sha256 into a *tap copy* of the formula and push to `bluearchio/homebrew-tap`.
+GOTCHAs: keep the `REPLACE_WITH_…` sha256 placeholder in THIS repo (changes per
+release — only the tap copy gets a real hash); there's a `TODO(release)` in
+README to promote the registry install back once published. docs/LAUNCH.md social
+copy still says `npx @bluearch/…` — fine to leave until publish (it's post-copy).
+
+**2026-07-20 — fix: token/cost totals were ~3.5x inflated (duplicate message.id)**
+— On branch `fix/token-dedup-message-id`. Claude Code persists MULTIPLE JSONL
+lines per assistant message (streaming snapshots share `message.id`, get fresh
+line uuids); `jsonlConnector.handleAssistant` summed every one, so the card's
+`in↓`/`out↑` and `costSession` over-counted. Measured on a real 1031-line
+session: 346 assistant records / **142 unique messages** → card showed `in↓
+4.8M` vs true **1.38M**, cost ~$258 vs true **$73.70**. Fix: de-dupe usage/cost
+by `message.id` with a DELTA model (each message lands its FINAL usage exactly
+once — correct for identical dupes AND partial→final growth). `context` unchanged
+(`=` overwrite, not `+=`). 56/56 connector tests green (+2 dedup tests).
+TODO(dedup-tail): the same duplicate records also re-push assistant text to the
+fleet-log tail (triplicate lines on real sessions) — deferred, same key.
+
 **2026-07-18 — PH-release prep: security review, social preview PNG, demo GIFs**
 — On branch `fix/fleetlog-escape-strip-and-social-preview` (PR pending). (1)
 **Security review** (full tree + full git history): no glass-worm/invisible-Unicode,

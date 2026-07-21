@@ -1,10 +1,10 @@
 # Homebrew formula for BlueArch Mission Control.
 #
-# This lives here as the source of truth; to publish it, copy it into a tap
-# repo named `homebrew-tap` at `Formula/mission-control.rb` (see README.md in
-# this directory). Then users install with:
+# This lives here as the source of truth; to publish it, copy it into the tap
+# repo `bluearchio/homebrew-tap` at `Formula/mission-control.rb` (see README.md
+# in this directory). Then users install with:
 #
-#     brew tap xxyjoel/tap
+#     brew tap bluearchio/tap
 #     brew install mission-control
 #
 # The formula installs the published npm package (@bluearch/mission-control),
