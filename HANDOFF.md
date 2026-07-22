@@ -2,6 +2,19 @@
 
 ## Current state
 
+**2026-07-21 — chore(deps): combined ink 5→7 + react 18→19 (Dependabot #4/#5 were unmergeable alone)**
+— On branch `chore/deps-ink7-react19`. Triaged the two open Dependabot majors
+against the suite: each is broken in isolation and they're mutually locked.
+`ink@7.1` peer-requires `react>=19.2.0` (so #4 alone won't install on react 18);
+react 19 removed `ReactSharedInternals.ReactCurrentOwner`, which ink 5's bundled
+`react-reconciler` reads (so #5 alone crashes 24 test files at render). Bumped
+together: clean install → **ink 7.1.1 / react 19.2.8**, full suite **76/76 green**,
+lockfile regenerated. GOTCHA: a dirty `npm install` (existing ink-5 lock) ERESOLVEs
+— must `rm -rf node_modules package-lock.json` for a fresh resolve. STILL TODO
+before merge: **manual TTY smoke** (`mc` in a real terminal — grid/zoom/modals);
+tests render to ink-testing-library's virtual output, not a real TTY. Supersedes
+Dependabot #4 + #5 (PR closes both).
+
 **2026-07-21 — fix: advertised install path was broken 3 ways (customer couldn't install)**
 — On branch `fix/homebrew-tap-org`. A real customer (cristi) hit "Repository not
 found" on `brew tap xxyjoel/tap`, then "No available formula" on the correct
