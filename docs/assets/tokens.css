@@ -1,32 +1,35 @@
 /* tokens.css — BlueArch brand design tokens.
  *
  * Isolated so the landing page can adopt the real BlueArch website fonts +
- * palette by editing ONLY this file. Defaults below are seeded from the app's
- * built-in themes (tui/lib/themes.js): the Matrix green-phosphor palette plus
- * the BlueArch electric-cyan accent.
+ * palette by editing ONLY this file. Values below are the app's built-in
+ * **BlueArch** theme (tui/lib/themes.js → THEMES.BlueArch, the DEFAULT_THEME):
+ * a deep blue-black canvas, soft slate text, an electric-blue brand color, and
+ * the electric-cyan accent. (This replaces the earlier Matrix green-phosphor
+ * seed — the site now matches the app's default look.)
  *
- * TODO(brand): replace --font-* and the brand colors with the official
- * BlueArch website type + palette when the brand kit is provided.
+ * TODO(brand): replace --font-* with the official BlueArch website type when
+ * the brand kit is provided.
  */
 :root {
   /* Type — swap for BlueArch brand fonts. */
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
 
-  /* Matrix-green aesthetic (from THEMES.Matrix) + BlueArch electric accent. */
-  --bg:        #000600;
-  --bg-elev:   #04120a;
-  --bg-card:   #061a0f;
-  --fg:        #d6ffe0;
-  --fg-dim:    #7ecb98;
-  --fg-faint:  #3f7a55;
-  --green:     #33ff66;
-  --green-hi:  #00ff66;
+  /* BlueArch palette (from THEMES.BlueArch) — blue-black bg, slate fg,
+   * electric-blue brand + electric-cyan accent. */
+  --bg:        #0b0d12;
+  --bg-elev:   #12151d;
+  --bg-card:   #141a24;
+  --fg:        #c5cdd6;
+  --fg-dim:    #6c7787;
+  --fg-faint:  #404a59;
+  --brand:     #61afef; /* BlueArch electric blue — primary brand color */
+  --brand-hi:  #7cb9ff; /* brighter blue for hovers / emphasis */
   --accent:    #19D4D4; /* BlueArch electric cyan */
-  --accent-hi: #66ffcc;
-  --border:    #0e3a22;
-  --danger:    #ff5555;
-  --warn:      #d7ff4f;
+  --accent-hi: #5fe3e3;
+  --border:    #1c2432;
+  --danger:    #e06c75;
+  --warn:      #e5c07b;
 
   --radius: 12px;
   --maxw: 1080px;
