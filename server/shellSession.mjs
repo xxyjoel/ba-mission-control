@@ -13,7 +13,15 @@
 
 import { homedir } from 'node:os';
 import { spawn as ptySpawn } from 'node-pty';
+import xterm from '@xterm/headless';
 import { dlog } from '../tui/lib/debugLog.js';
+
+// xterm-headless ships as { Terminal } sometimes nested under .default
+// depending on the module resolution path — same idiom as ptyAgent.mjs:46.
+const { Terminal } = xterm.default || xterm;
+
+// Persistent emulator scrollback rows. Mirrors ptyAgent.mjs TERM_SCROLLBACK.
+const TERM_SCROLLBACK = 5000;
 
 // Module-level singleton. Null until the first getShellSession() call.
 let _session = null;
@@ -42,11 +50,42 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
     env: { ...process.env, TERM: 'xterm-256color' },
   });
 
+  // Construct the persistent xterm-headless emulator so the term buffer
+  // accumulates output while the overlay is closed (survives detach).
+  // Guarded when Terminal ctor is absent (unit-test stub path, mirrors
+  // PtyAgent.start() at ptyAgent.mjs:340).
+  let term = null;
+  let cell = null;
+  if (Terminal && typeof Terminal === 'function') {
+    try {
+      term = new Terminal({
+        cols: 80,
+        rows: 24,
+        allowProposedApi: true,
+        scrollback: TERM_SCROLLBACK,
+      });
+      cell = term.buffer.active.getNullCell();
+    } catch (e) {
+      // Term construction failed; continue without buffer (safe degradation).
+      term = null;
+      cell = null;
+    }
+  }
+
+  // Pipe PTY output into the persistent term at the singleton level — not
+  // in the overlay component — so the buffer accumulates while detached.
+  // Security (overlay-terminal.md §2): never log PTY bytes or buffer contents.
+  pty.onData((chunk) => {
+    if (term) {
+      try { term.write(chunk); } catch {}
+    }
+  });
+
   // dlog: lifecycle metadata only — never PTY stdin bytes or buffer contents
   // (see overlay-terminal.md §2 — secrets in scope).
-  dlog('shell', 'spawn', { pid: pty?.pid, shell, cwd });
+  dlog('shell', 'spawn', { pid: pty?.pid, shell, cwd, cols: 80, rows: 24, scrollback: TERM_SCROLLBACK });
 
-  _session = { pty };
+  _session = { pty, term, cell };
   return _session;
 }
 
