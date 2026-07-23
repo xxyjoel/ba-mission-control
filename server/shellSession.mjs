@@ -84,9 +84,9 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
   // Pipe PTY output into the persistent term at the singleton level — not
   // in the overlay component — so the buffer accumulates while detached.
   // Security (overlay-terminal.md §2): never log PTY bytes or buffer contents.
-  // TODO(kill): capture the returned IDisposable here and store on _session
-  // so 0312 (kill on app shutdown) can unsubscribe cleanly (mirrors ptyAgent._termDataSub).
-  pty.onData((chunk) => {
+  // IDisposable stored on _session so killShellSession() can unsubscribe cleanly
+  // (mirrors ptyAgent._termDataSub; resolves TODO(kill) from 0309).
+  const _termDataSub = pty.onData((chunk) => {
     if (term) {
       try { term.write(chunk); } catch {}
     }
@@ -99,7 +99,7 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
   // (see overlay-terminal.md §2 — secrets in scope).
   dlog('shell', 'spawn', { pid: pty?.pid, shell, cwd, cols: 80, rows: 24, scrollback: TERM_SCROLLBACK });
 
-  _session = { pty, term, cell, atFreshPrompt: false };
+  _session = { pty, term, cell, atFreshPrompt: false, _termDataSub };
   return _session;
 }
 
@@ -134,6 +134,54 @@ export function cdToCwd(dir) {
   dlog('shell', 'cd', { pid: _session.pty?.pid, dir, emitted: true });
 
   return true;
+}
+
+// killShellSession() — tear down the singleton PTY and term, then null the
+// module-level ref so a subsequent getShellSession() spawns a fresh shell.
+//
+// Called on app shutdown (0318). No-ops safely when no session exists.
+// Mirrors ptyAgent.kill() at ptyAgent.mjs:631-659.
+//
+// Security (overlay-terminal.md §2): dlog logs lifecycle metadata only
+// (pid, exit signal) — never PTY stdin bytes or buffer contents.
+export function killShellSession() {
+  if (!_session) return;
+
+  const { pty, term, _termDataSub } = _session;
+  const pid = pty?.pid;
+
+  // Unsubscribe the onData IDisposable before killing the pty so the dying
+  // pty's output doesn't mutate a future session's atFreshPrompt.
+  if (_termDataSub) {
+    try { _termDataSub.dispose?.(); } catch {}
+  }
+  if (term) {
+    try { term.dispose(); } catch {}
+  }
+  if (pty) {
+    try { pty.kill('SIGTERM'); } catch {}
+  }
+
+  dlog('shell', 'kill', { pid });
+  _session = null;
+}
+
+// resizeShellSession(cols, rows) — forward new terminal dimensions to both the
+// PTY process and the xterm-headless buffer.
+//
+// Called by the ShellOverlay component when stdout dimensions change (0317).
+// No-ops safely when no session exists (modal may call resize before spawn).
+// Mirrors ptyAgent.resize() at ptyAgent.mjs:734-743.
+export function resizeShellSession(cols, rows) {
+  if (!_session) return;
+
+  const { pty, term } = _session;
+  if (pty) {
+    try { pty.resize(cols, rows); } catch {}
+  }
+  if (term) {
+    try { term.resize(cols, rows); } catch {}
+  }
 }
 
 // _resetForTest — wipe the singleton so unit tests can call getShellSession()
