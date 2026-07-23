@@ -147,6 +147,10 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     const buf = term.buffer.active;
     const cursorY = buf.cursorY;
     const cursorX = buf.cursorX;
+    // TODO(shell-scroll): buf.viewportY is pinned to the live viewport; the
+    // TERM_SCROLLBACK rows in the buffer are inaccessible to the user. Add a
+    // scroll offset state + Ctrl+Y / Ctrl+E bindings to let the user page
+    // through history without leaving the overlay (see overlay-terminal.md §key-risk).
     const startY  = buf.viewportY;
     const out = [];
     for (let y = 0; y < rows; y++) {
@@ -160,7 +164,10 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
 
   // Header: `shell · <shell-basename> · <spawn-cwd>`
   const shellName = basename(process.env.SHELL || '/bin/bash');
-  const spawnCwd  = homedir(); // singleton spawns at $HOME; OSC-7 live-cwd is a followup
+  // TODO(shell-osc7): spawnCwd is hardcoded to $HOME; live cwd tracking via OSC 7
+  // escape sequences would let the header reflect the shell's current directory
+  // after cd commands. Deferred — requires parsing PTY output for ESC]7;... sequences.
+  const spawnCwd  = homedir();
 
   return (
     <Box
