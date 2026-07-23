@@ -67,13 +67,16 @@ describe('ShellOverlay', () => {
 
     await tick(50); // let scheduleRender fire
 
-    // The component should render without error. "hello shell" may appear in
-    // the frame (if xterm buffered it) or the "(launching shell…)" placeholder
-    // should NOT appear if the term has content. What's guaranteed is the
-    // chrome renders: header and footer are always present.
+    // The component must render term buffer content via rowToRuns — not the
+    // placeholder. "hello shell" was emitted above and must appear in the frame.
+    // If view is null or rowToRuns never ran, the placeholder "(launching shell…)"
+    // appears instead and the first assert below will fail loudly.
     const frame = lastFrame();
     assert.ok(typeof frame === 'string' && frame.length > 0, 'should render a non-empty frame');
-    assert.ok(frame.includes('shell'), 'header should include shell label');
+    assert.ok(frame.includes('hello shell'),
+      'term buffer content "hello shell" must appear in frame (proves rowToRuns rendered the buffer)');
+    assert.ok(!frame.includes('launching shell'),
+      'placeholder must NOT appear — buffer content should render via rowToRuns, not the fallback');
     assert.ok(frame.includes('⌃Q'), 'footer should include ⌃Q hint');
 
     unmount();
