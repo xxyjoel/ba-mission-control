@@ -75,6 +75,8 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
   // Pipe PTY output into the persistent term at the singleton level — not
   // in the overlay component — so the buffer accumulates while detached.
   // Security (overlay-terminal.md §2): never log PTY bytes or buffer contents.
+  // TODO(kill): capture the returned IDisposable here and store on _session
+  // so 0312 (kill on app shutdown) can unsubscribe cleanly (mirrors ptyAgent._termDataSub).
   pty.onData((chunk) => {
     if (term) {
       try { term.write(chunk); } catch {}
