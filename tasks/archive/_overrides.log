@@ -54,3 +54,4 @@
 2026-07-23T20:56:45Z skip=pre-commit reason=logging-architect-paired-test-only-no-product-code-0321 branch=forge/overlay-terminal/batch-1 loc=261 limit=200 note=189-LOC-exhaustive-paired-test+72-LOC-task-file-Result-prose;-instrumentation-preexisted-in-deps-0309/0312/0319-so-zero-hand-written-product-code
 2026-07-23T20:56:57Z skip=pre-commit reason=user-override branch=forge/overlay-terminal/batch-1
 2026-07-23T21:00:00Z 0326 FORGE_SKIP=1 LOC=230 limit=200 reason=test-author-only-no-product-code branch=forge/overlay-terminal/batch-1 note=174-LOC-injection-test-file(8-tests-covering-7-metachar-vectors)+56-LOC-task-file-Result-prose;zero-hand-written-product-code-impl-pre-existed-in-0311
+2026-07-23T21:05:51Z skip=pre-commit reason=user-override branch=forge/overlay-terminal/batch-1
