@@ -7,12 +7,12 @@
 //
 // Reuses:
 //   - tui/zoom/ptyCells.js rowToRuns (cell → Ink <Text> runs)
+//   - tui/zoom/ptyKeys.js keyToBytes (Ink key events → PTY byte sequences)
 //   - server/shellSession.mjs getShellSession() (attach to singleton)
 //   - tui/shell/shellKeys.js classifyShellKey (Ctrl+Q close only)
 //
 // Security: dlog logs lifecycle metadata only — never PTY stdin or buffer
 // contents (overlay-terminal.md §2, secrets in scope).
-// TODO(shell-keys): 0324 adds PTY key forwarding (keyToBytes → pty.write).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
@@ -20,6 +20,7 @@ import { basename } from 'node:path';
 import { homedir } from 'node:os';
 import { getShellSession, resizeShellSession } from '../../server/shellSession.mjs';
 import { rowToRuns } from '../zoom/ptyCells.js';
+import { keyToBytes } from '../zoom/ptyKeys.js';
 import { classifyShellKey } from '../shell/shellKeys.js';
 import { dlog } from '../lib/debugLog.js';
 
@@ -40,6 +41,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
   const renderTimerRef = useRef(null);
   const termRef = useRef(null);
   const cellRef = useRef(null);
+  const ptyRef  = useRef(null);
 
   // Attach view on mount; dispose render subs on unmount. Never kill the PTY.
   useEffect(() => {
@@ -47,6 +49,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     const { pty, term, cell } = session;
     termRef.current = term;
     cellRef.current = cell;
+    ptyRef.current  = pty;
 
     // dlog: lifecycle metadata only (overlay-terminal.md §2).
     dlog('shell', 'overlay-attach', { pid: pty?.pid });
@@ -76,6 +79,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
       writeSubRef.current = scrollSubRef.current = cursorSubRef.current = null;
       termRef.current = null;
       cellRef.current = null;
+      ptyRef.current  = null;
       dlog('shell', 'overlay-detach', { pid: pty?.pid });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -97,10 +101,37 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     dlog('shell', 'overlay-resize', { cols, rows });
   }, [cols, rows]);
 
-  // Close chord: Ctrl+Q only. Swallow all other keys.
-  // TODO(shell-keys): 0324 adds keyToBytes → pty.write for forwarded keys.
+  // Close chord: Ctrl+Q (classifyShellKey === 'EXIT') closes the overlay.
+  // All other keystrokes are forwarded verbatim to the PTY via keyToBytes.
+  // Security: keystrokes are never logged (overlay-terminal.md §2).
+  // Bracketed-paste guard mirrors PtyPane: wrap multi-char input in CSI 200~/201~
+  // when the shell has enabled bracketed paste mode, to prevent auto-execution.
   useInput((input, key) => {
-    if (classifyShellKey(input, key) === 'EXIT') onClose?.();
+    if (classifyShellKey(input, key) === 'EXIT') { onClose?.(); return; }
+
+    const pty = ptyRef.current;
+    if (!pty) return;
+
+    // Bracketed-paste guard (mirrors PtyPane.jsx:361-374).
+    if (
+      input && input.length > 1 &&
+      !key.ctrl && !key.meta && !key.shift &&
+      !key.return && !key.escape && !key.tab &&
+      !key.backspace && !key.delete &&
+      !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow &&
+      !key.home && !key.end && !key.pageUp && !key.pageDown
+    ) {
+      const term = termRef.current;
+      if (term?.modes?.bracketedPasteMode) {
+        try { pty.write('\x1b[200~' + input + '\x1b[201~'); } catch {}
+        return;
+      }
+    }
+
+    const bytes = keyToBytes(input, key);
+    if (bytes != null) {
+      try { pty.write(bytes); } catch {}
+    }
   });
 
   // Cursor style matches PtyPane (hard-painted accent block).
