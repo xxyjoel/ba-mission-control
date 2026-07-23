@@ -18,7 +18,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { basename } from 'node:path';
 import { homedir } from 'node:os';
-import { getShellSession } from '../../server/shellSession.mjs';
+import { getShellSession, resizeShellSession } from '../../server/shellSession.mjs';
 import { rowToRuns } from '../zoom/ptyCells.js';
 import { classifyShellKey } from '../shell/shellKeys.js';
 import { dlog } from '../lib/debugLog.js';
@@ -80,6 +80,22 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Resize: forward new dims to PTY + emulator when viewport changes ──
+  // Mirrors PtyPane resize effect (tui/zoom/PtyPane.jsx:281-288).
+  // App already subscribes to process.stdout 'resize' and mirrors new
+  // dimensions into state — that re-renders ShellOverlay with new
+  // width/height props. We forward to resizeShellSession (which issues
+  // both pty.resize and term.resize) then nudge a re-render so the
+  // viewport reflects the new buffer dimensions.
+  // Clamped cols/rows (same Math.max floors as PtyPane) are forwarded —
+  // these are the inner-viewport dims that match what rowToRuns renders.
+  useEffect(() => {
+    resizeShellSession(cols, rows);
+    setTick(n => (n + 1) | 0);
+    // dlog: lifecycle metadata only (overlay-terminal.md §2).
+    dlog('shell', 'overlay-resize', { cols, rows });
+  }, [cols, rows]);
 
   // Close chord: Ctrl+Q only. Swallow all other keys.
   // TODO(shell-keys): 0324 adds keyToBytes → pty.write for forwarded keys.
