@@ -16,6 +16,15 @@ import { spawn as ptySpawn } from 'node-pty';
 import xterm from '@xterm/headless';
 import { dlog } from '../tui/lib/debugLog.js';
 
+// Heuristic: a PTY output chunk ending in a common shell prompt suffix
+// ($, %, #, >) followed by optional whitespace signals the shell is at a
+// fresh prompt. Custom PS1 values that don't match (e.g. multi-line prompts
+// or ANSI-colored suffixes) will leave atFreshPrompt=false — caller may retry.
+// TODO(fresh-prompt): prompt regex is heuristic; custom PS1 / ANSI sequences
+// can cause false negatives. OSC 7 live-cwd integration (deferred) would
+// provide a reliable signal.
+const PROMPT_RE = /[$%#>]\s*$/;
+
 // xterm-headless ships as { Terminal } sometimes nested under .default
 // depending on the module resolution path — same idiom as ptyAgent.mjs:46.
 const { Terminal } = xterm.default || xterm;
@@ -81,14 +90,50 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
     if (term) {
       try { term.write(chunk); } catch {}
     }
+    // Update prompt detection from the PTY output stream. A chunk ending in
+    // a shell prompt suffix signals the shell is waiting for input.
+    if (_session) _session.atFreshPrompt = PROMPT_RE.test(chunk);
   });
 
   // dlog: lifecycle metadata only — never PTY stdin bytes or buffer contents
   // (see overlay-terminal.md §2 — secrets in scope).
   dlog('shell', 'spawn', { pid: pty?.pid, shell, cwd, cols: 80, rows: 24, scrollback: TERM_SCROLLBACK });
 
-  _session = { pty, term, cell };
+  _session = { pty, term, cell, atFreshPrompt: false };
   return _session;
+}
+
+// cdToCwd(dir) — write a `cd '<quoted-dir>'\n` sequence to the PTY stdin,
+// but ONLY when the shell is at a fresh prompt (atFreshPrompt === true).
+// Returns true when the cd was emitted, false when suppressed.
+//
+// Security (overlay-terminal.md §4): dir is POSIX-escaped via single-quote
+// wrapping so semicolons, $(), |, &&, ", and newlines in user-controlled
+// paths cannot break out of the cd argument. Embedded single quotes are
+// escaped with the standard '\'  technique.
+//   e.g. /a b   → cd '/a b'\n
+//        /x'y   → cd '/x'\''y'\n
+//
+// No-op when:
+//   - No session has been spawned yet (!_session)
+//   - The shell is mid-command (!_session.atFreshPrompt)
+//   - Caller may retry or skip (see 0316 for the call-site logic).
+export function cdToCwd(dir) {
+  if (!_session || !_session.atFreshPrompt) return false;
+
+  // POSIX single-quote escape: wrap in single quotes, replace embedded ' with '\''
+  const escaped = "'" + String(dir).replace(/'/g, "'\\''") + "'";
+  const cmd = `cd ${escaped}\n`;
+
+  _session.pty.write(cmd);
+  // Mark not-at-prompt immediately — the cd command is now running.
+  _session.atFreshPrompt = false;
+
+  // dlog: lifecycle metadata only — dir is a known path (not keystroke stream),
+  // consistent with spawn dlog which logs cwd. See overlay-terminal.md §2.
+  dlog('shell', 'cd', { pid: _session.pty?.pid, dir, emitted: true });
+
+  return true;
 }
 
 // _resetForTest — wipe the singleton so unit tests can call getShellSession()
