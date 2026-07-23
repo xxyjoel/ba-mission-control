@@ -30,9 +30,17 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
   const { stdout } = useStdout();
 
   // Dimensions: caller may pass explicit width/height (from App resize state);
-  // fall back to stdout. Inner body excludes 2 border + 2 padY + header + footer.
-  const cols = Math.max(20, Math.floor(width  || stdout?.columns || 80));
-  const rows = Math.max(5,  Math.floor((height || stdout?.rows   || 24) - 6));
+  // fall back to stdout. The bordered box's INNER viewport must subtract ALL
+  // chrome — otherwise the term rows overflow the border (the right edge breaks)
+  // and the whole overlay runs taller than the terminal, so Ink can't overwrite
+  // the previous frame → the fleet view + overlay stack ("inception" ghosting)
+  // and the prompt is pushed off-screen.
+  //   width  chrome: 2 border + 4 paddingX (paddingX=2)                    = 6
+  //   height chrome: 2 border + 2 paddingY + header(1) + marginTop(1) + footer(1) = 7
+  const outerW = Math.max(24, Math.floor(width  || stdout?.columns || 80));
+  const outerH = Math.max(8,  Math.floor(height || stdout?.rows    || 24));
+  const cols = Math.max(10, outerW - 6);
+  const rows = Math.max(3,  outerH - 7);
 
   const [tick, setTick] = useState(0);
   const writeSubRef  = useRef(null);
@@ -176,7 +184,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
       borderColor={theme?.accent}
       paddingX={2}
       paddingY={1}
-      width={width || cols + 6}
+      width={outerW}
     >
       {/* Header */}
       <Box>

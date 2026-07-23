@@ -57,7 +57,7 @@ describe('ShellOverlay resize forwarding', () => {
     getShellSession({ spawn: () => stubPty });
 
     // Initial render: width=100, height=30.
-    // Inner dims: cols=max(20,100)=100, rows=max(5,30-6)=24.
+    // Inner dims subtract box chrome: cols=max(10,100-6)=94, rows=max(3,30-7)=23.
     const { rerender } = render(
       React.createElement(ShellOverlay, { theme: THEME, width: 100, height: 30, onClose: () => {} })
     );
@@ -67,7 +67,7 @@ describe('ShellOverlay resize forwarding', () => {
     const baselineCount = stubPty.resizeCalls.length;
 
     // Re-render with new size: width=120, height=40.
-    // Inner dims: cols=max(20,120)=120, rows=max(5,40-6)=34.
+    // Inner dims subtract box chrome: cols=max(10,120-6)=114, rows=max(3,40-7)=33.
     rerender(
       React.createElement(ShellOverlay, { theme: THEME, width: 120, height: 40, onClose: () => {} })
     );
@@ -81,8 +81,8 @@ describe('ShellOverlay resize forwarding', () => {
     );
     // The last call should match the new computed inner dims.
     const last = newCalls[newCalls.length - 1];
-    assert.strictEqual(last[0], 120, 'cols forwarded to pty.resize should equal Math.max(20, width)');
-    assert.strictEqual(last[1], 34,  'rows forwarded to pty.resize should equal Math.max(5, height - 6)');
+    assert.strictEqual(last[0], 114, 'cols forwarded to pty.resize should be inner width (outerW - 6)');
+    assert.strictEqual(last[1], 33,  'rows forwarded to pty.resize should be inner height (outerH - 7)');
   });
 
   it('does NOT respawn the pty when size changes (singleton survives)', async () => {
