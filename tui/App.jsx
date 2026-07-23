@@ -87,7 +87,7 @@ export default function App({ fleet, auth: initialAuth }) {
   const [usage, setUsage] = useState(() => readUsage());
 
   const [focusedSlot, setFocusedSlot] = useState(1);
-  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom'
+  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom' | 'shell'
   const [helpView, setHelpView] = useState('main'); // which section Help should highlight
   const [newSlot, setNewSlot] = useState(null);
   const [zoomedId, setZoomedId] = useState(null);
@@ -1254,6 +1254,13 @@ export default function App({ fleet, auth: initialAuth }) {
     if (input === '?') { setModal('help'); return; }
     if (input === 'b' || input === 'B') { setModal('bcast'); return; }
     if (input === 'd' || input === 'D') { setModal('dash'); return; }
+    if (input === '!') {
+      // TODO(shell-cd): 0319 will read focusedAgent?.cwd here to send a cd
+      // to the PTY when the overlay opens from a focused card.
+      dlog('app', 'shell-overlay-open', { fromSlot: focusedAgent?.slot ?? null });
+      setModal('shell');
+      return;
+    }
     // Shift+L cycles fleet-log content: all → narrative → all. Only uppercase
     // (lowercase 'l' is taken by vim-right). Persisted to settings.json.
     if (input === 'L') {
