@@ -345,10 +345,12 @@ function handleAssistant(ev, agent) {
     // A tool that blocks on the user (e.g. AskUserQuestion) — claude is
     // 'waiting', not 'working', even though this isn't an end_turn.
     agent.awaitingPrompt = blockingPrompt;
+    agent.awaitingPromptTs = Date.now();
     agent.status = 'waiting';
   } else if (msg.stop_reason === 'end_turn') {
     const prompt = detectPrompt(lastText);
     agent.awaitingPrompt = prompt || null;
+    if (prompt) agent.awaitingPromptTs = Date.now();
     agent.status = prompt ? 'waiting' : 'idle';
   } else {
     agent.status = 'working';

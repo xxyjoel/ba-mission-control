@@ -263,6 +263,12 @@ export class PtyAgent extends EventEmitter {
     // lastEventTs (which onData also bumps on every PTY byte) so cosmetic
     // terminal repaints can't defeat a real Stop-hook idle transition.
     this.lastConnectorTs = 0;
+    // JSONL blocking-prompt object or null (set by jsonlConnector on
+    // AskUserQuestion / ExitPlanMode / end_turn question; cleared on tool_result).
+    this.awaitingPrompt = null;
+    // Timestamp of the last truthy awaitingPrompt assignment (ms epoch).
+    // 0 when no prompt is outstanding. Used by #collectSignals() / deriveStatus.
+    this.awaitingPromptTs = 0;
     this.restartCount = 0;
     this.restartTimer = null;
     this.costCapUSD = 0;
@@ -811,6 +817,26 @@ export class PtyAgent extends EventEmitter {
     } catch {
       return false;
     }
+  }
+
+  // #collectSignals() — gather all status-relevant signals into one normalized
+  // bundle for the future pure deriveStatus(signals, now) function (W1/0284).
+  // Pure gathering: no Date.now() here, no status decisions, no I/O.
+  // Every field maps to an existing agent property.
+  #collectSignals() {
+    return {
+      hookStatus:      this.hookStatus ?? null,
+      hookStatusTs:    this.hookStatusTs ?? 0,
+      connectorStatus: this.status,          // getter → _statusValue || 'idle'
+      lastConnectorTs: this.lastConnectorTs,
+      lastPtyTs:       this.lastPtyTs,
+      awaitingPrompt:  this.awaitingPrompt,
+      awaitingPromptTs: this.awaitingPromptTs,
+      lastEventTs:     this.lastEventTs,
+      pendingSubagents: this.pendingSubagents,
+      paused:          this.status === 'paused',
+      errored:         this.status === 'error',
+    };
   }
 
   toJSON() {
