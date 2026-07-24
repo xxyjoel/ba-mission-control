@@ -312,6 +312,7 @@ no automatic stage-bound summary today.
 | `K` | Kill — armed by first press (3s window); confirms on second `K`. `:kill <slot>` follows the same arm/confirm flow; `:kill! <slot>` bypasses. |
 | `A` | Approve — send a generic "continue" message to a focused session (useful when an agent stalls asking for confirmation) |
 | `Shift+Tab` | Cycle focused session's permission mode: `plan → auto → acceptEdits` |
+| `!` | Open shell overlay — a persistent `$SHELL` pane for `aws sso login`, `git`, `kubectl`, etc. |
 | `?` | Help |
 | `/` | Filter — type a substring (matches name/branch/model/status); non-matches dim. Press `/` again to clear. |
 | `:` | Command bar (see below) |
@@ -387,6 +388,17 @@ These are handled **client-side** — they don't round-trip to the `claude` subp
 | `/quit` (or `/exit`) | Close the zoom view (same as `Ctrl+Q`) |
 
 A message that doesn't start with `/` is sent through to claude unchanged — slash dispatch only fires on leading-`/` inputs.
+
+### Shell overlay (`!`)
+
+Press `!` from the grid or a focused card to open a persistent `$SHELL` pane — useful for `aws sso login`, `git`, `kubectl`, and any other shell chore that would otherwise force you out to a separate terminal.
+
+- **Open:** `!` (from FleetView or a focused card)
+- **Close:** `Ctrl+Q` — returns you to the grid. Every other key (including `Ctrl+K`, `Ctrl+U`, `Ctrl+J`) forwards straight to the shell.
+- **Keep-warm:** the shell process is long-lived. It survives close/reopen — your history, cwd, and any in-flight `aws sso` device-flow are preserved across toggles. The shell is killed only on app shutdown.
+- **Focused-card `cd`:** when you open the overlay from a focused card, the shell automatically `cd`s into that card's working directory so `git` and `aws` operate on the right repo. Opening from FleetView (no focused card) leaves the shell wherever it last was.
+
+The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the header, `⌃Q close · all other keys → shell` in the footer.
 
 ### Command bar
 

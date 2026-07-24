@@ -2,6 +2,30 @@
 
 ## Current state
 
+**2026-07-23 — feat: in-app overlay shell terminal (`!` / Ctrl+Q) — batch-1 complete (0309–0335)**
+— On branch `forge/overlay-terminal/batch-1`. Shipped a persistent keep-warm `$SHELL` overlay
+accessible from FleetView or any focused card. Full suite green (93 files, 685 tests, 0 failed).
+
+Key pieces shipped:
+1. **`server/shellSession.mjs`** — singleton `$SHELL` node-pty (argv-form, no string interpolation),
+   persistent across close/reopen, lazy-spawn, `killShellSession()`/`resizeShellSession()`/`getShellSession()`.
+2. **`tui/modals/ShellOverlay.jsx`** — bordered box matching Zoom chrome (`borderStyle="bold"`, accent color).
+   Header: `shell · <$SHELL basename> · <cwd>`. Footer: `⌃Q close · all other keys → shell`.
+   Reuses `ptyCells.js`/`ptyKeys.js`; only `Ctrl+Q` intercepted, everything else forwarded (incl. Ctrl+K/U/J).
+3. **`tui/App.jsx`** — `!` hotkey opens overlay; `Ctrl+Q` closes; filter/command-bar modes do NOT swallow `!`.
+4. **`main.jsx`** — `killShellSession()` called at all 3 exit paths (shutdown, process.on('exit'), clean-quit).
+5. **`tui/zoom/shellKeys.js`** — `classifyShellKey()` classifier; only EXIT (Ctrl+Q) intercepted.
+6. **Help modal + README** updated with new hotkey.
+7. **Security (0322 PASS):** spawn zero-interpolation (`$SHELL` as argv[0], cwd as structured option);
+   `cd` quoting POSIX single-quote escapes path metacharacters; dlog logs lifecycle only (no PTY bytes).
+   No open critical security issues on branch.
+
+GOTCHAS:
+- `atFreshPrompt` PROMPT_RE heuristic can false-positive (see TODO(fresh-prompt) in shellSession.mjs) —
+  cd arg is single-quote escaped regardless, so worst case is a UX glitch, not a security issue.
+- Keep-warm: shell persists across close/reopen; killed only on app shutdown.
+- `cd <card.cwd>` fires only when `atFreshPrompt()` is true; path is POSIX single-quote escaped (0311).
+
 **2026-07-21 — chore(deps): combined ink 5→7 + react 18→19 (Dependabot #4/#5 were unmergeable alone)**
 — On branch `chore/deps-ink7-react19`. Triaged the two open Dependabot majors
 against the suite: each is broken in isolation and they're mutually locked.
