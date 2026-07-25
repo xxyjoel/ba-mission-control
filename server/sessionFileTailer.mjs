@@ -207,19 +207,41 @@ export function startSessionTailer({
       status: agent.status, awaitingPrompt: agent.awaitingPrompt ?? null,
       activity: agent.activity, todos: agent.todos, context: agent.context,
       resolvedModel: agent.resolvedModel,
-      tail: [], tokensIn: 0, tokensOut: 0, costSession: 0, // absorb the additive side-effects
+      tail: [], tokensIn: 0, tokensCacheRead: 0, tokensOut: 0, costSession: 0, // absorb the additive side-effects
     };
     let any = false;
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
       try { if (parseEvent(JSON.parse(line), scratch)) any = true; } catch { /* skip junk */ }
     }
+    // Did this primed region contain a /clear? On /clear claude rotates to a NEW
+    // transcript, so the reset almost always lands at the TOP of the file we're
+    // (re)attaching to — never in the live forward-tail. The scratch replay reset
+    // its counters at the /clear and re-accumulated only the post-clear turns, so
+    // scratch's totals ARE the correct "current session" figures. Without this the
+    // real agent kept its pre-clear totals and the new conversation piled on top
+    // (the "tokens way too high after /clear" bug). Matches jsonlConnector's
+    // /clear pattern. Only triggers when a /clear is actually in the window, so
+    // non-clear primes keep the existing accumulate-forward behavior.
+    const sawClear = /<command-name>\s*\/clear\b/.test(text);
     if (any) {
       agent.status = scratch.status;
       agent.awaitingPrompt = scratch.awaitingPrompt ?? null;
       if (scratch.activity) agent.activity = scratch.activity;
       if (Array.isArray(scratch.todos)) agent.todos = scratch.todos;
-      if (scratch.context) agent.context = scratch.context;
+      if (sawClear) {
+        // Adopt the post-clear re-accumulated totals (forward tail continues on
+        // top from EOF). Context copied even when 0 (a trailing /clear leaves it 0).
+        agent.tokensIn        = scratch.tokensIn        || 0;
+        agent.tokensCacheRead = scratch.tokensCacheRead || 0;
+        agent.tokensOut       = scratch.tokensOut       || 0;
+        agent.costSession     = scratch.costSession     || 0;
+        agent.context         = scratch.context         || 0;
+        agent._usageByMsg?.clear?.();
+        agent.lastTokRate     = 0;
+      } else if (scratch.context) {
+        agent.context = scratch.context;
+      }
       if (scratch.resolvedModel) agent.resolvedModel = scratch.resolvedModel;
       try { agent.emit('change'); } catch {}
     }

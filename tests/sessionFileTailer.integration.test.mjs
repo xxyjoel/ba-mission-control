@@ -238,3 +238,33 @@ test('integration: stop() halts further updates', async () => {
   rmSync(cwd, { recursive: true, force: true });
   assert.equal(agent.tail.length, 1, 'no events after stop()');
 });
+
+test('integration: /clear at the top of a (rotated) file resets token totals on prime', async () => {
+  // Reproduces the "tokens way too high after /clear" bug: on /clear claude
+  // rotates to a NEW transcript, so the reset lands at the TOP of the file the
+  // tailer (re)attaches to — inside the primed region, never the live forward
+  // tail. Before the fix, primeStatusFromDisk discarded the scratch's post-clear
+  // totals and the agent kept its pre-clear totals; the new convo piled on top.
+  const { agent, filePath, cwd } = setupAgent();
+  // Agent carries PRE-clear totals (as if it had been accumulating).
+  agent.tokensIn = 999999; agent.tokensOut = 888888; agent.costSession = 12.34;
+
+  const lines = [
+    // a pre-clear turn ABOVE the /clear in the same file — the reset must drop it
+    { type: 'assistant', message: { id: 'm-pre', model: 'claude-opus-4-8', stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'pre' }], usage: { input_tokens: 100000, output_tokens: 4000 } } },
+    { type: 'user', message: { role: 'user', content: '<command-name>/clear</command-name>' } },
+    // a small post-clear turn — the only work that should count
+    { type: 'assistant', message: { id: 'm-post', model: 'claude-opus-4-8', stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'post' }], usage: { input_tokens: 500, output_tokens: 200 } } },
+  ];
+  writeFileSync(filePath, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+  const tailer = startSessionTailer({ agent });
+  await sleep(250); // let init()/prime run
+
+  assert.equal(agent.tokensIn, 500, 'tokensIn reset to the post-clear turn only (not 999999, not 100500)');
+  assert.equal(agent.tokensOut, 200, 'tokensOut reset to the post-clear turn only');
+  tailer.stop();
+  rmSync(cwd, { recursive: true, force: true });
+});

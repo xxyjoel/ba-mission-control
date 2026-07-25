@@ -25,15 +25,28 @@ Full suite green (0 fail). GOTCHA: the "couldn't exit zoom" bug is NOT yet
 root-caused — on plain iTerm2 the exit path is provably correct; leading suspect
 is event-loop starvation (which the render coalesce should relieve). Set
 `MC_DEBUG=1` and repro to capture the trace.
-— **IN PROGRESS (next batch): KPI/metrics accuracy fixes.** Audit found: **tok/min
-inflated ~100×** because cache-read tokens leak into the spark rate at 4 sites
-(`jsonlConnector.mjs:311,320`, `agent.mjs:499`, `subagentUsageTailer.mjs:46`) — fix
-= feed `updateSpark` `incIn+incOut` only. **Per-card `costWeek` is the fleet total
-mis-stamped on every agent** (`App.jsx:424-426`), so cards duplicate it and
-`Aggregate.jsx:37` sums to N× the real total — fix = Aggregate uses authoritative
-`weekCost` state, drop per-card `wk`. Plus 4000/8000 tok/min spark floor/baseline
-display bugs and `costWeek:0` dead field. Token/context reset-on-/clear audit
-pending.
+**2026-07-24 — KPI/metrics accuracy batch (same branch)**
+— Fixed the three reported metric bugs from a 3-agent accuracy audit. (1) **tok/min
+inflated ~100×**: cache-read tokens (which re-count the whole context every message)
+leaked into the spark rate at 4 sites — now `updateSpark` gets fresh throughput
+only (`incIn+incOut`) in `jsonlConnector.mjs`, `agent.mjs`, `subagentUsageTailer.mjs`.
+Also fixed the display artifacts (phantom 4000 idle-floor + 8000 cold-start): the
+card/fleet number now reads the true `lastTokRate` (newly exposed in `toJSON`),
+shown only while `working` (0 otherwise); the spark array stays as decorative
+glyphs. (2) **cost/week duplicated + didn't sum**: per-card `costWeek` was the
+fleet total stamped onto every agent (`App.jsx`), so cards duplicated it and the
+Aggregate summed to N×. Removed the stamp; Aggregate now takes the authoritative
+`weekCost` state; dropped the redundant per-card "wk" (Card/Zoom/toast). (3)
+**tokens not resetting on `/clear`**: on `/clear` claude rotates to a new file, so
+the reset landed at the top of the (re)attached file inside the primed region —
+`primeStatusFromDisk` discarded the scratch's post-clear totals and the agent kept
+pre-clear totals (the "way too high" accretion). `sessionFileTailer` now detects a
+`/clear` in the primed window and adopts the post-clear re-accumulated counters;
+`/clear` also clears `_usageByMsg`. Paired tests added (jsonlConnector cache-read
+exclusion; tailer /clear-rotation reset). Full suite green. GOTCHA: opus-4.8
+pricing in `models.js` is still an unconfirmed placeholder copied from 4.7 —
+every $ figure inherits that (`TODO(opus-4.8-pricing)`). `turnCount` still only
+increments on `system/turn_duration` (conservative undercount, not fixed here).
 
 **2026-07-21 — chore(deps): combined ink 5→7 + react 18→19 (Dependabot #4/#5 were unmergeable alone)**
 — On branch `chore/deps-ink7-react19`. Triaged the two open Dependabot majors
