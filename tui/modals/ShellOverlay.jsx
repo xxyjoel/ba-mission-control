@@ -24,7 +24,12 @@ import { keyToBytes } from '../zoom/ptyKeys.js';
 import { classifyShellKey } from '../shell/shellKeys.js';
 import { dlog } from '../lib/debugLog.js';
 
-const RENDER_INTERVAL_MS = 16; // ~60fps burst coalesce, mirrors PtyPane
+// ~30fps burst coalesce. A shell can flood output (a build, `yes`, `find /`);
+// at 60fps that reconcile pressure — on top of the fleet's own work — can starve
+// the event loop enough that the Ctrl+Q keypress is serviced late, reading as a
+// frozen overlay you "can't exit". 30fps halves it and is imperceptible for text.
+// Mirrors the same cap on PtyPane.
+const RENDER_INTERVAL_MS = 33;
 
 export default function ShellOverlay({ onClose, theme, width, height }) {
   const { stdout } = useStdout();
@@ -115,7 +120,15 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
   // Bracketed-paste guard mirrors PtyPane: wrap multi-char input in CSI 200~/201~
   // when the shell has enabled bracketed paste mode, to prevent auto-execution.
   useInput((input, key) => {
-    if (classifyShellKey(input, key) === 'EXIT') { onClose?.(); return; }
+    const action = classifyShellKey(input, key);
+    // MC_DEBUG trace to diagnose "Ctrl+Q didn't close the shell" reports: shows
+    // whether the chord arrived and how it classified. Security (overlay-terminal.md
+    // §2): metadata ONLY — never the literal key or any typed/PTY bytes (secrets in
+    // scope), so we log key flags + the action, never `input`.
+    if (key.ctrl || key.escape) {
+      dlog('shell', 'key', { action, ctrl: !!key.ctrl, escape: !!key.escape });
+    }
+    if (action === 'EXIT') { dlog('shell', 'exit→onClose', {}); onClose?.(); return; }
 
     const pty = ptyRef.current;
     if (!pty) return;
@@ -219,9 +232,17 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
       </Box>
 
       {/* Footer hint row */}
+      {/* TODO(nested-fullscreen): a full-screen program run INSIDE this overlay
+          (vim / less / htop / top — anything using the alt-screen) emits cursor
+          + alt-screen control into our xterm-headless buffer, which we then
+          re-render line-by-line through Ink. That nesting ghosts / loses the
+          cursor and can look frozen (the c1f1029 fix only corrected viewport
+          SIZING, not this). Options: detect DECSET ?1049h in the PTY stream and
+          show a "fullscreen app — press ^Q to exit, or run it in a real terminal"
+          notice, or accept the limitation and document it in the README. */}
       <Box>
         <Text color={theme?.accent} bold>⌃Q</Text>
-        <Text color={theme?.dim}> close  ·  all other keys → shell</Text>
+        <Text color={theme?.dim}> close  ·  all other keys → shell  ·  avoid fullscreen apps (vim/less) here</Text>
       </Box>
     </Box>
   );

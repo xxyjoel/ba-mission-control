@@ -1281,6 +1281,13 @@ export default function App({ fleet, auth: initialAuth }) {
       return;
     }
 
+    // Fallback exit for the shell overlay. ShellOverlay owns Ctrl+Q, but Ink
+    // fans input to every active useInput, so a SECOND handler here means a
+    // stale/mid-unmount overlay frame can't trap the user with no way out —
+    // mirrors Zoom's belt-and-suspenders (Zoom.jsx has the same redundant EXIT).
+    // Just closes the view; the shell stays keep-warm.
+    if (modal === 'shell' && key.ctrl && input === 'q') { setModal(null); return; }
+
     if (modal) return;  // modal owns its own keys
 
     // Shift+Tab — cycle the focused session through the three core dev

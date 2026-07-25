@@ -48,6 +48,22 @@ pricing in `models.js` is still an unconfirmed placeholder copied from 4.7 —
 every $ figure inherits that (`TODO(opus-4.8-pricing)`). `turnCount` still only
 increments on `system/turn_duration` (conservative undercount, not fixed here).
 
+**2026-07-24 — merged origin/main + overlay-terminal hardening (same branch)**
+— Merged `origin/main` (which had shipped the `!` shell overlay via PR #15, plus
+#16) into this branch. Conflicts resolved: `main.jsx` kept BOTH the `dlog` and
+`killShellSession` imports; `App.jsx` auto-merged cleanly (my perf/cost changes
+sit alongside the `!` binding); `HANDOFF` kept both sides. Merge commit needed
+`FORGE_SKIP=1` (a merge can't be ≤5 files; logged). Then hardened the overlay
+against the freeze / can't-exit class the user hit historically: **ShellOverlay
+60→30fps** (`RENDER_INTERVAL_MS`, less event-loop starvation under output floods);
+an **App-level `Ctrl+Q` fallback exit** (belt-and-suspenders like Zoom — a stale
+overlay frame can no longer trap the user; shell stays keep-warm); an **MC_DEBUG
+`shell/key` trace** (metadata only, no keystrokes — secrets in scope) to catch
+exit-misses; and a **footer/TODO warning about nested fullscreen apps** (vim/less/
+htop ghost inside an Ink-rendered xterm viewport). NOTE: the biggest overlay-freeze
+vector — Ctrl+Z inside the shell — is already killed by this branch's SIGTSTP
+swallow. Full suite green (93 files). PR #17 mergeable/clean.
+
 **2026-07-23 — feat: in-app overlay shell terminal (`!` / Ctrl+Q) — batch-1 complete (0309–0335)**
 — On branch `forge/overlay-terminal/batch-1`. Shipped a persistent keep-warm `$SHELL` overlay
 accessible from FleetView or any focused card. Full suite green (93 files, 685 tests, 0 failed).
