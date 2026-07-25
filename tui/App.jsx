@@ -65,6 +65,17 @@ const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', '
 // Toast kinds drive color. Auto-dismissed by a timer in App.
 const TOAST_COLORS = { error: 'red', warn: 'yellow', info: 'accent', ok: 'green' };
 
+// Frame budget for coalescing fleet 'change' events into re-renders. Agents
+// emit 'change' at high frequency (every JSONL line across ~11 sessions);
+// without coalescing the whole App re-rendered + re-snapshotted per event,
+// pinning a CPU core. 100ms ≈ 10fps — well above the readable rate for status
+// text, and leading-edge (below) keeps the first change of a burst instant.
+const RENDER_COALESCE_MS = 100;
+// When the whole fleet is idle (no working/waiting agent), the derived-stats
+// clock backs off to this cadence instead of the active tickRate — no
+// per-second CPU wakeups when nothing is happening.
+const IDLE_TICK_MS = 3000;
+
 export default function App({ fleet, auth: initialAuth }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -125,13 +136,35 @@ export default function App({ fleet, auth: initialAuth }) {
   const pendingKillRef = useRef(null);     // { id, slot, timer } | null
   const KILL_ARM_MS = 3000;
 
-  // ── Fleet subscription ──────────────────────────────────
+  // ── Fleet subscription (coalesced) ──────────────────────
+  // fleet emits payload-less 'change' at high frequency. We coalesce into a
+  // RENDER_COALESCE_MS frame budget and compute fleet.snapshot() INSIDE the
+  // flush — so the expensive snapshot (toJSON + buffer scans over all agents)
+  // runs once per painted frame, not once per event. Leading-edge: the first
+  // change of a burst flushes immediately, so instant transitions (e.g.
+  // markUserSubmitted's synchronous flip to 'working' on submit) still paint
+  // with no perceptible lag; trailing ticks drain the rest at the frame rate.
+  const changeTimerRef = useRef(null);
+  const changePendingRef = useRef(false);
   useEffect(() => {
-    const onChange = (snap) => setSnapshot(snap);
+    const flush = () => { changePendingRef.current = false; setSnapshot(fleet.snapshot()); };
+    const onChange = () => {
+      if (changeTimerRef.current) { changePendingRef.current = true; return; }
+      flush(); // leading edge — first change paints now
+      const tick = () => {
+        if (changePendingRef.current) { flush(); changeTimerRef.current = setTimeout(tick, RENDER_COALESCE_MS); }
+        else { changeTimerRef.current = null; }
+      };
+      changeTimerRef.current = setTimeout(tick, RENDER_COALESCE_MS);
+    };
     fleet.on('change', onChange);
     setSnapshot(fleet.snapshot());
     dlog('app', 'boot', { slots: fleet.slots });
-    return () => { fleet.off('change', onChange); dlog('app', 'shutdown', {}); };
+    return () => {
+      fleet.off('change', onChange);
+      if (changeTimerRef.current) { clearTimeout(changeTimerRef.current); changeTimerRef.current = null; }
+      dlog('app', 'shutdown', {});
+    };
   }, [fleet]);
 
   // ── Settings persistence + theme application ────────────
@@ -145,23 +178,33 @@ export default function App({ fleet, auth: initialAuth }) {
   // (stuckMin, time-since-anything) keep advancing even when no agent
   // is actively emitting events. Without this re-fetch, a silently-
   // stuck slot never re-renders and the user never sees the STUCK chip.
+  // Self-adjusting cadence (setTimeout loop, not setInterval, so the delay can
+  // change per tick): fast (tickRate) while any agent is working/waiting, slow
+  // (IDLE_TICK_MS) when the whole fleet is idle. The interval exists only to
+  // advance DERIVED time fields (stuckMin, time-since-*) when no events fire —
+  // an idle fleet needs no per-second wakeups. A real transition still repaints
+  // instantly via the coalesced 'change' subscription above; the next tick then
+  // re-measures and speeds the clock back up.
   useEffect(() => {
-    const t = setInterval(() => {
+    const activeMs = Math.max(300, settings.tickRate);
+    let timer = null;
+    const tick = () => {
       setNow(Date.now());
       const fresh = fleet.snapshot();
       setSnapshot(fresh);
-      // Read via ref — snapshot is no longer in our dep array so we'd
-      // otherwise be looking at stale state. We use `fresh` directly
-      // since we just produced it; the ref is for OTHER readers (resize,
-      // shutdown) that don't have a fresh snapshot in hand.
+      // Read `fresh` directly (snapshot isn't in our deps — listing it would
+      // tear down + rebuild this timer on every change; audit #57).
       const live = fresh.agents.filter(a => a.status !== 'empty');
       const rate = live.reduce((s, a) => {
         const sp = a.spark || [];
         return s + (sp[sp.length - 1] || 0);
       }, 0);
       setAggSpark(prev => [...prev.slice(1), Math.max(1, rate)]);
-    }, Math.max(300, settings.tickRate));
-    return () => clearInterval(t);
+      const active = fresh.agents.some(a => a.status === 'working' || a.status === 'waiting');
+      timer = setTimeout(tick, active ? activeMs : IDLE_TICK_MS);
+    };
+    timer = setTimeout(tick, activeMs);
+    return () => { if (timer) clearTimeout(timer); };
   }, [settings.tickRate, fleet]);
 
   // ── Resize handling ─────────────────────────────────────
