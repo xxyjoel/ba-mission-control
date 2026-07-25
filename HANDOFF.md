@@ -2,6 +2,39 @@
 
 ## Current state
 
+**2026-07-24 — reliability + battery + zoom-UX batch (branch `forge/accurate-session-status/batch-1`)**
+— Shipped five fixes from a live debugging session. (1) **Bell flash fixed**:
+`server/ptyAgent.mjs` forwarded every agent's terminal `BEL` to the real stdout
+for its whole lifetime, so a background agent's bell flashed the user's screen
+(visual-bell) even from the fleet grid. Now gated on a new `this.zoomAttached`
+flag (set in `attachZoomView`, cleared on dispose) — only the zoomed agent bells.
+(2) **SIGTSTP/Ctrl+Z fix** (`tui/main.jsx`): a stray Ctrl+Z suspended the whole
+TUI (looked like a crash) and stranded the process with no cleanup — the cause of
+the multi-day suspended-`mc` zombies found this session (4 cleaned up). Added a
+swallowing `SIGTSTP` handler (a listener overrides Node's default stop — verified)
++ `SIGCONT` alt-screen re-init. (3) **Battery/perf**: `fleet.mjs` now emits
+payload-less `'change'` and `App.jsx` computes `fleet.snapshot()` inside a
+coalesced (leading+trailing, 100ms) flush — snapshot (toJSON + buffer scans over
+all agents) ran eagerly on EVERY event before, pinning a core; the slow clock is
+now an adaptive `setTimeout` loop (fast when active, 3s idle); `PtyPane` zoom cap
+16ms→33ms (30fps). (4) **Ctx threshold uncapped**: `settings.js` `max: 200000→null`
++ `Settings.jsx` guards the stepper on `item.max != null`. (5) **Zoom input trace**
+(`PtyPane.jsx`/`Zoom.jsx`): MC_DEBUG-gated `zoomkey` log to diagnose the
+"Ctrl+Q didn't exit zoom" report (privacy: logs literal key only for chords).
+Full suite green (0 fail). GOTCHA: the "couldn't exit zoom" bug is NOT yet
+root-caused — on plain iTerm2 the exit path is provably correct; leading suspect
+is event-loop starvation (which the render coalesce should relieve). Set
+`MC_DEBUG=1` and repro to capture the trace.
+— **IN PROGRESS (next batch): KPI/metrics accuracy fixes.** Audit found: **tok/min
+inflated ~100×** because cache-read tokens leak into the spark rate at 4 sites
+(`jsonlConnector.mjs:311,320`, `agent.mjs:499`, `subagentUsageTailer.mjs:46`) — fix
+= feed `updateSpark` `incIn+incOut` only. **Per-card `costWeek` is the fleet total
+mis-stamped on every agent** (`App.jsx:424-426`), so cards duplicate it and
+`Aggregate.jsx:37` sums to N× the real total — fix = Aggregate uses authoritative
+`weekCost` state, drop per-card `wk`. Plus 4000/8000 tok/min spark floor/baseline
+display bugs and `costWeek:0` dead field. Token/context reset-on-/clear audit
+pending.
+
 **2026-07-21 — chore(deps): combined ink 5→7 + react 18→19 (Dependabot #4/#5 were unmergeable alone)**
 — On branch `chore/deps-ink7-react19`. Triaged the two open Dependabot majors
 against the suite: each is broken in isolation and they're mutually locked.

@@ -17,6 +17,7 @@ import { loadSettings } from './lib/settings.js';
 import { syncFromSnapshot, setQuitMode } from './lib/sessionStore.js';
 import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog } from './lib/modelProbe.js';
+import { dlog } from './lib/debugLog.js';
 
 // Preflight: print one-line status BEFORE Ink takes over the screen. We don't
 // abort on failure — the user might still want to explore the UI — but the
@@ -131,6 +132,28 @@ process.on('SIGTERM', shutdown);
 // the resume store keeps only the open repo LOCATIONS (reopened fresh by
 // `:resume-all`) — the live conversations end with the killed children.
 process.on('SIGHUP',  shutdown);
+
+// SIGTSTP (Ctrl+Z) / SIGCONT — a full-screen fleet controller must never be
+// suspended mid-flight. A stop freezes every session at once (indistinguishable
+// from a crash) and, because raw mode + the alt-screen are never torn down,
+// strands the process with no cleanup — the origin of the multi-day suspended
+// `mc` zombies we found (each an abandoned Ctrl+Z'd instance holding its slots).
+// In raw mode Ctrl+Z arrives as byte 0x1a and is handled/forwarded in-app, NOT
+// as a signal, so SIGTSTP only fires in the cooked-mode gaps: before Ink takes
+// over the tty, inside a `!`-shell child, or after an error dropped raw mode.
+// Registering ANY SIGTSTP listener overrides Node's default stop (verified), so
+// we simply swallow it — Ctrl+Z becomes a no-op instead of a fleet-freezing trap.
+// Quit is q / Ctrl+C, which stay wired above.
+process.on('SIGTSTP', () => { dlog('app', 'sigtstp-swallowed', {}); });
+// Defense in depth: if the process is stopped by some OTHER means (`kill -STOP`)
+// and later resumed (`kill -CONT` / `fg`), re-enter the alt-screen so the fleet
+// view isn't left painted into the normal buffer; the render loop repaints on
+// its next tick.
+process.on('SIGCONT', () => {
+  if (altScreen) { try { process.stdout.write('\x1b[?1049h'); } catch {} }
+  dlog('app', 'sigcont-reinit', {});
+});
+
 // Final safety net for paths the explicit handlers miss (uncaught
 // exception, beforeExit timeout, abnormal termination). process.exit
 // fires synchronously before the OS frees the process, and
