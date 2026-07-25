@@ -985,6 +985,7 @@ export class PtyAgent extends EventEmitter {
       costSession: this.costSession,
       costWeek: 0,
       spark: this.spark,
+      lastTokRate: this.lastTokRate || 0,   // true tok/min of the last sample (unfloored); Card shows it only while working
       activity: this.activity,
       cwd: this.cwd,
       sessionId: this.sessionId,
