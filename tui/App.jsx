@@ -32,7 +32,6 @@ import RepoPicker  from './modals/RepoPicker.jsx';
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS } from './lib/models.js';
 import { probeAll, saveModelCache, applyCacheToCatalog } from './lib/modelProbe.js';
-import { SPARK_SCALE } from '../server/spark.mjs';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
@@ -415,15 +414,13 @@ export default function App({ fleet, auth: initialAuth }) {
   }, []);
 
   // ── Derived ─────────────────────────────────────────────
-  const agentsRaw = snapshot.agents;
-  // Stamp the persisted week cost onto each live agent so cards/zoom render
-  // the rolling weekly total. (costStore.weekCost is the fleet total — we
-  // attribute it uniformly to every live agent for the display; a future
-  // per-agent attribution would store per-id weekly buckets, but right now
-  // claude only reports per-turn totals.)
-  const agents = useMemo(() => agentsRaw.map(a => (
-    a.status === 'empty' ? a : { ...a, costWeek: weekCost }
-  )), [agentsRaw, weekCost]);
+  // costStore.weekCost is the FLEET total. It's shown once, authoritatively, in
+  // the Aggregate bar (and Dashboard) — no longer stamped onto every agent's
+  // costWeek (that made every card duplicate it AND made Aggregate's old
+  // sum(costWeek) read N× the real spend). Per-card weekly cost is dropped; only
+  // per-agent costSession is genuinely per-agent. A future per-id weekly bucket
+  // in CostStore could restore true per-card weekly attribution.
+  const agents = snapshot.agents;
 
   // Filter pass — when filterActive is set, dim non-matching cards. We
   // don't reflow the grid; the slot index is part of the user's muscle
@@ -474,13 +471,13 @@ export default function App({ fleet, auth: initialAuth }) {
     () => deriveFleetLog(agents, Math.max(40, settings.fleetLogLines), settings.fleetLogMode),
     [agents, settings.fleetLogLines, settings.fleetLogMode]
   );
+  // Fleet tok/min = sum of each WORKING agent's true last-sample rate. Was a
+  // mean-of-last-3 spark buckets × SPARK_SCALE, which inherited the same cache-
+  // read inflation + 0.5 floor as the per-card number; lastTokRate is the honest
+  // unfloored rate and matches what each card now shows.
   const fleetTpm = useMemo(() => {
-    return Math.round(agents.reduce((s, a) => {
-      if (a.status === 'empty' || a.status === 'paused' || a.status === 'error') return s;
-      const sp = a.spark || [];
-      const r = sp.slice(-3).reduce((x, y) => x + y, 0) / Math.max(1, sp.slice(-3).length);
-      return s + r * SPARK_SCALE;
-    }, 0));
+    return Math.round(agents.reduce((s, a) =>
+      a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0));
   }, [agents]);
   const sessionStr = fmtDuration(now - snapshot.sessionStart);
   const nowStr = fmtClock(now, settings.clock24);
@@ -1182,7 +1179,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
-        pushToast(`cost · session ${fmtMoney(a.costSession || 0)}  ·  week ${fmtMoney(a.costWeek || 0)}`, 'info');
+        pushToast(`cost · session ${fmtMoney(a.costSession || 0)}  ·  fleet week ${fmtMoney(weekCost || 0)}`, 'info');
         return null;
       }
       case 'usage': {
@@ -1879,7 +1876,7 @@ export default function App({ fleet, auth: initialAuth }) {
   return (
     <Box flexDirection="column" width={termCols} height={termRows}>
       <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} />
-      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} />
+      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} />
 
       {/* Grid of cards — empty slots are hidden; live cards autosize to
           fill the row. Filter pass dims non-matching slots. */}

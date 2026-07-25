@@ -29,12 +29,15 @@ function pctColor(pct, theme) {
   return theme.accent;
 }
 
-export default function Aggregate({ agents, fleetTpm, aggSpark, theme, usage, fmtReset }) {
+export default function Aggregate({ agents, fleetTpm, aggSpark, theme, usage, fmtReset, weekCost = 0 }) {
   const live = agents.filter(a => a.status !== 'empty');
   const tIn  = live.reduce((s, a) => s + (a.tokensIn  || 0), 0);
   const tOut = live.reduce((s, a) => s + (a.tokensOut || 0), 0);
   const cSes = live.reduce((s, a) => s + (a.costSession || 0), 0);
-  const cWk  = live.reduce((s, a) => s + (a.costWeek    || 0), 0);
+  // Weekly cost is the AUTHORITATIVE fleet total from CostStore (passed in), NOT
+  // sum(a.costWeek): each agent's costWeek was the same fleet total stamped onto
+  // every card, so summing it yielded N× the real spend for N live agents.
+  const cWk  = weekCost || 0;
   const pct  = Math.min(1, cWk / WEEK_CAP);
   const cells = barCells({ value: pct, width: BAR_W });
   const sparks = sparkLine(aggSpark, SPARK_W);

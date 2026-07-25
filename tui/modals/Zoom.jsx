@@ -214,7 +214,7 @@ export default function Zoom({
         <Text color={theme.faint}>  ·  </Text>
         <Text color={theme.fg}>{fmtMoney(agent.costSession || 0)}</Text>
         <Text color={theme.dim}> (wk </Text>
-        <Text color={theme.fg}>{fmtMoney(agent.costWeek || 0)}</Text>
+        <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
         <Text color={theme.dim}>)</Text>
         {usage && (
           <>
@@ -350,7 +350,7 @@ export default function Zoom({
             <Box>
               <Text color={theme.dim}>cost · week    </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{fmtMoney(agent.costWeek || 0)}</Text>
+              <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>turns          </Text>
