@@ -652,6 +652,28 @@ test('parseEvent: assistant usage updates the spark + lastTokRate', () => {
   assert.ok(a.lastTokRate > 0, 'rate derived from the usage token delta');
 });
 
+test('parseEvent: tok/min rate EXCLUDES cache_read (no ~100x inflation)', () => {
+  // A turn that only re-reads a huge cached context and does NO fresh work.
+  // cache_read_input_tokens re-counts the whole window every message, so folding
+  // it into the throughput rate inflated tok/min ~100x (a normal turn read as
+  // more than the model's entire context window per minute). Fresh work here is
+  // zero, so the rate must NOT advance — but the cache read is still counted in
+  // its own bucket (and kept out of the tokensIn headline).
+  const a = makeAgent({ lastTokSampleTs: 0 });
+  parseEvent({
+    type: 'assistant',
+    message: {
+      model: 'claude-opus-4-8',
+      content: [{ type: 'text', text: 'ok' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 200000, output_tokens: 0 },
+    },
+  }, a);
+  assert.equal(a.lastTokRate || 0, 0, 'pure cache-read turn does not drive tok/min');
+  assert.equal(a.tokensCacheRead, 200000, 'cache read still counted in its own bucket');
+  assert.equal(a.tokensIn || 0, 0, 'cache read stays out of the tokensIn headline');
+});
+
 // ─── parseEvent: parallel sub-agent (Task/Workflow) tracking ──────────────────
 
 function taskUse(id, input = {}) {

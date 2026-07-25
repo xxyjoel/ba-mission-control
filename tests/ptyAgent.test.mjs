@@ -407,10 +407,96 @@ test('PtyAgent.attachZoomView: dispose restores prior dimensions, does NOT kill 
   p.kill();
 });
 
-test('PtyAgent.attachZoomView: throws when PTY not running', () => {
+// POST-fix (0337): pre-fix pin of the throw-on-never-started behavior. A
+// never-started agent (pty null, not killed, no restartTimer) is state-
+// indistinguishable from the post-exhaustion revive case in the Why section
+// ("auto-restart backoff, post-exhaustion") — the task's revive contract is
+// unconditional on (pty null, !killed), so this must now revive too.
+test('PtyAgent.attachZoomView: revives (spawns) instead of throwing when PTY not running (0337)', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
-  assert.throws(() => p.attachZoomView({ cols: 80, rows: 24 }), /not running/);
+  let view;
+  assert.doesNotThrow(() => { view = p.attachZoomView({ cols: 80, rows: 24 }); });
+  assert.equal(fake.spawned.length, 1, 'attachZoomView revived by spawning a fresh pty');
+  assert.equal(p.pty, fake.spawned[0]);
+  view.dispose();
+  p.kill();
+});
+
+// ─── 0336: attachZoomView on a null-pty agent (auto-restart window) ──
+//
+// Real-world trigger: `:resume-all` flaps several sessions through the
+// auto-restart backoff window (#onExit nulls this.pty, arms
+// this.restartTimer, status stays 'working'). Zooming a slot in that
+// window today throws "attachZoomView: agent.pty not running" — see #337.
+//
+// POST-fix (0337): this was originally a RED-baseline pin of the pre-fix
+// throw behavior. Now that attachZoomView revives instead of throwing (see
+// the TARGET test below), that throw expectation no longer holds — updated
+// to pin the revive behavior instead, per 0337's task-authorized
+// reconciliation of the contradictory pre-fix pin. Kept as its own test
+// since it documents the real-world trigger (:resume-all backoff window).
+test('PtyAgent.attachZoomView: revives (does not throw) on null pty during auto-restart backoff (0337)', () => {
+  const fake = makeFakeSpawn();
+  const p = makeAgent(fake);
+  p.start();
+  assert.equal(fake.spawned.length, 1);
+  // Transient crash: nulls this.pty, arms this.restartTimer, status 'working'.
+  fake.spawned[0].fireExit({ exitCode: 1, signal: null });
+  assert.equal(p.pty, null, 'precondition: pty is null after transient exit');
+  assert.ok(p.restartTimer, 'precondition: restart backoff timer is armed');
+  assert.equal(p.status, 'working');
+  let view;
+  assert.doesNotThrow(() => { view = p.attachZoomView({ cols: 100, rows: 30 }); });
+  assert.ok(p.pty, 'attachZoomView revived a live pty instead of throwing');
+  assert.equal(p.restartTimer, null, 'pending backoff restart is cleared');
+  view.dispose();
+  p.kill();
+});
+
+// TARGET contract for 0337 (revive-on-null-pty).
+test(
+  'PtyAgent.attachZoomView: TARGET (0337) — revives a null-pty agent by spawning a fresh pty and clearing restartTimer',
+  () => {
+    const fake = makeFakeSpawn();
+    const p = makeAgent(fake);
+    p.start();
+    fake.spawned[0].fireExit({ exitCode: 1, signal: null });
+    assert.equal(p.pty, null);
+    assert.ok(p.restartTimer);
+
+    const view = p.attachZoomView({ cols: 100, rows: 30 });
+
+    // A brand-new pty was spawned (the backoff-scheduled restart did NOT
+    // also fire — no double-spawn).
+    assert.equal(fake.spawned.length, 2, 'revive spawns exactly one new pty');
+    assert.equal(view.pty, fake.spawned[1], 'zoom view is bound to the freshly-spawned pty');
+    assert.equal(p.pty, fake.spawned[1], 'agent.pty now points at the live pty');
+    assert.equal(p.restartTimer, null, 'pending backoff restart is cleared — no double-spawn later');
+
+    view.dispose();
+    p.kill();
+  },
+);
+
+// This half of the contract is true both before and after 0337: a killed
+// agent never revives, regardless of pty state. Not skipped — it already
+// passes today (pty is null and there's no killed-aware branch yet) and
+// must keep passing once 0337 adds the revive path.
+test('PtyAgent.attachZoomView: a killed agent with a null pty still refuses (revive never applies to killed agents)', () => {
+  const fake = makeFakeSpawn();
+  const p = makeAgent(fake);
+  p.start();
+  fake.spawned[0].fireExit({ exitCode: 1, signal: null });
+  clearTimeout(p.restartTimer);
+  p.restartTimer = null;
+  p.killed = true;
+  assert.equal(p.pty, null);
+  assert.throws(
+    () => p.attachZoomView({ cols: 100, rows: 30 }),
+    /pty not running/,
+    'a killed agent must not be revived by attachZoomView',
+  );
 });
 
 // ─── persistent term (session continuity) ──────────────────────────

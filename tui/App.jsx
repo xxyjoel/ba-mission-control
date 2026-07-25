@@ -35,7 +35,6 @@ import { cdToCwd } from '../server/shellSession.mjs';
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS } from './lib/models.js';
 import { probeAll, saveModelCache, applyCacheToCatalog } from './lib/modelProbe.js';
-import { SPARK_SCALE } from '../server/spark.mjs';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
@@ -67,6 +66,17 @@ const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', '
 
 // Toast kinds drive color. Auto-dismissed by a timer in App.
 const TOAST_COLORS = { error: 'red', warn: 'yellow', info: 'accent', ok: 'green' };
+
+// Frame budget for coalescing fleet 'change' events into re-renders. Agents
+// emit 'change' at high frequency (every JSONL line across ~11 sessions);
+// without coalescing the whole App re-rendered + re-snapshotted per event,
+// pinning a CPU core. 100ms ≈ 10fps — well above the readable rate for status
+// text, and leading-edge (below) keeps the first change of a burst instant.
+const RENDER_COALESCE_MS = 100;
+// When the whole fleet is idle (no working/waiting agent), the derived-stats
+// clock backs off to this cadence instead of the active tickRate — no
+// per-second CPU wakeups when nothing is happening.
+const IDLE_TICK_MS = 3000;
 
 export default function App({ fleet, auth: initialAuth }) {
   const { exit } = useApp();
@@ -128,13 +138,35 @@ export default function App({ fleet, auth: initialAuth }) {
   const pendingKillRef = useRef(null);     // { id, slot, timer } | null
   const KILL_ARM_MS = 3000;
 
-  // ── Fleet subscription ──────────────────────────────────
+  // ── Fleet subscription (coalesced) ──────────────────────
+  // fleet emits payload-less 'change' at high frequency. We coalesce into a
+  // RENDER_COALESCE_MS frame budget and compute fleet.snapshot() INSIDE the
+  // flush — so the expensive snapshot (toJSON + buffer scans over all agents)
+  // runs once per painted frame, not once per event. Leading-edge: the first
+  // change of a burst flushes immediately, so instant transitions (e.g.
+  // markUserSubmitted's synchronous flip to 'working' on submit) still paint
+  // with no perceptible lag; trailing ticks drain the rest at the frame rate.
+  const changeTimerRef = useRef(null);
+  const changePendingRef = useRef(false);
   useEffect(() => {
-    const onChange = (snap) => setSnapshot(snap);
+    const flush = () => { changePendingRef.current = false; setSnapshot(fleet.snapshot()); };
+    const onChange = () => {
+      if (changeTimerRef.current) { changePendingRef.current = true; return; }
+      flush(); // leading edge — first change paints now
+      const tick = () => {
+        if (changePendingRef.current) { flush(); changeTimerRef.current = setTimeout(tick, RENDER_COALESCE_MS); }
+        else { changeTimerRef.current = null; }
+      };
+      changeTimerRef.current = setTimeout(tick, RENDER_COALESCE_MS);
+    };
     fleet.on('change', onChange);
     setSnapshot(fleet.snapshot());
     dlog('app', 'boot', { slots: fleet.slots });
-    return () => { fleet.off('change', onChange); dlog('app', 'shutdown', {}); };
+    return () => {
+      fleet.off('change', onChange);
+      if (changeTimerRef.current) { clearTimeout(changeTimerRef.current); changeTimerRef.current = null; }
+      dlog('app', 'shutdown', {});
+    };
   }, [fleet]);
 
   // ── Settings persistence + theme application ────────────
@@ -148,23 +180,33 @@ export default function App({ fleet, auth: initialAuth }) {
   // (stuckMin, time-since-anything) keep advancing even when no agent
   // is actively emitting events. Without this re-fetch, a silently-
   // stuck slot never re-renders and the user never sees the STUCK chip.
+  // Self-adjusting cadence (setTimeout loop, not setInterval, so the delay can
+  // change per tick): fast (tickRate) while any agent is working/waiting, slow
+  // (IDLE_TICK_MS) when the whole fleet is idle. The interval exists only to
+  // advance DERIVED time fields (stuckMin, time-since-*) when no events fire —
+  // an idle fleet needs no per-second wakeups. A real transition still repaints
+  // instantly via the coalesced 'change' subscription above; the next tick then
+  // re-measures and speeds the clock back up.
   useEffect(() => {
-    const t = setInterval(() => {
+    const activeMs = Math.max(300, settings.tickRate);
+    let timer = null;
+    const tick = () => {
       setNow(Date.now());
       const fresh = fleet.snapshot();
       setSnapshot(fresh);
-      // Read via ref — snapshot is no longer in our dep array so we'd
-      // otherwise be looking at stale state. We use `fresh` directly
-      // since we just produced it; the ref is for OTHER readers (resize,
-      // shutdown) that don't have a fresh snapshot in hand.
+      // Read `fresh` directly (snapshot isn't in our deps — listing it would
+      // tear down + rebuild this timer on every change; audit #57).
       const live = fresh.agents.filter(a => a.status !== 'empty');
       const rate = live.reduce((s, a) => {
         const sp = a.spark || [];
         return s + (sp[sp.length - 1] || 0);
       }, 0);
       setAggSpark(prev => [...prev.slice(1), Math.max(1, rate)]);
-    }, Math.max(300, settings.tickRate));
-    return () => clearInterval(t);
+      const active = fresh.agents.some(a => a.status === 'working' || a.status === 'waiting');
+      timer = setTimeout(tick, active ? activeMs : IDLE_TICK_MS);
+    };
+    timer = setTimeout(tick, activeMs);
+    return () => { if (timer) clearTimeout(timer); };
   }, [settings.tickRate, fleet]);
 
   // ── Resize handling ─────────────────────────────────────
@@ -375,15 +417,13 @@ export default function App({ fleet, auth: initialAuth }) {
   }, []);
 
   // ── Derived ─────────────────────────────────────────────
-  const agentsRaw = snapshot.agents;
-  // Stamp the persisted week cost onto each live agent so cards/zoom render
-  // the rolling weekly total. (costStore.weekCost is the fleet total — we
-  // attribute it uniformly to every live agent for the display; a future
-  // per-agent attribution would store per-id weekly buckets, but right now
-  // claude only reports per-turn totals.)
-  const agents = useMemo(() => agentsRaw.map(a => (
-    a.status === 'empty' ? a : { ...a, costWeek: weekCost }
-  )), [agentsRaw, weekCost]);
+  // costStore.weekCost is the FLEET total. It's shown once, authoritatively, in
+  // the Aggregate bar (and Dashboard) — no longer stamped onto every agent's
+  // costWeek (that made every card duplicate it AND made Aggregate's old
+  // sum(costWeek) read N× the real spend). Per-card weekly cost is dropped; only
+  // per-agent costSession is genuinely per-agent. A future per-id weekly bucket
+  // in CostStore could restore true per-card weekly attribution.
+  const agents = snapshot.agents;
 
   // Filter pass — when filterActive is set, dim non-matching cards. We
   // don't reflow the grid; the slot index is part of the user's muscle
@@ -434,13 +474,13 @@ export default function App({ fleet, auth: initialAuth }) {
     () => deriveFleetLog(agents, Math.max(40, settings.fleetLogLines), settings.fleetLogMode),
     [agents, settings.fleetLogLines, settings.fleetLogMode]
   );
+  // Fleet tok/min = sum of each WORKING agent's true last-sample rate. Was a
+  // mean-of-last-3 spark buckets × SPARK_SCALE, which inherited the same cache-
+  // read inflation + 0.5 floor as the per-card number; lastTokRate is the honest
+  // unfloored rate and matches what each card now shows.
   const fleetTpm = useMemo(() => {
-    return Math.round(agents.reduce((s, a) => {
-      if (a.status === 'empty' || a.status === 'paused' || a.status === 'error') return s;
-      const sp = a.spark || [];
-      const r = sp.slice(-3).reduce((x, y) => x + y, 0) / Math.max(1, sp.slice(-3).length);
-      return s + r * SPARK_SCALE;
-    }, 0));
+    return Math.round(agents.reduce((s, a) =>
+      a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0));
   }, [agents]);
   const sessionStr = fmtDuration(now - snapshot.sessionStart);
   const nowStr = fmtClock(now, settings.clock24);
@@ -1142,7 +1182,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
-        pushToast(`cost · session ${fmtMoney(a.costSession || 0)}  ·  week ${fmtMoney(a.costWeek || 0)}`, 'info');
+        pushToast(`cost · session ${fmtMoney(a.costSession || 0)}  ·  fleet week ${fmtMoney(weekCost || 0)}`, 'info');
         return null;
       }
       case 'usage': {
@@ -1240,6 +1280,13 @@ export default function App({ fleet, auth: initialAuth }) {
       }
       return;
     }
+
+    // Fallback exit for the shell overlay. ShellOverlay owns Ctrl+Q, but Ink
+    // fans input to every active useInput, so a SECOND handler here means a
+    // stale/mid-unmount overlay frame can't trap the user with no way out —
+    // mirrors Zoom's belt-and-suspenders (Zoom.jsx has the same redundant EXIT).
+    // Just closes the view; the shell stays keep-warm.
+    if (modal === 'shell' && key.ctrl && input === 'q') { setModal(null); return; }
 
     if (modal) return;  // modal owns its own keys
 
@@ -1872,7 +1919,7 @@ export default function App({ fleet, auth: initialAuth }) {
   return (
     <Box flexDirection="column" width={termCols} height={termRows}>
       <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} />
-      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} />
+      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} />
 
       {/* Grid of cards — empty slots are hidden; live cards autosize to
           fill the row. Filter pass dims non-matching slots. */}

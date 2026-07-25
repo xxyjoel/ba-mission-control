@@ -494,9 +494,12 @@ export class Agent extends EventEmitter {
       if (u.input_tokens != null) {
         this.context = incIn + incCache;
       }
-      // Spark is processing throughput (tok/min) — cache reads ARE real work, so
-      // feed the total processed, not just the fresh slice.
-      this.#updateSpark(incIn + incCache + incOut);
+      // Spark is FRESH throughput (tok/min): incIn (input + cache_creation) +
+      // incOut. cache_read is EXCLUDED — it re-counts the entire cached context
+      // on every message, so including it inflated the rate ~100× (a normal turn
+      // read as more than the whole context window per minute). Mirrors the
+      // headline's reason for keeping cache reads out of tokensIn.
+      this.#updateSpark(incIn + incOut);
       // TODO(state): mirror jsonlConnector's promptFromToolUse — a
       // human-blocking tool_use (AskUserQuestion/ExitPlanMode) should set
       // 'waiting', not 'working'. Low priority: this stream-json path is
@@ -860,6 +863,7 @@ export class Agent extends EventEmitter {
       // costWeek is overlaid by the TUI from costStore (see tui/App.jsx).
       costWeek: 0,
       spark: this.spark,
+      lastTokRate: this.lastTokRate || 0,   // true tok/min of the last sample (unfloored)
       activity: this.activity,
       cwd: this.cwd,
       sessionId: this.sessionId,

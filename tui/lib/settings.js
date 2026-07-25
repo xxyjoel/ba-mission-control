@@ -124,7 +124,7 @@ export const SETTINGS_SCHEMA = [
       options: ['BlueArch', 'Tokyo Night', 'Gruvbox Dark', 'Catppuccin Mocha', 'Solarized Dark', 'Amber (CRT)', 'Matrix'] },
   ]},
   { id: 'alerts', title: 'ALERTS', items: [
-    { key: 'ctxThreshold', label: 'Context warning threshold', kind: 'number', min: 50000, max: 200000, step: 5000, unit: ' tok' },
+    { key: 'ctxThreshold', label: 'Context warning threshold', kind: 'number', min: 50000, max: null, step: 5000, unit: ' tok', desc: 'No upper cap — set above 200k for large-context models. The ± stepper moves 5k at a time (edit settings.json directly for a big jump). TODO(settings-entry): add direct numeric entry so large thresholds do not need ~160 keypresses.' },
     { key: 'warnPct',      label: 'Yellow band starts at',     kind: 'number', min: 50, max: 99, step: 5, unit: ' %' },
     { key: 'autoCompactSuggest', label: 'Suggest /compact at threshold', kind: 'toggle' },
   ]},

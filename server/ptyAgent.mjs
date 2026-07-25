@@ -248,6 +248,14 @@ export class PtyAgent extends EventEmitter {
     // IDisposable from the term.write subscription. Kept so kill()
     // can unsubscribe cleanly.
     this._termDataSub = null;
+    // True only while a zoom view is bound to this agent (attachZoomView →
+    // dispose). Gates user-visible terminal side effects (the bell) so a
+    // BACKGROUND agent can't blast the shared real terminal — every agent's
+    // term processes bytes for its whole lifetime, so an un-gated onBell
+    // forwarded BEL from any of up to 10 agents flashed the user's screen
+    // (visual-bell), reading as a random "screenshot" flash even from the
+    // fleet grid. See #onBell gate below.
+    this.zoomAttached = false;
     this.killed = false;
     this.lastEventTs = Date.now();
     // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
@@ -263,6 +271,12 @@ export class PtyAgent extends EventEmitter {
     // lastEventTs (which onData also bumps on every PTY byte) so cosmetic
     // terminal repaints can't defeat a real Stop-hook idle transition.
     this.lastConnectorTs = 0;
+    // JSONL blocking-prompt object or null (set by jsonlConnector on
+    // AskUserQuestion / ExitPlanMode / end_turn question; cleared on tool_result).
+    this.awaitingPrompt = null;
+    // Timestamp of the last truthy awaitingPrompt assignment (ms epoch).
+    // 0 when no prompt is outstanding. Used by #collectSignals() / deriveStatus.
+    this.awaitingPromptTs = 0;
     this.restartCount = 0;
     this.restartTimer = null;
     this.costCapUSD = 0;
@@ -358,7 +372,15 @@ export class PtyAgent extends EventEmitter {
           });
         } catch {}
         try {
-          this.term.onBell(() => { try { process.stdout.write('\x07'); } catch {} });
+          // Forward the bell to the real terminal ONLY while this agent is the
+          // one being viewed (zoom attached). Un-gated, a background agent's BEL
+          // reached the shared stdout and flashed the user's whole screen
+          // (visual-bell) even from the fleet grid — the "random screenshot
+          // flash" bug. The zoomed agent still bells normally.
+          this.term.onBell(() => {
+            if (!this.zoomAttached) return;
+            try { process.stdout.write('\x07'); } catch {}
+          });
         } catch {}
       } catch (e) {
         this.appendTail({ kind: 'err', text: `term init failed: ${e.message}` });
@@ -754,10 +776,32 @@ export class PtyAgent extends EventEmitter {
   // dir-snapshot for sid detection. The agent's PTY IS the canonical
   // claude, and zoom is just a viewport into it.
   attachZoomView({ cols, rows } = {}) {
-    if (!this.pty) throw new Error('attachZoomView: agent.pty not running');
+    if (!this.pty) {
+      // A deliberately-killed slot is never silently revived.
+      if (this.killed) throw new Error('attachZoomView: agent.pty not running');
+      // Null pty + not killed: this is the auto-restart backoff window
+      // (#onExit nulls this.pty, arms this.restartTimer). Revive now
+      // instead of throwing — matches send()'s revive-on-write intent.
+      // Clear the pending backoff timer first so the scheduled restart
+      // doesn't ALSO fire and double-spawn.
+      // TODO(resume-flap): reviving here treats the symptom, not the
+      // disease — the mass-resume flapping that produces these null-pty
+      // windows still needs stagger-tuning, once there's log evidence.
+      if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+      this.resuming = true;
+      this.start();
+    }
     const prevCols = this.cols;
     const prevRows = this.rows;
     this.resize(cols, rows);
+    // Mark this agent as the currently-viewed one so the bell forwards to the
+    // real terminal (see #onBell gate in start()). Cleared in dispose().
+    this.zoomAttached = true;
+    // TODO(clipboard-scope): the OSC 52 handler in start() forwards a background
+    // agent's clipboard writes to the user's real clipboard regardless of zoom —
+    // same "background agent hijacks the shared terminal" class as the bell.
+    // Gate it on this.zoomAttached too; left out here to keep this fix to the
+    // reported visual-bell flash.
     let disposed = false;
     return {
       pty: this.pty,
@@ -770,6 +814,9 @@ export class PtyAgent extends EventEmitter {
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        // No longer the viewed agent — stop forwarding the bell to the real
+        // terminal (back to background: silent).
+        this.zoomAttached = false;
         // Restore the non-zoomed default dimensions so a subsequent
         // claude UI re-flow uses sane width. Skip if the PTY died
         // while zoomed.
@@ -811,6 +858,26 @@ export class PtyAgent extends EventEmitter {
     } catch {
       return false;
     }
+  }
+
+  // #collectSignals() — gather all status-relevant signals into one normalized
+  // bundle for the future pure deriveStatus(signals, now) function (W1/0284).
+  // Pure gathering: no Date.now() here, no status decisions, no I/O.
+  // Every field maps to an existing agent property.
+  #collectSignals() {
+    return {
+      hookStatus:      this.hookStatus ?? null,
+      hookStatusTs:    this.hookStatusTs ?? 0,
+      connectorStatus: this.status,          // getter → _statusValue || 'idle'
+      lastConnectorTs: this.lastConnectorTs,
+      lastPtyTs:       this.lastPtyTs,
+      awaitingPrompt:  this.awaitingPrompt,
+      awaitingPromptTs: this.awaitingPromptTs,
+      lastEventTs:     this.lastEventTs,
+      pendingSubagents: this.pendingSubagents,
+      paused:          this.status === 'paused',
+      errored:         this.status === 'error',
+    };
   }
 
   toJSON() {
@@ -932,6 +999,7 @@ export class PtyAgent extends EventEmitter {
       costSession: this.costSession,
       costWeek: 0,
       spark: this.spark,
+      lastTokRate: this.lastTokRate || 0,   // true tok/min of the last sample (unfloored); Card shows it only while working
       activity: this.activity,
       cwd: this.cwd,
       sessionId: this.sessionId,

@@ -43,7 +43,7 @@ export function applySidechainUsage(agent, usage, modelId) {
   agent.tokensCacheRead = (agent.tokensCacheRead || 0) + incCache;
   agent.tokensOut       = (agent.tokensOut       || 0) + incOut;
   agent.costSession     = (agent.costSession     || 0) + deriveCost(usage, modelId);
-  updateSpark(agent, incIn + incCache + incOut);
+  updateSpark(agent, incIn + incOut);   // fresh throughput only — cache reads re-count context, would inflate ~100×
   // NB: context intentionally untouched.
   return true;
 }

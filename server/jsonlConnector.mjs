@@ -205,6 +205,10 @@ function handleUser(ev, agent) {
     agent.tokensOut = 0;
     agent.costSession = 0;
     agent.pendingSubagents?.clear();
+    // Drop the per-message usage-dedup map so it can't grow unbounded across many
+    // /clears in one process, and reset the throughput rate for the fresh convo.
+    agent._usageByMsg?.clear?.();
+    agent.lastTokRate = 0;
     agent.activity = '';
     agent.status = 'idle';
     pushTail(agent, { kind: 'sys', text: 'context cleared (/clear)' });
@@ -308,7 +312,12 @@ function handleAssistant(ev, agent) {
       agent.tokensCacheRead = (agent.tokensCacheRead || 0) + dCache;
       agent.tokensOut       = (agent.tokensOut       || 0) + dOut;
       agent.costSession     = (agent.costSession     || 0) + dCost;
-      if (dIn + dCache + dOut !== 0) updateSpark(agent, dIn + dCache + dOut);
+      // Throughput (tok/min) is FRESH work only: dIn (input + cache_creation) +
+      // dOut. cache_read is EXCLUDED — it re-counts the whole cached context on
+      // every message (~100-200k), so folding it in inflated the rate ~100×
+      // (a routine turn read as "more than the model's entire context window per
+      // minute"). Same reasoning the headline uses to keep cache reads out of tokensIn.
+      if (dIn + dOut !== 0) updateSpark(agent, dIn + dOut);
       agent._usageByMsg.set(mid, { in: incIn, cache: incCache, out: incOut, cost: incCost });
     } else {
       // No message.id (shouldn't occur for assistant records) — additive
@@ -317,7 +326,7 @@ function handleAssistant(ev, agent) {
       if (incCache) agent.tokensCacheRead = (agent.tokensCacheRead || 0) + incCache;
       if (incOut)   agent.tokensOut       = (agent.tokensOut       || 0) + incOut;
       agent.costSession = (agent.costSession || 0) + incCost;
-      updateSpark(agent, incIn + incCache + incOut);
+      updateSpark(agent, incIn + incOut);   // fresh throughput only — cache reads excluded (see above)
     }
     // Context = the live conversation window, which is ONLY the main thread.
     // Sub-agent (Task) turns carry `isSidechain:true` and their own, smaller
@@ -345,10 +354,12 @@ function handleAssistant(ev, agent) {
     // A tool that blocks on the user (e.g. AskUserQuestion) — claude is
     // 'waiting', not 'working', even though this isn't an end_turn.
     agent.awaitingPrompt = blockingPrompt;
+    agent.awaitingPromptTs = Date.now();
     agent.status = 'waiting';
   } else if (msg.stop_reason === 'end_turn') {
     const prompt = detectPrompt(lastText);
     agent.awaitingPrompt = prompt || null;
+    if (prompt) agent.awaitingPromptTs = Date.now();
     agent.status = prompt ? 'waiting' : 'idle';
   } else {
     agent.status = 'working';

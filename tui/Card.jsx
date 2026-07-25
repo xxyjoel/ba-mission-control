@@ -159,9 +159,15 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
 
   // Sparkline
   const sparkStr = sparkLine(agent.spark || [], 14);
-  const lastTpm = (agent.spark && agent.spark.length)
-    ? Math.round(agent.spark[agent.spark.length - 1] * 8000)
-    : 0;
+  // tok/min NUMBER = the true last-sample rate (agent.lastTokRate), shown only
+  // while actively working — 0 otherwise. The old `spark[last] * 8000` read the
+  // glyph array, which carries a 0.5 floor (→ phantom 4000 tok/min on idle cards)
+  // and a fill(1) cold-start baseline (→ 8000 on brand-new sessions); the spark
+  // array stays as the decorative history bars only.
+  // TODO(tpm-decay): lastTokRate freezes at the last sample; a long-running Bash
+  // tool with no token flow still reads 'working'. Decay toward 0 by elapsed
+  // time since agent.lastTokSampleTs for a live-throughput readout.
+  const lastTpm = agent.status === 'working' ? Math.round(agent.lastTokRate || 0) : 0;
 
   // Todos — the session's live TodoWrite checklist (agent.todos, normalized
   // to { content, status, activeForm } server-side). This is the closest
@@ -367,19 +373,12 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={sCol}>{statusGlyph}{stateAge}</Text>
       </Box>
 
-      {/* Foot: costs + tokens. On a tight (narrow-grid) card the week cost is
-          dropped so the row doesn't wrap — it's the least-critical at-a-glance
-          metric and is still shown in the aggregate bar up top. */}
+      {/* Foot: session cost + tokens. The weekly cost is a FLEET total (not
+          per-agent), so it lives once in the aggregate bar up top — showing it
+          per-card made every card duplicate the same number. */}
       <Box>
         <Text color={theme.dim}>{fmtMoney(agent.costSession || 0)} </Text>
         <Text color={theme.faint}>ses</Text>
-        {innerW >= 40 && (
-          <>
-            <Text color={theme.faint}>  </Text>
-            <Text color={theme.dim}>{fmtMoney(agent.costWeek || 0)} </Text>
-            <Text color={theme.faint}>wk</Text>
-          </>
-        )}
         <Box flexGrow={1} />
         <Text color={theme.green}>{fmtK(agent.tokensIn || 0)}↓ {fmtK(agent.tokensOut || 0)}↑</Text>
       </Box>

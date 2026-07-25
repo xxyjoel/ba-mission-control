@@ -90,14 +90,20 @@ export class Fleet extends EventEmitter {
         ? new PtyAgent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids })
         : new Agent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, resume });
     agent.costCapUSD = this.defaultCostCapUSD;
-    agent.on('change', () => this.emit('change', this.snapshot()));
+    // Forward each agent's high-frequency 'change' as a PAYLOAD-LESS fleet
+    // event. Computing this.snapshot() here — eagerly, on every JSONL line /
+    // status transition across all agents — was the dominant idle-CPU cost:
+    // snapshot() runs toJSON() on every agent (incl. terminal-buffer scans).
+    // The sole consumer (App.jsx) now recomputes the snapshot once per painted
+    // frame inside its coalesced flush, so it runs per-frame, not per-event.
+    agent.on('change', () => this.emit('change'));
     this.agents[slot - 1] = agent;
     agent.start();
     if (prompt) {
       // small defer so the system 'init' event lands before the first user msg
       setTimeout(() => agent.send(prompt), 250);
     }
-    this.emit('change', this.snapshot());
+    this.emit('change');
     return agent;
   }
 
@@ -122,7 +128,7 @@ export class Fleet extends EventEmitter {
     const agent = this.agents[idx];
     agent.kill();
     this.agents[idx] = null;
-    this.emit('change', this.snapshot());
+    this.emit('change');
     return true;
   }
 
@@ -168,7 +174,7 @@ export class Fleet extends EventEmitter {
     for (const a of this.agents) {
       if (a) a.costCapUSD = this.defaultCostCapUSD;
     }
-    this.emit('change', this.snapshot());
+    this.emit('change');
   }
 
   // Per-slot override — `:cap 3 10` only changes slot 3, leaving the
@@ -178,7 +184,7 @@ export class Fleet extends EventEmitter {
     const a = this.agents[slot - 1];
     if (!a) return false;
     a.costCapUSD = Number(usd) || 0;
-    this.emit('change', this.snapshot());
+    this.emit('change');
     return true;
   }
 
@@ -203,7 +209,7 @@ export class Fleet extends EventEmitter {
       this.agents.length = floored; // truncates trailing nulls only
       this.slots = floored;
     }
-    this.emit('change', this.snapshot());
+    this.emit('change');
     return this.slots;
   }
 }

@@ -102,8 +102,11 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
     }
     if (item.kind === 'number') {
       let nv = cur + dir * item.step;
-      if (nv < item.min) nv = item.min;
-      if (nv > item.max) nv = item.max;
+      // min/max are optional bounds. A null/undefined bound means "unbounded"
+      // on that side — e.g. ctxThreshold has no upper cap (set arbitrarily high
+      // for large-context models). Guarding on `!= null` keeps 0 as a valid bound.
+      if (item.min != null && nv < item.min) nv = item.min;
+      if (item.max != null && nv > item.max) nv = item.max;
       setSettings({ ...settings, [item.key]: nv });
     }
   };

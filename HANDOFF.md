@@ -2,6 +2,85 @@
 
 ## Current state
 
+**2026-07-25 — resume/zoom PTY resilience (same branch)**
+— Fixed the reported `PTY failed: attachZoomView: agent.pty not running` on
+`:resume-all`. Root cause: `attachZoomView` (`server/ptyAgent.mjs`) hard-threw
+when `this.pty` was null, but real null-pty windows exist — the auto-restart
+backoff (2–15s, card shows `working`) and post-exhaustion (`error`). A mass
+resume flaps several sessions into those windows; zooming one threw. Fix:
+**revive-on-zoom** — when `pty` is null and the agent is NOT `killed`, clear the
+pending `restartTimer` (no double-spawn), `this.start()` synchronously (fresh
+pty + rebuilt term), then bind. A deliberately-killed slot still refuses.
+`PtyPane.jsx` now guards `session.pty?.onExit?.()` so a failed revive falls
+through to the error banner instead of crashing. Tasks 0336 (test) + 0337 (impl);
+full suite green (93 files); security review CLEAN. GOTCHA: the underlying
+mass-resume *flapping* is untouched (`TODO(resume-flap)`) — revive treats the
+symptom; stagger-tuning needs log evidence first. Also filed **0338 (RC3)**: a
+live-observed status miss — a session with a pending question shown as `idle`
+(the under-report direction, distinct from RC1/RC2); needs a corpus fixture.
+
+**2026-07-24 — reliability + battery + zoom-UX batch (branch `forge/accurate-session-status/batch-1`)**
+— Shipped five fixes from a live debugging session. (1) **Bell flash fixed**:
+`server/ptyAgent.mjs` forwarded every agent's terminal `BEL` to the real stdout
+for its whole lifetime, so a background agent's bell flashed the user's screen
+(visual-bell) even from the fleet grid. Now gated on a new `this.zoomAttached`
+flag (set in `attachZoomView`, cleared on dispose) — only the zoomed agent bells.
+(2) **SIGTSTP/Ctrl+Z fix** (`tui/main.jsx`): a stray Ctrl+Z suspended the whole
+TUI (looked like a crash) and stranded the process with no cleanup — the cause of
+the multi-day suspended-`mc` zombies found this session (4 cleaned up). Added a
+swallowing `SIGTSTP` handler (a listener overrides Node's default stop — verified)
++ `SIGCONT` alt-screen re-init. (3) **Battery/perf**: `fleet.mjs` now emits
+payload-less `'change'` and `App.jsx` computes `fleet.snapshot()` inside a
+coalesced (leading+trailing, 100ms) flush — snapshot (toJSON + buffer scans over
+all agents) ran eagerly on EVERY event before, pinning a core; the slow clock is
+now an adaptive `setTimeout` loop (fast when active, 3s idle); `PtyPane` zoom cap
+16ms→33ms (30fps). (4) **Ctx threshold uncapped**: `settings.js` `max: 200000→null`
++ `Settings.jsx` guards the stepper on `item.max != null`. (5) **Zoom input trace**
+(`PtyPane.jsx`/`Zoom.jsx`): MC_DEBUG-gated `zoomkey` log to diagnose the
+"Ctrl+Q didn't exit zoom" report (privacy: logs literal key only for chords).
+Full suite green (0 fail). GOTCHA: the "couldn't exit zoom" bug is NOT yet
+root-caused — on plain iTerm2 the exit path is provably correct; leading suspect
+is event-loop starvation (which the render coalesce should relieve). Set
+`MC_DEBUG=1` and repro to capture the trace.
+**2026-07-24 — KPI/metrics accuracy batch (same branch)**
+— Fixed the three reported metric bugs from a 3-agent accuracy audit. (1) **tok/min
+inflated ~100×**: cache-read tokens (which re-count the whole context every message)
+leaked into the spark rate at 4 sites — now `updateSpark` gets fresh throughput
+only (`incIn+incOut`) in `jsonlConnector.mjs`, `agent.mjs`, `subagentUsageTailer.mjs`.
+Also fixed the display artifacts (phantom 4000 idle-floor + 8000 cold-start): the
+card/fleet number now reads the true `lastTokRate` (newly exposed in `toJSON`),
+shown only while `working` (0 otherwise); the spark array stays as decorative
+glyphs. (2) **cost/week duplicated + didn't sum**: per-card `costWeek` was the
+fleet total stamped onto every agent (`App.jsx`), so cards duplicated it and the
+Aggregate summed to N×. Removed the stamp; Aggregate now takes the authoritative
+`weekCost` state; dropped the redundant per-card "wk" (Card/Zoom/toast). (3)
+**tokens not resetting on `/clear`**: on `/clear` claude rotates to a new file, so
+the reset landed at the top of the (re)attached file inside the primed region —
+`primeStatusFromDisk` discarded the scratch's post-clear totals and the agent kept
+pre-clear totals (the "way too high" accretion). `sessionFileTailer` now detects a
+`/clear` in the primed window and adopts the post-clear re-accumulated counters;
+`/clear` also clears `_usageByMsg`. Paired tests added (jsonlConnector cache-read
+exclusion; tailer /clear-rotation reset). Full suite green. GOTCHA: opus-4.8
+pricing in `models.js` is still an unconfirmed placeholder copied from 4.7 —
+every $ figure inherits that (`TODO(opus-4.8-pricing)`). `turnCount` still only
+increments on `system/turn_duration` (conservative undercount, not fixed here).
+
+**2026-07-24 — merged origin/main + overlay-terminal hardening (same branch)**
+— Merged `origin/main` (which had shipped the `!` shell overlay via PR #15, plus
+#16) into this branch. Conflicts resolved: `main.jsx` kept BOTH the `dlog` and
+`killShellSession` imports; `App.jsx` auto-merged cleanly (my perf/cost changes
+sit alongside the `!` binding); `HANDOFF` kept both sides. Merge commit needed
+`FORGE_SKIP=1` (a merge can't be ≤5 files; logged). Then hardened the overlay
+against the freeze / can't-exit class the user hit historically: **ShellOverlay
+60→30fps** (`RENDER_INTERVAL_MS`, less event-loop starvation under output floods);
+an **App-level `Ctrl+Q` fallback exit** (belt-and-suspenders like Zoom — a stale
+overlay frame can no longer trap the user; shell stays keep-warm); an **MC_DEBUG
+`shell/key` trace** (metadata only, no keystrokes — secrets in scope) to catch
+exit-misses; and a **footer/TODO warning about nested fullscreen apps** (vim/less/
+htop ghost inside an Ink-rendered xterm viewport). NOTE: the biggest overlay-freeze
+vector — Ctrl+Z inside the shell — is already killed by this branch's SIGTSTP
+swallow. Full suite green (93 files). PR #17 mergeable/clean.
+
 **2026-07-23 — feat: in-app overlay shell terminal (`!` / Ctrl+Q) — batch-1 complete (0309–0335)**
 — On branch `forge/overlay-terminal/batch-1`. Shipped a persistent keep-warm `$SHELL` overlay
 accessible from FleetView or any focused card. Full suite green (93 files, 685 tests, 0 failed).
