@@ -776,7 +776,21 @@ export class PtyAgent extends EventEmitter {
   // dir-snapshot for sid detection. The agent's PTY IS the canonical
   // claude, and zoom is just a viewport into it.
   attachZoomView({ cols, rows } = {}) {
-    if (!this.pty) throw new Error('attachZoomView: agent.pty not running');
+    if (!this.pty) {
+      // A deliberately-killed slot is never silently revived.
+      if (this.killed) throw new Error('attachZoomView: agent.pty not running');
+      // Null pty + not killed: this is the auto-restart backoff window
+      // (#onExit nulls this.pty, arms this.restartTimer). Revive now
+      // instead of throwing — matches send()'s revive-on-write intent.
+      // Clear the pending backoff timer first so the scheduled restart
+      // doesn't ALSO fire and double-spawn.
+      // TODO(resume-flap): reviving here treats the symptom, not the
+      // disease — the mass-resume flapping that produces these null-pty
+      // windows still needs stagger-tuning, once there's log evidence.
+      if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+      this.resuming = true;
+      this.start();
+    }
     const prevCols = this.cols;
     const prevRows = this.rows;
     this.resize(cols, rows);

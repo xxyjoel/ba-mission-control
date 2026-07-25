@@ -199,7 +199,11 @@ export default function PtyPane({
           try { term.write(chunk); } catch {}
         });
       }
-      exitDisposeRef.current = session.pty.onExit(() => {
+      // 0337: attachZoomView now revives a null-pty agent instead of
+      // throwing, but guard anyway — a null/absent session.pty (failed
+      // revive, or a future caller shape) must fall through to the
+      // error banner below, not an unguarded crash here.
+      exitDisposeRef.current = session.pty?.onExit?.(() => {
         if (cancelled) return;
         setExited(true);
         // Defer onClose so React finishes the current render first.

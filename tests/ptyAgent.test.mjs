@@ -407,10 +407,20 @@ test('PtyAgent.attachZoomView: dispose restores prior dimensions, does NOT kill 
   p.kill();
 });
 
-test('PtyAgent.attachZoomView: throws when PTY not running', () => {
+// POST-fix (0337): pre-fix pin of the throw-on-never-started behavior. A
+// never-started agent (pty null, not killed, no restartTimer) is state-
+// indistinguishable from the post-exhaustion revive case in the Why section
+// ("auto-restart backoff, post-exhaustion") — the task's revive contract is
+// unconditional on (pty null, !killed), so this must now revive too.
+test('PtyAgent.attachZoomView: revives (spawns) instead of throwing when PTY not running (0337)', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
-  assert.throws(() => p.attachZoomView({ cols: 80, rows: 24 }), /not running/);
+  let view;
+  assert.doesNotThrow(() => { view = p.attachZoomView({ cols: 80, rows: 24 }); });
+  assert.equal(fake.spawned.length, 1, 'attachZoomView revived by spawning a fresh pty');
+  assert.equal(p.pty, fake.spawned[0]);
+  view.dispose();
+  p.kill();
 });
 
 // ─── 0336: attachZoomView on a null-pty agent (auto-restart window) ──
@@ -420,10 +430,13 @@ test('PtyAgent.attachZoomView: throws when PTY not running', () => {
 // this.restartTimer, status stays 'working'). Zooming a slot in that
 // window today throws "attachZoomView: agent.pty not running" — see #337.
 //
-// RED baseline (must PASS today, turns moot once 0337 revives instead
-// of throwing): after start() then a transient non-zero exit,
-// attachZoomView still hard-throws.
-test('PtyAgent.attachZoomView: RED baseline — throws on null pty during auto-restart backoff', () => {
+// POST-fix (0337): this was originally a RED-baseline pin of the pre-fix
+// throw behavior. Now that attachZoomView revives instead of throwing (see
+// the TARGET test below), that throw expectation no longer holds — updated
+// to pin the revive behavior instead, per 0337's task-authorized
+// reconciliation of the contradictory pre-fix pin. Kept as its own test
+// since it documents the real-world trigger (:resume-all backoff window).
+test('PtyAgent.attachZoomView: revives (does not throw) on null pty during auto-restart backoff (0337)', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
@@ -433,24 +446,17 @@ test('PtyAgent.attachZoomView: RED baseline — throws on null pty during auto-r
   assert.equal(p.pty, null, 'precondition: pty is null after transient exit');
   assert.ok(p.restartTimer, 'precondition: restart backoff timer is armed');
   assert.equal(p.status, 'working');
-  assert.throws(
-    () => p.attachZoomView({ cols: 100, rows: 30 }),
-    /pty not running/,
-    'current behavior: attachZoomView hard-throws on a null pty',
-  );
-  // Avoid leaking the real restart timer into the next test (see the
-  // established pattern at the auto-restart test above).
-  clearTimeout(p.restartTimer);
-  p.restartTimer = null;
+  let view;
+  assert.doesNotThrow(() => { view = p.attachZoomView({ cols: 100, rows: 30 }); });
+  assert.ok(p.pty, 'attachZoomView revived a live pty instead of throwing');
+  assert.equal(p.restartTimer, null, 'pending backoff restart is cleared');
+  view.dispose();
+  p.kill();
 });
 
-// TARGET contract for 0337 (revive-on-null-pty). Skipped until that task
-// lands — the fix will make attachZoomView, when this.pty is null and
-// !this.killed, clear the pending restartTimer and call this.start() to
-// spawn a fresh pty + rebind the zoom session to it, instead of throwing.
+// TARGET contract for 0337 (revive-on-null-pty).
 test(
   'PtyAgent.attachZoomView: TARGET (0337) — revives a null-pty agent by spawning a fresh pty and clearing restartTimer',
-  { skip: '0337 (revive-on-null-pty) not implemented yet — attachZoomView still hard-throws' },
   () => {
     const fake = makeFakeSpawn();
     const p = makeAgent(fake);
