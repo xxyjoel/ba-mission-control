@@ -18,6 +18,7 @@ import { syncFromSnapshot, setQuitMode } from './lib/sessionStore.js';
 import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
+import { killShellSession } from '../server/shellSession.mjs';
 
 // Preflight: print one-line status BEFORE Ink takes over the screen. We don't
 // abort on failure — the user might still want to explore the UI — but the
@@ -121,6 +122,7 @@ const shutdown = () => {
   // these repos fresh. Only the in-app [s] save & quit keeps the mode at 'save'.
   setQuitMode('clear');
   persistOpenSet();          // capture live set BEFORE killing
+  try { killShellSession(); } catch {}
   try { fleet.killAll(); } catch {}
   try { app.unmount(); } catch {}
   process.exit(0);
@@ -163,6 +165,7 @@ process.on('SIGCONT', () => {
 // otherwise persist past mc's death.
 process.on('exit', () => {
   persistOpenSet();          // safety net for paths that bypass shutdown()
+  try { killShellSession(); } catch {}
   try { fleet.killAll(); } catch {}
   // Restore the normal terminal buffer on every exit path (clean quit,
   // SIGINT, SIGTERM, uncaught exception). Skip if we never entered.
@@ -174,4 +177,5 @@ process.on('exit', () => {
 // Wait for the Ink render to exit (Ctrl-C or `q` → useApp().exit()).
 await app.waitUntilExit();
 persistOpenSet();            // capture live set BEFORE killing on clean quit
+try { killShellSession(); } catch {}
 try { fleet.killAll(); } catch {}

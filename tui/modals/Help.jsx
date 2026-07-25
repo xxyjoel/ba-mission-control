@@ -76,6 +76,8 @@ export default function Help({ onClose, theme, width = 64, view = 'main' }) {
       </Section>
       <Section title="COMMANDS" theme={theme}>
         <Row left="  Open broadcast modal"           right="b"                  theme={theme} />
+        <Row left="  Open shell overlay"             right="!"                  theme={theme} />
+        <Row left="  In shell · close (all other keys → shell)" right="ctrl+q"  theme={theme} />
         <Row left="  Fleet log: all ↔ narrative"     right="Shift+L"            theme={theme} />
         <Row left="  Filter (dims non-matches)"      right="/"                  theme={theme} />
         <Row left="  Command bar"                    right=":"                  theme={theme} />

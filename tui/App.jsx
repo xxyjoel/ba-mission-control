@@ -28,6 +28,9 @@ import NewSession  from './modals/NewSession.jsx';
 import Settings    from './modals/Settings.jsx';
 import Zoom        from './modals/Zoom.jsx';
 import RepoPicker  from './modals/RepoPicker.jsx';
+import ShellOverlay from './modals/ShellOverlay.jsx';
+
+import { cdToCwd } from '../server/shellSession.mjs';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS } from './lib/models.js';
@@ -97,7 +100,7 @@ export default function App({ fleet, auth: initialAuth }) {
   const [usage, setUsage] = useState(() => readUsage());
 
   const [focusedSlot, setFocusedSlot] = useState(1);
-  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom'
+  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom' | 'shell'
   const [helpView, setHelpView] = useState('main'); // which section Help should highlight
   const [newSlot, setNewSlot] = useState(null);
   const [zoomedId, setZoomedId] = useState(null);
@@ -1294,6 +1297,19 @@ export default function App({ fleet, auth: initialAuth }) {
     if (input === '?') { setModal('help'); return; }
     if (input === 'b' || input === 'B') { setModal('bcast'); return; }
     if (input === 'd' || input === 'D') { setModal('dash'); return; }
+    if (input === '!') {
+      const fromCard = focusedAgent && focusedAgent.status !== 'empty';
+      dlog('app', 'shell-overlay-open', { fromSlot: fromCard ? focusedAgent.slot : null });
+      setModal('shell');
+      // cd-on-focus: issue cd to the focused card's cwd when opened from a live
+      // card. cdToCwd is a no-op when the shell is mid-command (!atFreshPrompt).
+      // Called after setModal so ShellOverlay mounts first and getShellSession()
+      // has already run — the singleton is warm when cdToCwd checks it.
+      if (fromCard && focusedAgent.cwd) {
+        setTimeout(() => cdToCwd(focusedAgent.cwd), 0);
+      }
+      return;
+    }
     // Shift+L cycles fleet-log content: all → narrative → all. Only uppercase
     // (lowercase 'l' is taken by vim-right). Persisted to settings.json.
     if (input === 'L') {
@@ -1869,6 +1885,26 @@ export default function App({ fleet, auth: initialAuth }) {
         <Box flexGrow={1} />
         <FeedbackStrip />
         {renderStatusBar('focused', zoomedAgent)}
+      </Box>
+    );
+  }
+  if (modal === 'shell') {
+    // Shell overlay height: wrapper consumes paddingY=2 + FeedbackStrip (1) +
+    // StatusBar (1) = 4 rows. Mirror the zoom pattern exactly.
+    const shellHeight = Math.max(10, termRows - 4);
+    return (
+      <Box flexDirection="column" width={termCols} height={termRows}>
+        <Box paddingX={2} paddingY={1}>
+          <ShellOverlay
+            onClose={() => setModal(null)}
+            theme={theme}
+            width={modalWidth(80, 220)}
+            height={shellHeight}
+          />
+        </Box>
+        <Box flexGrow={1} />
+        <FeedbackStrip />
+        {renderStatusBar('normal')}
       </Box>
     );
   }
