@@ -2,6 +2,23 @@
 
 ## Current state
 
+**2026-07-25 — resume/zoom PTY resilience (same branch)**
+— Fixed the reported `PTY failed: attachZoomView: agent.pty not running` on
+`:resume-all`. Root cause: `attachZoomView` (`server/ptyAgent.mjs`) hard-threw
+when `this.pty` was null, but real null-pty windows exist — the auto-restart
+backoff (2–15s, card shows `working`) and post-exhaustion (`error`). A mass
+resume flaps several sessions into those windows; zooming one threw. Fix:
+**revive-on-zoom** — when `pty` is null and the agent is NOT `killed`, clear the
+pending `restartTimer` (no double-spawn), `this.start()` synchronously (fresh
+pty + rebuilt term), then bind. A deliberately-killed slot still refuses.
+`PtyPane.jsx` now guards `session.pty?.onExit?.()` so a failed revive falls
+through to the error banner instead of crashing. Tasks 0336 (test) + 0337 (impl);
+full suite green (93 files); security review CLEAN. GOTCHA: the underlying
+mass-resume *flapping* is untouched (`TODO(resume-flap)`) — revive treats the
+symptom; stagger-tuning needs log evidence first. Also filed **0338 (RC3)**: a
+live-observed status miss — a session with a pending question shown as `idle`
+(the under-report direction, distinct from RC1/RC2); needs a corpus fixture.
+
 **2026-07-24 — reliability + battery + zoom-UX batch (branch `forge/accurate-session-status/batch-1`)**
 — Shipped five fixes from a live debugging session. (1) **Bell flash fixed**:
 `server/ptyAgent.mjs` forwarded every agent's terminal `BEL` to the real stdout
