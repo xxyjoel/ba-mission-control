@@ -29,6 +29,7 @@ import { barCells, fmtK, fmtMoney, fmtDuration, humanize } from '../lib/format.j
 import { readProjectHealth, healthColor } from '../lib/projectHealth.js';
 import PtyPane from '../zoom/PtyPane.jsx';
 import { classifyZoomKey } from '../zoom/zoomKeys.js';
+import { dlog } from '../lib/debugLog.js';
 
 const STATUS_GLYPH = { working: '●', waiting: '◉', idle: '○', paused: '⏸', error: '✕' };
 
@@ -75,7 +76,14 @@ export default function Zoom({
   // This handler is only a backup for when PtyPane isn't focused yet (mid-mount)
   // — it uses the SAME registry as PtyPane so the two can't drift.
   useInput((input, key) => {
-    if (classifyZoomKey(input, key) === 'EXIT') onClose?.();
+    const action = classifyZoomKey(input, key);
+    // Trace the fallback handler too: if a Ctrl+Q repro shows this line but the
+    // pane's own trace is missing, the pane lost focus; if EXIT classifies here
+    // and the modal still doesn't close, the bug is in onClose/render, not input.
+    if (action === 'EXIT' || key.ctrl || key.escape) {
+      dlog('zoomkey', 'zoom-fallback', { from: 'zoom', action, ctrl: !!key.ctrl, escape: !!key.escape });
+    }
+    if (action === 'EXIT') onClose?.();
   });
 
   if (!agent) return null;

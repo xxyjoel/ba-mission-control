@@ -24,6 +24,25 @@ import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
 import { rowToRuns } from './ptyCells.js';
 import { matchUpdateBanner } from './claudeBanner.js';
+import { dlog } from '../lib/debugLog.js';
+
+// traceKey — MC_DEBUG-gated stdin trace for the zoom exit investigation.
+// Logs which keystroke reached the pane and how it was classified, so a repro
+// of "Ctrl+Q didn't exit" shows whether the byte arrived at all (missing line →
+// not delivered / event-loop starved), classified as EXIT (→ onClose path), or
+// was swallowed (e.g. scroll mode). Privacy: the literal `input` is recorded
+// ONLY for control/chord keys (ctrl/meta/escape) — never plain typed prompt
+// text. No-op unless MC_DEBUG=1 (dlog short-circuits). See tui/lib/debugLog.js.
+function traceKey(where, input, key, extra) {
+  const chord = !!(key.ctrl || key.meta || key.escape);
+  dlog('zoomkey', where, {
+    ctrl: !!key.ctrl, meta: !!key.meta, shift: !!key.shift,
+    escape: !!key.escape, return: !!key.return, tab: !!key.tab,
+    len: input ? input.length : 0,
+    input: chord ? input : undefined,   // control/chord only; never typed text
+    ...extra,
+  });
+}
 
 // Terminal constructor still imported for the legacy startZoomSession
 // (stream-json Agent) fallback path — PtyAgent owns its own persistent
@@ -34,9 +53,11 @@ const { Terminal } = xterm.default || xterm;
 // Upper-bound frame cap on PTY blits. Render is driven by xterm's
 // onWriteParsed/onScroll/onCursorMove events (event-driven, not
 // polled), but we coalesce bursts so a flood of small writes doesn't
-// force React to reconcile 100× per second. 16ms ≈ 60fps — matches
-// what claude does natively in a bare terminal.
-const RENDER_INTERVAL_MS = 16;
+// force React to reconcile 100× per second. 33ms ≈ 30fps: a streaming
+// claude response is text, not animation — 30fps is indistinguishable
+// from 60fps to the reader but halves the React reconcile + terminal
+// blit work (and battery) during a heavy stream.
+const RENDER_INTERVAL_MS = 33;
 
 // Esc closes zoom on a single tap — matches every other modal in mc.
 // Users who need to interrupt claude's streaming response use Ctrl+C
@@ -292,6 +313,12 @@ export default function PtyPane({
   // Ink key events into raw byte sequences and write them to the PTY,
   // EXCEPT for a few intercepts that the Mission Control chrome owns.
   useInput((input, key) => {
+    // Trace FIRST — before any early-return — so the log shows the keystroke
+    // even when it's dropped for lack of focus/pty or swallowed by scroll mode.
+    traceKey('ptypane', input, key, {
+      focus, hasPty: !!ptyRef.current, scrollMode,
+      action: classifyZoomKey(input, key),
+    });
     if (!focus) return;
     const pty = ptyRef.current;
     if (!pty) return;
@@ -338,7 +365,7 @@ export default function PtyPane({
     if (action === 'SCROLL') { setScrollMode(true); return; }
     if (action === 'TOOLS')  { onToggleTools?.(); return; }
     if (action === 'STATS')  { onToggleStats?.(); return; }
-    if (action === 'EXIT')   { onClose?.(); return; }
+    if (action === 'EXIT')   { dlog('zoomkey', 'exit→onClose', { from: 'ptypane' }); onClose?.(); return; }
     if (action === 'NEWLINE') {
       // Insert a newline WITHOUT submitting. Wrapped in bracketed paste when
       // claude has the mode on so it's treated as content, not another submit.
