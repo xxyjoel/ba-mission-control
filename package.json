@@ -1,6 +1,6 @@
 {
   "name": "@bluearch/mission-control",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "BlueArch Mission Control — keyboard-first terminal TUI for managing up to 10 live Claude Code agent sessions.",
   "license": "AGPL-3.0-only",
