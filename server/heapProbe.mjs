@@ -11,7 +11,7 @@
 //
 // Output dir: ~/.local/state/claude-mc/heap/  (XDG_STATE_HOME honored)
 import { writeHeapSnapshot } from 'node:v8';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,7 +20,13 @@ const STATE_DIR = join(
   'claude-mc', 'heap',
 );
 
-function ensureDir() { try { mkdirSync(STATE_DIR, { recursive: true }); } catch {} }
+// 0700 dir: a heap snapshot is a dump of every live JS string (auth tokens,
+// session content, env), so keep the whole heap dir owner-only.
+function ensureDir() {
+  // mode: on mkdir only applies at creation; chmod enforces 0700 on a pre-existing dir too.
+  try { mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 }); } catch {}
+  try { chmodSync(STATE_DIR, 0o700); } catch {}
+}
 
 // Sum a per-agent numeric probe across the live fleet. Every access is wrapped
 // so a shape change (or a half-torn-down agent) can never throw into the timer.
@@ -45,7 +51,9 @@ export function fleetCounts(fleet) {
 export function dumpHeapSnapshot(tag = 'manual') {
   ensureDir();
   const p = join(STATE_DIR, `mc-${tag}-${process.pid}-${Date.now()}.heapsnapshot`);
-  try { writeHeapSnapshot(p); return p; } catch { return null; }
+  // writeHeapSnapshot has no mode arg — tighten to owner-only after write so the
+  // secrets-at-rest snapshot isn't world-readable.
+  try { writeHeapSnapshot(p); try { chmodSync(p, 0o600); } catch {} return p; } catch { return null; }
 }
 
 // Build one compact log record from the current process + fleet state. Pure so
