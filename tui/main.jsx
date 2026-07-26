@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process';
 
 import App from './App.jsx';
 import { Fleet } from '../server/fleet.mjs';
+import { startHeapProbe } from '../server/heapProbe.mjs';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
 import { isSandboxed, getConfigDir } from './lib/configDir.js';
@@ -85,6 +86,12 @@ try {
 
 const fleet = new Fleet({ slots: bootSettings.maxSlots });
 
+// Opt-in memory instrumentation for the long-uptime OOM (#18). Inert in normal
+// use: only arms an on-demand SIGUSR2 heap snapshot unless MC_HEAP_LOG is set,
+// in which case it logs rss/heap + per-structure counts every 60s. Never keeps
+// mc alive (unref'd) and never throws into the app.
+const stopHeapProbe = startHeapProbe(fleet);
+
 // Enter the terminal alt-screen so mc's render lives in a dedicated
 // buffer that the OS restores on exit. Without this, mc draws inline
 // in the normal buffer — its last frame persists in scrollback after
@@ -122,6 +129,7 @@ const shutdown = () => {
   // these repos fresh. Only the in-app [s] save & quit keeps the mode at 'save'.
   setQuitMode('clear');
   persistOpenSet();          // capture live set BEFORE killing
+  try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
   try { fleet.killAll(); } catch {}
   try { app.unmount(); } catch {}

@@ -460,6 +460,9 @@ export class Agent extends EventEmitter {
           const summary = summarizeToolInput(p.name, p.input);
           this.appendTail({ kind: 'tool', tool: p.name, text: summary });
           this.activity = `${p.name}: ${summary}`.slice(0, 200);
+          // TODO(mem-hygiene): mirror jsonlConnector's staleness sweep + hard cap
+          // here — an unpaired tool_result leaks this entry (same bug as #18's
+          // secondary finding). Legacy (non-PTY) path, so lower priority.
           if (SUBAGENT_TOOLS.has(p.name) && typeof p.id === 'string') {
             this.pendingSubagents.set(p.id, {
               label: subagentLabel(p.name, p.input),

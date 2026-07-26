@@ -2,6 +2,21 @@
 
 ## Current state
 
+**2026-07-26 — v1.1.0 release + long-uptime OOM investigation (same branch)**
+— Bumped `package.json` 1.0.0→**1.1.0** + CHANGELOG (shell overlay, zoom
+revive-on-zoom, reliability/metrics fixes, heap instrumentation). Investigated a
+CRITICAL heap OOM (~4GB after ~13h uptime, issue **#18**): ruled OUT both unbounded
+maps by measurement (~140 B/entry → would need 30M entries) and DISPROVED the xterm
+term-write leak (it was a synchronous-benchmark artifact — real async writes are flat).
+Root cause NOT yet found; needs a live heap snapshot from the real workload. Shipped
+**0339** `server/heapProbe.mjs` (opt-in: `MC_HEAP_LOG=1` per-structure logging every
+60s; `kill -USR2 <pid>` on-demand snapshot) so the next long run names the retainer,
+and **0340** capped `_usageByMsg` (FIFO 512) + swept stale `pendingSubagents` (>30min,
+hard cap 256) as cheap insurance — no new timers, strictly less GC/battery. GOTCHA:
+the map→reverse in the crash stack is Ink render internals, not the leak; the 13h
+process predated the branch work (not a regression). Legacy `agent.mjs` subagent map
+still has the leak — `TODO(mem-hygiene)`.
+
 **2026-07-25 — resume/zoom PTY resilience (same branch)**
 — Fixed the reported `PTY failed: attachZoomView: agent.pty not running` on
 `:resume-all`. Root cause: `attachZoomView` (`server/ptyAgent.mjs`) hard-threw

@@ -25,6 +25,28 @@ import { updateSpark } from './spark.mjs';
 // Mirrors `TAIL_MAX` in agent.mjs.
 const TAIL_MAX = 40;
 
+// Memory-hygiene caps (found while investigating #18). Both maps grew unbounded
+// within a single no-/clear session. Sized so a normal session never reaches them.
+// USAGE_BY_MSG_MAX: retained message.id dedup entries. Generous — only the recent
+// ids still receiving streaming snapshots matter; a final message's entry is dead
+// weight. FIFO eviction keeps the newest, so the ~3.5x token dedup is preserved.
+const USAGE_BY_MSG_MAX = 512;
+// pendingSubagents: an entry leaks if a subagent's tool_result never lands. Drop
+// anything older than this (a real fan-out rarely runs 30 min) + a hard ceiling.
+const SUBAGENT_STALE_MS = 30 * 60 * 1000;
+const PENDING_SUBAGENT_MAX = 256;
+
+// Evict oldest insertion-order entries until `map.size <= max`. O(overflow), and
+// overflow is 0 in steady state. Map preserves insertion order, so keys().next()
+// is the oldest.
+function capMap(map, max) {
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
 // Push a tail entry without exceeding TAIL_MAX. We add ts here so
 // callers don't have to. Direct array mutation rather than
 // agent.appendTail() to keep this module pure (agent might be a
@@ -41,11 +63,17 @@ function pushTail(agent, entry) {
 // Drives the ⋔{n} card indicator + Zoom list of active sub-agents.
 function trackSubagentStart(agent, part) {
   if (!SUBAGENT_TOOLS.has(part.name) || typeof part.id !== 'string') return;
-  (agent.pendingSubagents ??= new Map()).set(part.id, {
+  const map = (agent.pendingSubagents ??= new Map());
+  // Sweep orphaned entries (subagent whose tool_result never landed) before
+  // adding — runs only on a new start, not per frame.
+  const cutoff = Date.now() - SUBAGENT_STALE_MS;
+  for (const [id, s] of map) if ((s?.startTs ?? 0) < cutoff) map.delete(id);
+  map.set(part.id, {
     label: subagentLabel(part.name, part.input),
     type: part.name === 'Workflow' ? 'workflow' : (part.input?.subagent_type || 'agent'),
     startTs: Date.now(),
   });
+  capMap(map, PENDING_SUBAGENT_MAX);   // hard ceiling as a backstop
 }
 function trackSubagentEnd(agent, toolUseId) {
   if (typeof toolUseId === 'string') agent.pendingSubagents?.delete(toolUseId);
@@ -319,6 +347,11 @@ function handleAssistant(ev, agent) {
       // minute"). Same reasoning the headline uses to keep cache reads out of tokensIn.
       if (dIn + dOut !== 0) updateSpark(agent, dIn + dOut);
       agent._usageByMsg.set(mid, { in: incIn, cache: incCache, out: incOut, cost: incCost });
+      // Bound the dedup map by FIFO (oldest message.id first). Safe for the dedup
+      // because every streaming snapshot for one message arrives within the same
+      // turn (seconds) — a mid is finalized long before 512 newer ids accumulate,
+      // so an entry that could still receive a duplicate line is never evicted.
+      capMap(agent._usageByMsg, USAGE_BY_MSG_MAX);
     } else {
       // No message.id (shouldn't occur for assistant records) — additive
       // fallback rather than dropping the usage.
