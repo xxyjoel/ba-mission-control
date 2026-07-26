@@ -151,6 +151,7 @@ Configurable env vars:
 | `CLAUDE_BIN`   | `claude`       | Path to the `claude` CLI |
 | `REPO_PARENTS` | see `server/repos.mjs` | Colon-separated parent dirs scanned for the New Session repo picker. Recursive to depth 3. Overridden by a folder chosen in-app via `:repos` (which persists to settings). |
 | `MC_MOCK`      | _unset_        | Fixture name (e.g. `approval-request`) — when set, every launched session replays a JSONL fixture from `server/fixtures/` instead of spawning a real `claude` subprocess. Use for deterministic Zoom UX iteration without API spend. |
+| `MC_HEAP_LOG`  | _unset_        | When set, logs memory (rss/heap) + per-structure counts every 60 s to `~/.local/state/claude-mc/heap/` for diagnosing long-uptime memory growth. Independent of this, `kill -USR2 <mc pid>` writes a heap snapshot on demand (owner-only, `0600`). Off by default. |
 
 Settings (theme, density, grid columns, **max windows per pane**, ctx
 threshold, etc) persist to `~/.config/claude-mc/settings.json` — open with
