@@ -13,6 +13,8 @@ Cut **v1.1.1** + built a **tag-driven release pipeline** (`.github/workflows/rel
 tag → test → `npm publish --provenance` → GH Release), `npm version` lifecycle
 (preversion=test, postversion=push tags), a `prepublish-guard.mjs` (refuse dirty/
 untagged publish), `RELEASING.md`, and the design at `.claude/plans/versioning-and-release.md`.
+Release workflow cuts the GH Release via the `gh` CLI (built-in token) — no third-party
+action under the OIDC/id-token-write job (security review low finding, hardened).
 GOTCHAs: (1) **publish is blocked on npm auth** — maintainer must add `NPM_TOKEN`
 secret OR configure npm Trusted Publishing (OIDC), then push tag `v1.1.1`. (2) The
 long-uptime **OOM is still unroot-caused** — the crashed npx build IS 1.1.0 (has the
