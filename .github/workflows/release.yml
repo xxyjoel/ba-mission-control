@@ -26,6 +26,10 @@ jobs:
           node-version: 20
           registry-url: 'https://registry.npmjs.org'
 
+      # OIDC Trusted Publishing needs npm >= 11.5.1 (node 20 ships npm 10.x).
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
       # Re-verify the exact tagged tree — never publish a red build.
       - name: Install + test
         run: npm ci && npm test
@@ -38,10 +42,12 @@ jobs:
             echo "::error ::tag ${GITHUB_REF_NAME} != package.json ${PKG}"; exit 1
           fi
 
-      - name: Publish to npm (with provenance)
+      # OIDC Trusted Publishing: with id-token:write and a trusted publisher
+      # configured on npmjs.com for this repo+workflow, npm authenticates via the
+      # short-lived OIDC token — no NODE_AUTH_TOKEN / long-lived secret needed.
+      # Provenance is attested from the same OIDC identity.
+      - name: Publish to npm (OIDC trusted publishing + provenance)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Cut the Release with the preinstalled gh CLI (built-in GITHUB_TOKEN) —
       # no third-party action running under id-token:write (supply-chain).
