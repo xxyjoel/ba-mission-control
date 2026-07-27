@@ -37,6 +37,7 @@
   ],
   "scripts": {
     "start": "tsx bin/mc.mjs",
+    "start:diag": "MC_HEAP_LOG=1 NODE_OPTIONS=--heapsnapshot-near-heap-limit=2 tsx bin/mc.mjs",
     "dev": "tsx watch bin/mc.mjs",
     "dev:sandbox": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx bin/mc.mjs",
     "dev:sandbox:watch": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx watch bin/mc.mjs",
