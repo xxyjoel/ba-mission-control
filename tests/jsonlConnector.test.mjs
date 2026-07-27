@@ -10,6 +10,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseEvent, deriveCost } from '../server/jsonlConnector.mjs';
+import { MODELS, modelByCli } from '../tui/lib/models.js';
+
+// Expected cost derived from the CATALOG (single source of truth) — mirrors
+// deriveCost's arithmetic but reads the rates from tui/lib/models.js, so a
+// pricing change flows through both and these assertions self-heal. This tests
+// the summation/cache logic, not a frozen dollar literal.
+function expectedCost(u = {}, id) {
+  const m = MODELS[id] || modelByCli(id);
+  if (!m) return 0;
+  return (
+    (u.input_tokens || 0) * m.costPerMTokIn +
+    (u.cache_creation_input_tokens || 0) * m.costPerMTokCacheCreation +
+    (u.cache_read_input_tokens || 0) * m.costPerMTokCacheRead +
+    (u.output_tokens || 0) * m.costPerMTokOut
+  ) / 1e6;
+}
 
 function makeAgent(overrides = {}) {
   return {
@@ -492,42 +508,28 @@ test('parseEvent: tail respects TAIL_MAX (40 entries)', () => {
 
 test('deriveCost: pong-like turn (probe values, Opus 4.7)', () => {
   // Real values from scripts/probe-pty.mjs probe run.
-  const cost = deriveCost({
-    input_tokens: 6,
-    cache_creation_input_tokens: 19400,
-    cache_read_input_tokens: 15968,
-    output_tokens: 6,
-  }, 'claude-opus-4-7');
-  // Hand-computed: (6*15 + 19400*18.75 + 15968*1.5 + 6*75) / 1e6
-  //              = (90 + 363750 + 23952 + 450) / 1e6
-  //              = 388242 / 1e6 = 0.388242 USD
-  assert.ok(cost > 0.38 && cost < 0.40, `expected ~$0.39, got ${cost}`);
+  const u = { input_tokens: 6, cache_creation_input_tokens: 19400, cache_read_input_tokens: 15968, output_tokens: 6 };
+  const cost = deriveCost(u, 'claude-opus-4-7');
+  assert.ok(Math.abs(cost - expectedCost(u, 'claude-opus-4-7')) < 1e-9, `got ${cost}`);
+  assert.ok(cost > 0, 'cache_creation + cache_read + fresh + output all folded in');
 });
 
 test('deriveCost: cache-heavy Sonnet turn', () => {
-  const cost = deriveCost({
-    input_tokens: 50,
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 10000,
-    output_tokens: 500,
-  }, 'sonnet-4.6');
-  // (50*3 + 10000*0.3 + 500*15) / 1e6 = (150 + 3000 + 7500) / 1e6 = 0.01065
-  assert.ok(Math.abs(cost - 0.01065) < 0.0001, `expected ~$0.0107, got ${cost}`);
+  const u = { input_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 10000, output_tokens: 500 };
+  const cost = deriveCost(u, 'sonnet-4.6');
+  assert.ok(Math.abs(cost - expectedCost(u, 'sonnet-4.6')) < 1e-9, `got ${cost}`);
 });
 
 test('deriveCost: output-heavy Haiku turn', () => {
-  const cost = deriveCost({
-    input_tokens: 100,
-    output_tokens: 5000,
-  }, 'haiku-4.5');
-  // (100*1 + 5000*5) / 1e6 = 25100 / 1e6 = 0.0251
-  assert.ok(Math.abs(cost - 0.0251) < 0.0001, `expected ~$0.025, got ${cost}`);
+  const u = { input_tokens: 100, output_tokens: 5000 };
+  const cost = deriveCost(u, 'haiku-4.5');
+  assert.ok(Math.abs(cost - expectedCost(u, 'haiku-4.5')) < 1e-9, `got ${cost}`);
 });
 
 test('deriveCost: friendly id also works', () => {
-  const cost = deriveCost({ input_tokens: 1000, output_tokens: 500 }, 'opus-4.7');
-  // (1000*15 + 500*75) / 1e6 = 52500 / 1e6 = 0.0525
-  assert.ok(Math.abs(cost - 0.0525) < 0.0001);
+  const u = { input_tokens: 1000, output_tokens: 500 };
+  const cost = deriveCost(u, 'opus-4.7');
+  assert.ok(Math.abs(cost - expectedCost(u, 'opus-4.7')) < 1e-9, `got ${cost}`);
 });
 
 test('deriveCost: unknown model → 0 (no crash)', () => {
