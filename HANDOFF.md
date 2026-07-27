@@ -2,6 +2,22 @@
 
 ## Current state
 
+**2026-07-27 — energy fix, heap watchdog, model catalog refresh (same branch)**
+— **0346**: `subagentUsageTailer` now settles completed sub-agent files (stops re-stat'ing
+every file the subagents dir ever held, every poll — the idle-energy drain on long
+fan-out sessions). **0347**: always-on heap watchdog in `heapProbe` — auto-writes ONE
+snapshot at 72% of the V8 heap limit (+`watchdog.log`), so the long-uptime OOM (#18)
+self-diagnoses on the next occurrence in the DEFAULT build (no diag flags needed).
+**0348**: refreshed `tui/lib/models.js` for the current Claude lineup — added Sonnet 5
+(`claude-sonnet-5`) + Fable 5 (`claude-fable-5`, new kind 'fable'/yellow) + Opus 4.6,
+and FIXED stale metadata (Opus was wrongly $15/$75 → $5/$25; Opus 4.7 / Sonnet 4.6 were
+200K → 1M ctx). Cost/ctx TESTS now derive expected values from the catalog (single
+source of truth) so a price/context change self-heals. GOTCHA: unknown models are
+non-fatal (pass-through + modelByCli→null); pricing has NO probe/API source so it stays
+a human-confirmed table — event-driven autodetect of context/limits is task **0348**.
+The OOM is still NOT root-caused — capture on next run with `npm run start:diag`
+(or the watchdog auto-fires) and send me the `.heapsnapshot`.
+
 **2026-07-27 — v1.1.1 stability patch + tag-driven release system (same branch)**
 — Root-caused the `!` crash: node-pty's prebuilt `spawn-helper` loses its exec bit
 and the chmod fix lived only in `postinstall`, which **npx skips** → `posix_spawnp
