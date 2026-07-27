@@ -2,6 +2,21 @@
 
 ## Current state
 
+**2026-07-26 — zoom typing latency: profiled + leading-edge render throttle (same branch)**
+— Investigated reported zoom-terminal typing lag. Profiled the render path (headless,
+ink-testing-library): `rowToRuns` 0.42ms, `fleet.snapshot()`/`toJSON` 0.002ms
+(negligible), **Ink reconcile+render ~6ms/frame and FIXED regardless of change size**
+(Yoga layout + full-tree string render). So row-memoization (only 13% win) and
+snapshot-gating-during-zoom (0.002ms) were DISPROVEN and dropped. The actionable cause
+was the trailing-only render scheduler delaying each keystroke's echo up to
+RENDER_INTERVAL_MS (33ms). Shipped **0341** (`tui/lib/leadingThrottle.js` pure
+throttleDecision + `PtyPane`) and **0342** (`ShellOverlay`): leading-edge + trailing —
+first change after an idle gap paints immediately, bursts still coalesce to ≤1 frame/
+interval. GOTCHA: the 6ms is an OFFLINE floor (ink-testing-library excludes the real
+stdout write + terminal paint) — needs live confirmation. If single-keystroke echo is
+now snappy but heavy streaming still stutters → throughput lever (longer coalesce under
+load); if keystrokes still lag → instrument the real Ink write (wall-clock in-process).
+
 **2026-07-26 — v1.1.0 release + long-uptime OOM investigation (same branch)**
 — Bumped `package.json` 1.0.0→**1.1.0** + CHANGELOG (shell overlay, zoom
 revive-on-zoom, reliability/metrics fixes, heap instrumentation). Investigated a
