@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import App from './App.jsx';
 import { Fleet } from '../server/fleet.mjs';
 import { startHeapProbe } from '../server/heapProbe.mjs';
+import { fixNodePty } from '../scripts/fix-node-pty.mjs';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
 import { isSandboxed, getConfigDir } from './lib/configDir.js';
@@ -83,6 +84,11 @@ try {
   const cache = loadModelCache();
   if (cache) applyCacheToCatalog(MODELS, cache);
 } catch { /* a bad cache must never block boot */ }
+
+// Self-heal node-pty's spawn-helper exec bit BEFORE any PTY spawn (agents or the
+// `!` shell). npx skips the postinstall that normally does this, which otherwise
+// surfaces as "posix_spawnp failed" the first time a PTY is spawned. Best-effort.
+try { fixNodePty(); } catch { /* never block boot */ }
 
 const fleet = new Fleet({ slots: bootSettings.maxSlots });
 
@@ -163,6 +169,30 @@ process.on('SIGCONT', () => {
   if (altScreen) { try { process.stdout.write('\x1b[?1049h'); } catch {} }
   dlog('app', 'sigcont-reinit', {});
 });
+
+// Global crash net. An uncaught exception or rejection must NOT dump a raw
+// stack over the alt-screen and strand the terminal (raw mode + cursor hidden)
+// — the "posix_spawnp broke the app" class. Registering these listeners also
+// suppresses Node's default stack dump, so we restore the screen first, log the
+// full detail (MC_DEBUG), print one concise line, and exit cleanly (the 'exit'
+// net below then reaps child PTYs). Per-feature failures should be caught at
+// their boundary (e.g. shell spawn in getShellSession); this is the backstop.
+const crashBail = (kind, err) => {
+  try { app?.unmount?.(); } catch {}
+  if (altScreen) { try { process.stdout.write('\x1b[?1049l'); } catch {} }
+  try { process.stdout.write('\x1b[?25h'); } catch {} // restore cursor
+  try { dlog('app', 'uncaught', { kind, msg: err?.message, stack: err?.stack }); } catch {}
+  try {
+    process.stderr.write(
+      `\nmc: fatal ${kind}: ${err?.message || err}\n` +
+      `The terminal has been restored. Set MC_DEBUG=1 for the full trace.\n` +
+      `Please report: https://github.com/xxyjoel/ba-mission-control/issues\n`,
+    );
+  } catch {}
+  process.exit(1);
+};
+process.on('uncaughtException',  (err) => crashBail('exception', err));
+process.on('unhandledRejection', (err) => crashBail('rejection', err));
 
 // Final safety net for paths the explicit handlers miss (uncaught
 // exception, beforeExit timeout, abnormal termination). process.exit

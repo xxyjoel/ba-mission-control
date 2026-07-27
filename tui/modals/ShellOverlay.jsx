@@ -49,6 +49,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
   const rows = Math.max(3,  outerH - 7);
 
   const [tick, setTick] = useState(0);
+  const [error, setError] = useState(null); // set when the shell PTY can't spawn
   const writeSubRef  = useRef(null);
   const scrollSubRef = useRef(null);
   const cursorSubRef = useRef(null);
@@ -60,7 +61,15 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
 
   // Attach view on mount; dispose render subs on unmount. Never kill the PTY.
   useEffect(() => {
-    const session = getShellSession();
+    // getShellSession is hardened to return a degraded {pty:null,error} rather
+    // than throw, but wrap defensively so nothing here can crash the whole TUI.
+    let session;
+    try { session = getShellSession(); }
+    catch (e) { setError(e?.message || String(e)); return; }
+    if (!session || session.error || !session.pty) {
+      setError(session?.error || 'shell unavailable');
+      return; // no PTY to attach — render the error banner, stay closable (Ctrl+Q)
+    }
     const { pty, term, cell } = session;
     termRef.current = term;
     cellRef.current = cell;
@@ -215,7 +224,12 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
 
       {/* Terminal viewport */}
       <Box marginTop={1} flexDirection="column" width={cols} height={rows} overflow="hidden">
-        {view ? view.map((runs, y) => (
+        {error ? (
+          <Box flexDirection="column">
+            <Text color={theme?.red || 'red'}>⚠ {error}</Text>
+            <Text color={theme?.dim}>Check $SHELL, then press Ctrl+Q to close.</Text>
+          </Box>
+        ) : view ? view.map((runs, y) => (
           <Text key={y} wrap="truncate">
             {runs.length === 0 ? ' ' : runs.map((r, i) => (
               <Text

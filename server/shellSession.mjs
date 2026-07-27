@@ -12,6 +12,7 @@
 //   - kill on app shutdown (0312)
 
 import { homedir } from 'node:os';
+import { accessSync, constants as fsConstants } from 'node:fs';
 import { spawn as ptySpawn } from 'node-pty';
 import xterm from '@xterm/headless';
 import { dlog } from '../tui/lib/debugLog.js';
@@ -48,16 +49,29 @@ let _session = null;
 export function getShellSession({ spawn = ptySpawn } = {}) {
   if (_session) return _session;
 
-  const shell = process.env.SHELL || '/bin/bash';
-  const cwd   = homedir();
+  const shell = resolveShell();
+  const cwd   = resolveCwd();
 
-  const pty = spawn(shell, [], {
-    name: 'xterm-256color',
-    cols: 80,
-    rows: 24,
-    cwd,
-    env: { ...process.env, TERM: 'xterm-256color' },
-  });
+  // node-pty's spawn can throw (posix_spawnp failed) when the shell binary or
+  // cwd is unusable on the host. That MUST NOT crash the whole TUI — return a
+  // degraded session so ShellOverlay can show an error and stay closable.
+  let pty;
+  try {
+    pty = spawn(shell, [], {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+  } catch (e) {
+    dlog('shell', 'spawn-failed', { shell, cwd, msg: e?.message });
+    _session = {
+      pty: null, term: null, cell: null, atFreshPrompt: false, _termDataSub: null,
+      error: `shell failed to start (${shell}): ${e?.message || e}`,
+    };
+    return _session;
+  }
 
   // Construct the persistent xterm-headless emulator so the term buffer
   // accumulates output while the overlay is closed (survives detach).
@@ -99,8 +113,29 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
   // (see overlay-terminal.md §2 — secrets in scope).
   dlog('shell', 'spawn', { pid: pty?.pid, shell, cwd, cols: 80, rows: 24, scrollback: TERM_SCROLLBACK });
 
-  _session = { pty, term, cell, atFreshPrompt: false, _termDataSub };
+  _session = { pty, term, cell, atFreshPrompt: false, _termDataSub, error: null };
   return _session;
+}
+
+// resolveShell — pick the first executable shell from $SHELL then common
+// fallbacks, so an unset/stale $SHELL (a frequent posix_spawnp cause) doesn't
+// hand node-pty a non-executable path. Returns /bin/sh as a last resort; if
+// even that can't spawn, getShellSession catches and degrades gracefully.
+function resolveShell() {
+  // $SHELL first (the user's real shell), then the universal fallbacks. /bin/bash
+  // before /bin/sh keeps the documented "fallback /bin/bash" contract.
+  const candidates = [process.env.SHELL, '/bin/bash', '/bin/sh'].filter(Boolean);
+  for (const c of candidates) {
+    try { accessSync(c, fsConstants.X_OK); return c; } catch { /* try next */ }
+  }
+  return '/bin/sh';
+}
+
+// resolveCwd — home dir, falling back to the process cwd if home is missing or
+// inaccessible (spawning into an unreadable cwd also fails posix_spawnp).
+function resolveCwd() {
+  const home = homedir();
+  try { accessSync(home, fsConstants.X_OK); return home; } catch { return process.cwd(); }
 }
 
 // cdToCwd(dir) — write a `cd '<quoted-dir>'\n` sequence to the PTY stdin,

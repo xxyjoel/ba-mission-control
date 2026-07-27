@@ -1,0 +1,51 @@
+name: release
+
+# A release is a tag. Pushing vX.Y.Z re-runs the suite against the exact tagged
+# tree, then publishes that tree to npm with provenance (OIDC) so the community
+# can verify the tarball came from this repo at this commit — the parity guarantee.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # create the GitHub Release
+  id-token: write   # npm provenance via GitHub OIDC (tokenless attestation)
+
+jobs:
+  publish:
+    name: test + publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      # Re-verify the exact tagged tree — never publish a red build.
+      - name: Install + test
+        run: npm ci && npm test
+
+      # Refuse to publish if the tag doesn't match package.json (drift guard).
+      - name: Assert tag == package.json version
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [[ "$PKG" != "${GITHUB_REF_NAME}" ]]; then
+            echo "::error ::tag ${GITHUB_REF_NAME} != package.json ${PKG}"; exit 1
+          fi
+
+      - name: Publish to npm (with provenance)
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Cut the Release with the preinstalled gh CLI (built-in GITHUB_TOKEN) —
+      # no third-party action running under id-token:write (supply-chain).
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag

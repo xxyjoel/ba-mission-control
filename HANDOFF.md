@@ -2,6 +2,26 @@
 
 ## Current state
 
+**2026-07-27 — v1.1.1 stability patch + tag-driven release system (same branch)**
+— Root-caused the `!` crash: node-pty's prebuilt `spawn-helper` loses its exec bit
+and the chmod fix lived only in `postinstall`, which **npx skips** → `posix_spawnp
+failed` killed the TUI on first PTY spawn. Fixed at three layers: **0345** runtime
+self-heal (`fixNodePty()` chmods the helper at boot, hoist-safe via createRequire),
+**0343** graceful shell degradation (error banner, not a throw; `resolveShell`
+fallbacks), **0344** global uncaughtException net (restore terminal + clean exit).
+Cut **v1.1.1** + built a **tag-driven release pipeline** (`.github/workflows/release.yml`:
+tag → test → `npm publish --provenance` → GH Release), `npm version` lifecycle
+(preversion=test, postversion=push tags), a `prepublish-guard.mjs` (refuse dirty/
+untagged publish), `RELEASING.md`, and the design at `.claude/plans/versioning-and-release.md`.
+Release workflow cuts the GH Release via the `gh` CLI (built-in token) — no third-party
+action under the OIDC/id-token-write job (security review low finding, hardened).
+GOTCHAs: (1) **publish is blocked on npm auth** — maintainer must add `NPM_TOKEN`
+secret OR configure npm Trusted Publishing (OIDC), then push tag `v1.1.1`. (2) The
+long-uptime **OOM is still unroot-caused** — the crashed npx build IS 1.1.0 (has the
+0339 probe + 0340 map caps, so maps are DEFINITIVELY ruled out) and still OOM'd at
+4GB/31h; capture with `NODE_OPTIONS=--heapsnapshot-near-heap-limit=2 MC_HEAP_LOG=1`
+or `kill -USR2 <pid>`. New stack clue: `map`→`new Set` in an Ink render (growing tree).
+
 **2026-07-26 — zoom typing latency: profiled + leading-edge render throttle (same branch)**
 — Investigated reported zoom-terminal typing lag. Profiled the render path (headless,
 ink-testing-library): `rowToRuns` 0.42ms, `fleet.snapshot()`/`toJSON` 0.002ms

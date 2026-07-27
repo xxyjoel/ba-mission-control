@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-07-27
+
+Stability + release-integrity patch.
+
+### Fixed
+- **`!` shell overlay no longer crashes the app.** On hosts where node-pty's
+  prebuilt `spawn-helper` lost its executable bit (npm/npx skip the `postinstall`
+  that chmods it), `pty.spawn` threw `posix_spawnp failed` out of a React effect
+  and took down the whole TUI. Now: (a) the helper is chmod'd **at runtime on
+  boot** (not just postinstall), fixing the root cause for `npx`/global installs;
+  (b) `getShellSession` catches the spawn and shows an error banner instead of
+  throwing; (c) `resolveShell()` falls back through `[$SHELL, /bin/bash, /bin/sh]`.
+- **Global crash net:** an uncaught exception now restores the terminal and exits
+  cleanly with a report pointer, instead of dumping a raw stack over the alt-screen.
+
+### Added
+- `npm run start:diag` — instrumented launch (`MC_HEAP_LOG` + heap-snapshot at the
+  ceiling) to capture the long-uptime OOM under investigation.
+- **Release pipeline:** tag-driven, CI-published, provenance-signed
+  (`.github/workflows/release.yml`) so the published npm build is verifiably the
+  tested, tagged commit. See `RELEASING.md`.
+
 ## [1.1.0] — 2026-07-26
 
 ### Added

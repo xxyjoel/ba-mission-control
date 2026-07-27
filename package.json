@@ -1,6 +1,6 @@
 {
   "name": "@bluearch/mission-control",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "BlueArch Mission Control — keyboard-first terminal TUI for managing up to 10 live Claude Code agent sessions.",
   "license": "AGPL-3.0-only",
@@ -37,10 +37,14 @@
   ],
   "scripts": {
     "start": "tsx bin/mc.mjs",
+    "start:diag": "MC_HEAP_LOG=1 NODE_OPTIONS=--heapsnapshot-near-heap-limit=2 tsx bin/mc.mjs",
     "dev": "tsx watch bin/mc.mjs",
     "dev:sandbox": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx bin/mc.mjs",
     "dev:sandbox:watch": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx watch bin/mc.mjs",
     "test": "node scripts/run-tests.mjs",
+    "preversion": "npm test",
+    "postversion": "git push --follow-tags",
+    "prepublishOnly": "node scripts/prepublish-guard.mjs",
     "test:watch": "MC_NO_TRANSCRIPT=1 find tests -name '*.test.*' -type f -exec node --import tsx --test --test-timeout=30000 --test-force-exit --watch {} +",
     "postinstall": "node scripts/fix-node-pty.mjs"
   },
