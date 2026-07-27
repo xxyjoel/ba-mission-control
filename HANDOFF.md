@@ -1521,3 +1521,5 @@ Pick one:
    the full pipeline on this repo
 2. `/forge-status` to inspect the registry (currently empty)
 3. `/forge-port <dest>` to bundle forge for another machine
+
+<!-- ci: release.yml pins npm@^11.5.1 (npm@latest=12.x needs node>=22.22, EBADENGINE on node20) -->
