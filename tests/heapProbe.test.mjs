@@ -52,3 +52,30 @@ test('startHeapProbe with MC_HEAP_LOG returns a working stop() that clears the t
   assert.equal(typeof stop, 'function');
   assert.doesNotThrow(() => stop());  // clears the interval; test exits cleanly
 });
+
+test('watchdog auto-captures ONE snapshot when heap crosses the threshold', async () => {
+  const { existsSync, readdirSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { homedir } = await import('node:os');
+  const dir = join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'claude-mc', 'heap');
+  // frac ~0 → threshold below current heap → fires immediately; runs even without MC_HEAP_LOG.
+  const stop = startHeapProbe({ agents: [] }, { env: {}, watchdogMs: 15, watchdogFrac: 0.00001 });
+  await new Promise((r) => setTimeout(r, 120));
+  stop();
+  const snaps = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes('watchdog') && f.endsWith('.heapsnapshot')) : [];
+  assert.equal(snaps.length, 1, 'watchdog captures exactly once (guarded), even across many ticks');
+  for (const f of (existsSync(dir) ? readdirSync(dir) : [])) if (f.includes('watchdog')) rmSync(join(dir, f));
+});
+
+test('watchdog does NOT fire under normal heap (high frac)', async () => {
+  const { existsSync, readdirSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { homedir } = await import('node:os');
+  const dir = join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'claude-mc', 'heap');
+  const before = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes('watchdog')).length : 0;
+  const stop = startHeapProbe({ agents: [] }, { env: {}, watchdogMs: 15, watchdogFrac: 0.99 });
+  await new Promise((r) => setTimeout(r, 80));
+  stop();
+  const after = existsSync(dir) ? readdirSync(dir).filter((f) => f.includes('watchdog')).length : 0;
+  assert.equal(after, before, 'no false-fire when heap is well under the limit');
+});
