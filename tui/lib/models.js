@@ -29,22 +29,29 @@
 // skew badly on heavy-cache turns (cache_creation often dominates
 // the input column on mc's first-turn-per-session shape).
 
+// Pricing + context refreshed 2026-07-27 against the authoritative Claude model
+// catalog (Fable/Mythos 5, Opus 4.8/4.7/4.6, Sonnet 5/4.6, Haiku 4.5). Opus is
+// $5/$25 per MTok (previously mis-mirrored from an old 15/75 figure); Opus 4.7
+// and Sonnet 4.6 are 1M context (previously 200K). Cache rates follow the file
+// convention: cacheCreation = 1.25×in, cacheRead = 0.10×in.
 export const MODELS = {
-  'opus-4.8':   { label: 'OPUS 4.8',   cliModel: 'claude-opus-4-8',             kind: 'opus',   maxCtx: 1000000, maxOut: 64000, costPerMTokIn: 15, costPerMTokOut: 75, costPerMTokCacheCreation: 18.75, costPerMTokCacheRead: 1.5 },
-  'sonnet-4.6': { label: 'SONNET 4.6', cliModel: 'claude-sonnet-4-6',           kind: 'sonnet', maxCtx: 200000,  costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
-  'opus-4.7':   { label: 'OPUS 4.7',   cliModel: 'claude-opus-4-7',             kind: 'opus',   maxCtx: 200000,  costPerMTokIn: 15, costPerMTokOut: 75, costPerMTokCacheCreation: 18.75, costPerMTokCacheRead: 1.5 },
-  'haiku-4.5':  { label: 'HAIKU 4.5',  cliModel: 'claude-haiku-4-5-20251001',   kind: 'haiku',  maxCtx: 200000,  costPerMTokIn: 1,  costPerMTokOut: 5,  costPerMTokCacheCreation: 1.25,  costPerMTokCacheRead: 0.1 },
+  'opus-4.8':   { label: 'OPUS 4.8',   cliModel: 'claude-opus-4-8',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
+  'opus-4.7':   { label: 'OPUS 4.7',   cliModel: 'claude-opus-4-7',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
+  'opus-4.6':   { label: 'OPUS 4.6',   cliModel: 'claude-opus-4-6',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
+  'fable-5':    { label: 'FABLE 5',    cliModel: 'claude-fable-5',            kind: 'fable',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 10, costPerMTokOut: 50, costPerMTokCacheCreation: 12.5,  costPerMTokCacheRead: 1.0 },
+  'sonnet-5':   { label: 'SONNET 5',   cliModel: 'claude-sonnet-5',           kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
+  'sonnet-4.6': { label: 'SONNET 4.6', cliModel: 'claude-sonnet-4-6',         kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
+  'haiku-4.5':  { label: 'HAIKU 4.5',  cliModel: 'claude-haiku-4-5-20251001', kind: 'haiku',  maxCtx: 200000,  maxOut: 64000,  costPerMTokIn: 1,  costPerMTokOut: 5,  costPerMTokCacheCreation: 1.25,  costPerMTokCacheRead: 0.1 },
 };
-// opus-4.8 maxCtx/maxOut VERIFIED 2026-06-22 via
-//   claude -p --model opus --output-format json → modelUsage[claude-opus-4-8]
-//   .contextWindow = 1_000_000, .maxOutputTokens = 64_000
-// `:model refresh` re-runs that probe for every alias and overlays the
-// live contextWindow onto this catalog (see tui/lib/modelProbe.js).
-// TODO(opus-4.8-pricing): costPerMTokIn / costPerMTokOut are still
-// mirrored from 4.7 (15/75 USD per MTok) — the probe reports only total
-// costUSD per turn, not per-MTok rates, so pricing must be confirmed
-// against the Anthropic pricing page. Cost display will be off if the
-// rates moved.
+// Sonnet 5 has an introductory rate ($2/$10 per MTok through 2026-08-31); we use
+// the standard $3/$15 so the cost display doesn't jump when intro pricing ends.
+// `:model refresh` re-runs the CLI probe per alias and overlays the live
+// contextWindow onto this catalog (see tui/lib/modelProbe.js).
+// An unknown model (a claude release newer than this catalog) is NOT fatal:
+// the agent passes the model string straight through to `--model`, and
+// modelByCli returns null so the UI degrades gracefully (dim color, no cost).
+// TODO(model-autodetect): probe `claude` on version change and reconcile new
+// aliases into this catalog automatically (task 0348).
 
 export const MODEL_IDS = Object.keys(MODELS);
 
@@ -67,6 +74,7 @@ export function modelColor(id, theme) {
   const m = MODELS[id];
   if (!m) return theme.dim;
   if (m.kind === 'opus') return theme.magenta;
+  if (m.kind === 'fable') return theme.yellow;   // top tier — distinct from opus
   if (m.kind === 'haiku') return theme.green;
-  return theme.brBlue;
+  return theme.brBlue;                            // sonnet + any future kind
 }

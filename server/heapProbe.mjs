@@ -10,7 +10,7 @@
 //   NODE_OPTIONS='--heapsnapshot-near-heap-limit=2' mc   # auto-snapshot at the ceiling
 //
 // Output dir: ~/.local/state/claude-mc/heap/  (XDG_STATE_HOME honored)
-import { writeHeapSnapshot } from 'node:v8';
+import { writeHeapSnapshot, getHeapStatistics } from 'node:v8';
 import { appendFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -73,7 +73,7 @@ export function heapSample(fleet, t0 = 0) {
 // startHeapProbe — arm the on-demand SIGUSR2 snapshot (always) and, when
 // MC_HEAP_LOG is set, append a memory+counts NDJSON line every intervalMs.
 // Returns a stop() fn. The interval is unref'd so it never keeps mc alive.
-export function startHeapProbe(fleet, { intervalMs = 60_000, env = process.env } = {}) {
+export function startHeapProbe(fleet, { intervalMs = 60_000, env = process.env, watchdogMs = 30_000, watchdogFrac = 0.72 } = {}) {
   try {
     process.on('SIGUSR2', () => {
       const p = dumpHeapSnapshot('sigusr2');
@@ -81,7 +81,32 @@ export function startHeapProbe(fleet, { intervalMs = 60_000, env = process.env }
     });
   } catch {}
 
-  if (!env.MC_HEAP_LOG) return () => {};
+  // Watchdog (ALWAYS on, not gated on MC_HEAP_LOG): the long-uptime OOM (#18) is
+  // slow and unroot-caused, so auto-capture ONE heap snapshot the first time
+  // heapUsed crosses watchdogFrac of the V8 old-space limit — well before the
+  // hard OOM, while a snapshot can still be written. That turns a blind crash
+  // into a self-diagnosis (the retainer is named in the snapshot). Non-disruptive:
+  // writes to the probe dir + debug log only, never the TUI/stdout. Fires once.
+  let heapLimit = 0;
+  try { heapLimit = getHeapStatistics().heap_size_limit || 0; } catch {}
+  const threshold = heapLimit ? heapLimit * watchdogFrac : Infinity;
+  let captured = false;
+  const watchTimer = setInterval(() => {
+    try {
+      if (captured) return;
+      if (process.memoryUsage().heapUsed >= threshold) {
+        captured = true;
+        const p = dumpHeapSnapshot('watchdog');
+        try {
+          appendFileSync(join(STATE_DIR, 'watchdog.log'),
+            JSON.stringify({ t: Date.now(), heapUsedMB: Math.round(process.memoryUsage().heapUsed / 1e6), limitMB: Math.round(heapLimit / 1e6), snapshot: p }) + '\n');
+        } catch {}
+      }
+    } catch {}
+  }, watchdogMs);
+  try { watchTimer.unref?.(); } catch {}
+
+  if (!env.MC_HEAP_LOG) return () => { try { clearInterval(watchTimer); } catch {} };
 
   ensureDir();
   const logPath = join(STATE_DIR, `mc-heap-${process.pid}.ndjson`);
@@ -92,5 +117,5 @@ export function startHeapProbe(fleet, { intervalMs = 60_000, env = process.env }
   tick(); // baseline immediately
   const timer = setInterval(tick, intervalMs);
   try { timer.unref?.(); } catch {}
-  return () => { try { clearInterval(timer); } catch {} };
+  return () => { try { clearInterval(timer); } catch {} try { clearInterval(watchTimer); } catch {} };
 }

@@ -15,6 +15,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { startSessionTailer, claudeProjectDir } from '../server/sessionFileTailer.mjs';
+import { MODELS } from '../tui/lib/models.js';
 
 // The tailer computes its watch path from
 //   ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl
@@ -120,8 +121,10 @@ test('integration: tailer accumulates tokens + cost from assistant event', async
   assert.equal(agent.tokensIn, 1000);
   assert.equal(agent.tokensOut, 500);
   assert.equal(agent.context, 1000);
-  // Opus 4.7: 1000*15 + 500*75 = 52500 / 1e6 = 0.0525
-  assert.ok(Math.abs(agent.costSession - 0.0525) < 0.0001, `got ${agent.costSession}`);
+  // Cost derived from the catalog (single source of truth) so a pricing change self-heals.
+  const rate = MODELS['opus-4.7'];
+  const wantCost = (1000 * rate.costPerMTokIn + 500 * rate.costPerMTokOut) / 1e6;
+  assert.ok(Math.abs(agent.costSession - wantCost) < 1e-9, `got ${agent.costSession}`);
   // end_turn → idle
   assert.equal(agent.status, 'idle');
   assert.equal(agent.resolvedModel, 'claude-opus-4-7');

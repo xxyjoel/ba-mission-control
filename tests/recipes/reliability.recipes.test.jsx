@@ -14,17 +14,18 @@ import Card from '../../tui/Card.jsx';
 import Help from '../../tui/modals/Help.jsx';
 import { runRecipe } from '../lib/recipe.js';
 import { theme, makeAgent } from '../lib/fixtures.js';
+import { MODELS } from '../../tui/lib/models.js';
 
 const noop = () => {};
 
-// makeAgent defaults to sonnet-4.6 (maxCtx 200k in tui/lib/models.js).
-// We pass context relative to the test's intent and let the card derive
-// the percentage itself.
+// makeAgent defaults to sonnet-4.6. We derive the test context from the model's
+// actual maxCtx in the catalog (single source of truth) so this stays correct if
+// the context window changes — the card derives the percentage the same way.
 
 test('recipe: card chip — context near threshold renders the % chip', async () => {
-  // ~85% of sonnet-4.6's 200k ctx window → above the 80% warn threshold,
-  // below the 90% over-threshold → yellow chip with "85%".
-  const agent = makeAgent({ status: 'working', context: 170_000 });
+  // 85% of sonnet-4.6's ctx window → above the 80% warn, below the 90% over
+  // threshold → yellow chip with "85%".
+  const agent = makeAgent({ status: 'working', context: Math.round(0.85 * MODELS['sonnet-4.6'].maxCtx) });
   await runRecipe({
     component: Card,
     props: { agent, focused: false, threshold: 150_000, warnPct: 85,

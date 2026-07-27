@@ -59,9 +59,20 @@ export function applySidechainUsage(agent, usage, modelId) {
 //     the whole sub-agent's usage is captured.
 // Per-file byte offsets are tracked, and we only advance past COMPLETE lines
 // (last '\n'), so a partial trailing line is re-read once it's finished.
-export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS } = {}) {
+export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleIdleMs = 30_000 } = {}) {
   if (!agent) throw new Error('subagentUsageTailer: agent is required');
   const offsets = new Map(); // filename → byte offset
+  // Completed sub-agent files stop growing once the sidechain finishes. Without
+  // this, scan() re-stats EVERY file the dir has ever held on every poll — O(all
+  // sub-agents) I/O forever, the dominant idle-energy cost on long sessions with
+  // heavy fan-out. Once a file is fully read AND its size hasn't changed for
+  // SETTLE_IDLE_MS we `settled` it and skip it (never evicted — re-reading from 0
+  // would double-count its usage). Per-poll cost then tracks ACTIVE files, not
+  // all-time. Time-based (not poll-count) so it's robust to any poll cadence.
+  const settled = new Set();
+  const lastSize = new Map();     // filename → last observed size
+  const lastGrowTs = new Map();   // filename → last time the size changed
+  const SETTLE_IDLE_MS = settleIdleMs;
   let stopped = false;
   let primed = false;
   let scanning = false;
@@ -116,6 +127,7 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS } = {}) {
       let changed = false;
       for (const f of files) {
         if (!f.startsWith('agent-') || !f.endsWith('.jsonl')) continue;
+        if (settled.has(f)) continue; // completed sidechain — no more stat/read
         let size;
         try { size = (await fsp.stat(join(dir, f))).size; } catch { continue; }
         if (!offsets.has(f)) {
@@ -123,7 +135,13 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS } = {}) {
           offsets.set(f, primed ? 0 : size);
           if (!primed) continue;
         }
+        // Track growth so an idle, fully-read file can settle out of the poll.
+        const now = Date.now();
+        if (lastSize.get(f) !== size) { lastSize.set(f, size); lastGrowTs.set(f, now); }
         if (await readNew(join(dir, f), f, size)) changed = true;
+        if ((offsets.get(f) || 0) >= size && now - (lastGrowTs.get(f) || now) >= SETTLE_IDLE_MS) {
+          settled.add(f); offsets.delete(f); lastSize.delete(f); lastGrowTs.delete(f);
+        }
       }
       primed = true;
       if (changed) { try { agent.emit('change'); } catch {} }
