@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import App from './App.jsx';
 import { Fleet } from '../server/fleet.mjs';
 import { startHeapProbe } from '../server/heapProbe.mjs';
+import { fixNodePty } from '../scripts/fix-node-pty.mjs';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
 import { isSandboxed, getConfigDir } from './lib/configDir.js';
@@ -83,6 +84,11 @@ try {
   const cache = loadModelCache();
   if (cache) applyCacheToCatalog(MODELS, cache);
 } catch { /* a bad cache must never block boot */ }
+
+// Self-heal node-pty's spawn-helper exec bit BEFORE any PTY spawn (agents or the
+// `!` shell). npx skips the postinstall that normally does this, which otherwise
+// surfaces as "posix_spawnp failed" the first time a PTY is spawned. Best-effort.
+try { fixNodePty(); } catch { /* never block boot */ }
 
 const fleet = new Fleet({ slots: bootSettings.maxSlots });
 

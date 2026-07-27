@@ -1,53 +1,66 @@
 #!/usr/bin/env node
-// scripts/fix-node-pty.mjs — restore the executable bit on node-pty's
-// spawn-helper after `npm install`.
+// scripts/fix-node-pty.mjs — ensure node-pty's spawn-helper is executable.
 //
-// Why this exists: some npm versions extract the prebuilt spawn-helper
-// without preserving its executable mode, which makes `pty.spawn(...)`
-// fail with "posix_spawnp failed." The fix is a `chmod 0o755`. We do it
-// here in a postinstall script so every fresh install / clone Just Works.
+// Why this exists: some npm versions extract the prebuilt spawn-helper without
+// preserving its executable mode, which makes `pty.spawn(...)` fail with
+// "posix_spawnp failed." The fix is a chmod +x.
 //
-// node-pty is a runtime dep — the Zoom modal hands the terminal to a
-// real `claude` PTY child. If the package isn't installed yet we exit
-// silently — nothing to fix.
+// It runs BOTH as a `postinstall` script AND at runtime from tui/main.jsx boot,
+// because **npx frequently skips postinstall** — so the runtime self-heal is
+// what actually makes the PTY work on `npx @bluearch/mission-control` and global
+// installs. node-pty is a runtime dep (Zoom + the `!` shell hand the terminal to
+// a real PTY child), so a non-executable helper crashes those features.
 
 import { chmodSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
-const repoRoot = join(fileURLToPath(import.meta.url), '..', '..');
-const ptyRoot = join(repoRoot, 'node_modules/node-pty');
+// Resolve node-pty's ACTUAL install dir regardless of hoisting (top-level
+// node_modules vs nested under this package) — an earlier sibling-only path is
+// exactly how hoisted installs slipped through. Fall back to the sibling path.
+function ptyRoot() {
+  try {
+    return dirname(createRequire(import.meta.url).resolve('node-pty/package.json'));
+  } catch {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return join(here, '..', 'node_modules', 'node-pty');
+  }
+}
 
-// Enumerate EVERY spawn-helper node-pty ships, across all platforms/arches —
-// don't hardcode the host triple. prebuild-install drops one per platform under
-// prebuilds/<os>-<arch>/spawn-helper (darwin-arm64, linux-x64, …); a source
-// build lands one at build/Release/spawn-helper. An earlier darwin-only list is
-// exactly why CI (linux-x64) stayed broken: the Linux helper kept npm's stripped
-// mode, so pty.spawn produced NO output and every PTY recipe test failed.
-function spawnHelpers() {
-  const helpers = [join(ptyRoot, 'build/Release/spawn-helper')];
-  const prebuilds = join(ptyRoot, 'prebuilds');
+// Enumerate EVERY spawn-helper node-pty ships — prebuild-install drops one per
+// platform under prebuilds/<os>-<arch>/spawn-helper; a source build lands one at
+// build/Release/spawn-helper. Don't hardcode the host triple.
+function spawnHelpers(root) {
+  const helpers = [join(root, 'build/Release/spawn-helper')];
+  const prebuilds = join(root, 'prebuilds');
   if (existsSync(prebuilds)) {
     for (const dir of readdirSync(prebuilds)) helpers.push(join(prebuilds, dir, 'spawn-helper'));
   }
   return helpers;
 }
 
-// node-pty is a runtime dep (Zoom hands the terminal to a real claude PTY).
-// If it isn't installed yet there's nothing to fix — exit silently.
-if (existsSync(ptyRoot)) {
-  for (const path of spawnHelpers()) {
-    if (!existsSync(path)) continue;
-    // 0o111 = any execute bit. npm sometimes extracts the helper without it,
-    // which makes pty.spawn fail with "posix_spawnp failed" / silent no-output.
-    if ((statSync(path).mode & 0o111) === 0) {
-      // Best-effort: a read-only/global install path shouldn't crash postinstall.
-      try {
+// fixNodePty — best-effort chmod +x on every spawn-helper missing an exec bit.
+// NEVER throws (returns a summary). Safe to call at boot and repeatedly; a
+// read-only/global install path that can't be chmod'd is skipped, not fatal.
+export function fixNodePty({ log = false } = {}) {
+  const root = ptyRoot();
+  const fixed = [];
+  if (!existsSync(root)) return { root, present: false, fixed };
+  for (const path of spawnHelpers(root)) {
+    try {
+      if (!existsSync(path)) continue;
+      if ((statSync(path).mode & 0o111) === 0) { // no execute bit at all
         chmodSync(path, 0o755);
-        console.log(`fix-node-pty: chmod +x ${path}`);
-      } catch (err) {
-        console.log(`fix-node-pty: could not chmod ${path} (${err.code || err.message}) — skipping`);
+        fixed.push(path);
+        if (log) console.log(`fix-node-pty: chmod +x ${path}`);
       }
+    } catch (err) {
+      if (log) console.log(`fix-node-pty: could not chmod ${path} (${err.code || err.message}) — skipping`);
     }
   }
+  return { root, present: true, fixed };
 }
+
+// Run directly (postinstall / manual): log what it does.
+if (import.meta.url === `file://${process.argv[1]}`) fixNodePty({ log: true });
