@@ -105,3 +105,42 @@ test('integration: files present BEFORE start are primed at EOF (resume-safe)', 
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('settle: an idle, fully-read file drops out of the poll (late appends ignored)', async () => {
+  const { agent, cwd, subDir } = setup();
+  // settleIdleMs tiny so the file settles within the test window.
+  const tailer = startSubagentUsageTailer({ agent, statPollMs: 20, settleIdleMs: 60 });
+  try {
+    await sleep(40);
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(subDir, 'agent-done.jsonl'), usageLine({ input_tokens: 10, output_tokens: 5 }));
+    await sleep(60);
+    assert.equal(agent.tokensIn, 10, 'completed sub-agent usage folded');
+    // Stay idle past settleIdleMs so the file settles, then append.
+    await sleep(140);
+    appendFileSync(join(subDir, 'agent-done.jsonl'), usageLine({ input_tokens: 999, output_tokens: 999 }));
+    await sleep(80);
+    assert.equal(agent.tokensIn, 10, 'settled file is skipped — late append not folded (energy: no re-stat)');
+  } finally {
+    tailer.stop();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('settle: an actively-growing file is NOT wrongly settled', async () => {
+  const { agent, cwd, subDir } = setup();
+  const tailer = startSubagentUsageTailer({ agent, statPollMs: 20, settleIdleMs: 60 });
+  try {
+    await sleep(40);
+    mkdirSync(subDir, { recursive: true });
+    const f = join(subDir, 'agent-live.jsonl');
+    writeFileSync(f, usageLine({ input_tokens: 1, output_tokens: 1 }));
+    // Append every ~30ms for a while — keeps it active past settleIdleMs windows.
+    for (let i = 0; i < 8; i++) { await sleep(30); appendFileSync(f, usageLine({ input_tokens: 1, output_tokens: 0 })); }
+    await sleep(60);
+    assert.equal(agent.tokensIn, 9, 'all appends to an active file counted (not settled mid-stream)');
+  } finally {
+    tailer.stop();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
