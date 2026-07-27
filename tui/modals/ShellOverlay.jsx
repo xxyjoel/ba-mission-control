@@ -20,6 +20,7 @@ import { basename } from 'node:path';
 import { homedir } from 'node:os';
 import { getShellSession, resizeShellSession } from '../../server/shellSession.mjs';
 import { rowToRuns } from '../zoom/ptyCells.js';
+import { throttleDecision } from '../lib/leadingThrottle.js';
 import { keyToBytes } from '../zoom/ptyKeys.js';
 import { classifyShellKey } from '../shell/shellKeys.js';
 import { dlog } from '../lib/debugLog.js';
@@ -52,6 +53,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
   const scrollSubRef = useRef(null);
   const cursorSubRef = useRef(null);
   const renderTimerRef = useRef(null);
+  const renderLastRef = useRef(0); // last committed paint — drives leading-edge scheduling
   const termRef = useRef(null);
   const cellRef = useRef(null);
   const ptyRef  = useRef(null);
@@ -67,12 +69,15 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     // dlog: lifecycle metadata only (overlay-terminal.md §2).
     dlog('shell', 'overlay-attach', { pid: pty?.pid });
 
+    // Leading-edge + trailing-coalesce: the first change after an idle gap paints
+    // immediately (snappy keystroke echo), bursts coalesce to <=1 frame/interval.
+    // Same throttle as PtyPane (tui/lib/leadingThrottle.js).
+    const paint = () => { renderLastRef.current = Date.now(); setTick(n => (n + 1) | 0); };
     const scheduleRender = () => {
       if (renderTimerRef.current) return;
-      renderTimerRef.current = setTimeout(() => {
-        renderTimerRef.current = null;
-        setTick(n => (n + 1) | 0);
-      }, RENDER_INTERVAL_MS);
+      const { paintNow, scheduleIn } = throttleDecision(Date.now(), renderLastRef.current, RENDER_INTERVAL_MS);
+      if (paintNow) { paint(); return; }
+      renderTimerRef.current = setTimeout(() => { renderTimerRef.current = null; paint(); }, scheduleIn);
     };
 
     // Subscribe to term buffer changes — view only, no data pump.

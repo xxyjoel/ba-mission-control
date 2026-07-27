@@ -23,6 +23,7 @@ import { startZoomSession } from '../../server/zoomSession.mjs';
 import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
 import { rowToRuns } from './ptyCells.js';
+import { throttleDecision } from '../lib/leadingThrottle.js';
 import { matchUpdateBanner } from './claudeBanner.js';
 import { dlog } from '../lib/debugLog.js';
 
@@ -99,6 +100,9 @@ export default function PtyPane({
   const cellRef = useRef(null);
   const disposeRef = useRef(null);
   const renderTimerRef = useRef(null);
+  // Timestamp of the last committed paint — drives leading-edge scheduling so a
+  // keystroke's echo isn't delayed the full frame interval (see scheduleRender).
+  const renderLastRef = useRef(0);
   // True when the term is owned by PtyAgent (persistent across zoom
   // enter/exit). False when we built a local Terminal for the legacy
   // startZoomSession path. Controls whether unmount disposes the term.
@@ -177,17 +181,25 @@ export default function PtyPane({
       ptyRef.current = session.pty;
       disposeRef.current = session.dispose;
 
-      // Frame scheduler. Driven by xterm's own buffer-change events
-      // below (onWriteParsed fires after the parser commits a write;
-      // onScroll/onCursorMove cover viewport changes that don't write
-      // new cells). The setTimeout coalesces a burst of events into
-      // one React render at up to RENDER_INTERVAL_MS cadence.
+      // Frame scheduler. Driven by xterm's own buffer-change events below
+      // (onWriteParsed fires after the parser commits a write; onScroll/
+      // onCursorMove cover viewport changes that don't write new cells).
+      // Leading-edge + trailing-coalesce: the FIRST change after an idle gap
+      // paints immediately (so a keystroke's echo isn't delayed the full frame
+      // interval — the reported zoom typing lag), while a burst of streaming
+      // output still coalesces to <=1 render per RENDER_INTERVAL_MS.
+      const paint = () => {
+        renderLastRef.current = Date.now();
+        if (!cancelled) setTick(n => (n + 1) | 0);
+      };
       const scheduleRender = () => {
-        if (renderTimerRef.current) return;
+        if (cancelled || renderTimerRef.current) return;
+        const { paintNow, scheduleIn } = throttleDecision(Date.now(), renderLastRef.current, RENDER_INTERVAL_MS);
+        if (paintNow) { paint(); return; }
         renderTimerRef.current = setTimeout(() => {
           renderTimerRef.current = null;
-          if (!cancelled) setTick(n => (n + 1) | 0);
-        }, RENDER_INTERVAL_MS);
+          paint();
+        }, scheduleIn);
       };
 
       // PTY data pump: only own this on the LEGACY path. With
