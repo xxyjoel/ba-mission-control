@@ -2,6 +2,16 @@
 
 ## Current state
 
+**2026-07-29 — CI flake #2 FIXED: shellLogging hardcoded `/bin/zsh`**
+— After the gh-hang fix, PR #25 CI surfaced a SECOND flake (different test each run =
+the build had multiple fragile tests). `tests/shell/shellLogging.test.mjs` forced
+`SHELL=/bin/zsh` then asserted `spawn.shell === '/bin/zsh'`, but `resolveShell()` only
+honours `$SHELL` if it's executable — on a runner without zsh it falls back to `/bin/bash`
+(zsh presence varies across GitHub ubuntu images → intermittent). Fix: assert against the
+ACTUALLY-resolved shell (`session.pty._bin`, the bin passed to spawn) — host-independent,
+still proves the logged shell path is real. Verified by running with `SHELL=/nonexistent`
+(falls back, still green). Proactive scan found no other real-binary/host-path deps in tests.
+
 **2026-07-29 — CI hang FIXED (PR #25 was red on a flaky `gh` test)**
 — PR #25's `tests` check failed intermittently: `tasks.test.mjs` → `listIssuesForCwd`
 shelled out to real `gh` and HUNG ~9 min (not an assertion failure). Cause: `execFile`'s

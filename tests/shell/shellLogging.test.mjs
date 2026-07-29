@@ -112,7 +112,13 @@ test('spawn emits dlog shell/spawn with pid, shell, cwd', () => {
 
   assert.ok(spawn, 'a shell/spawn record was written');
   assert.strictEqual(spawn.pid, session.pty.pid, 'pid matches the spawned PTY');
-  assert.strictEqual(spawn.shell, '/bin/zsh', 'shell binary path logged');
+  // Assert against the ACTUALLY-resolved shell (the bin passed to spawn), not a
+  // hardcoded '/bin/zsh': resolveShell() honours $SHELL only if it's executable,
+  // so on a host without /bin/zsh (e.g. the ubuntu CI runner) it falls back to
+  // /bin/bash. Comparing to session.pty._bin keeps this host-independent while
+  // still proving the logged shell path is the real one.
+  assert.strictEqual(spawn.shell, session.pty._bin, 'logged shell = the resolved+spawned shell');
+  assert.ok(typeof spawn.shell === 'string' && spawn.shell.length > 0, 'shell binary path logged');
   assert.ok(typeof spawn.cwd === 'string' && spawn.cwd.length > 0, 'cwd logged');
 });
 
