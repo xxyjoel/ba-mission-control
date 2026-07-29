@@ -69,6 +69,10 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
   // SETTLE_IDLE_MS we `settled` it and skip it (never evicted — re-reading from 0
   // would double-count its usage). Per-poll cost then tracks ACTIVE files, not
   // all-time. Time-based (not poll-count) so it's robust to any poll cadence.
+  // TODO(mem-leak): task 0350 — add-only, never evicted; one entry per completed
+  // sub-agent file, so a long fan-out-heavy session grows this Set by hundreds/
+  // thousands of strings. Cap by count/age (re-reading an evicted file from 0 would
+  // double-count, so eviction must also drop the offset or mark it terminal).
   const settled = new Set();
   const lastSize = new Map();     // filename → last observed size
   const lastGrowTs = new Map();   // filename → last time the size changed
@@ -150,6 +154,12 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
     }
   }
 
+  // TODO(perf): pure polling — unlike sessionFileTailer/statusHookTailer this has NO
+  // fs.watch, so scan() does a readdir (+ a stat per unsettled file) every 1.5s for
+  // the tailer's whole life. An agent that never spawns a sub-agent still fires a
+  // failing readdir every tick. Across up to 10 slots that's the dominant sustained
+  // idle-battery cost. Fix: add an fs.watch on the subagents dir (once it exists) and
+  // demote this interval to a slow backstop, or lengthen the idle cadence.
   timer = setInterval(scan, statPollMs);
   scan();
 

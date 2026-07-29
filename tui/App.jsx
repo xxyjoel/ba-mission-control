@@ -329,6 +329,11 @@ export default function App({ fleet, auth: initialAuth }) {
   }, [settings.maxSlots, fleet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Periodic GC of lastSeen entries for dead sessions.
+  // TODO(mem-leak): this 30s interval NEVER fires — deps [snapshot] tear it down and
+  // recreate it every ≤3s (IDLE_TICK_MS), far faster than its own period, so gc()
+  // (the only trim path for costStore.lastSeen, persisted to costs-week.json) never
+  // runs → lastSeen grows unbounded across kill+relaunch. Fix: stable identity —
+  // deps [] reading a snapshotRef, so the interval survives to fire.
   useEffect(() => {
     const t = setInterval(() => { costStoreRef.current.gc(snapshot.agents); }, 30000);
     return () => clearInterval(t);
@@ -338,6 +343,12 @@ export default function App({ fleet, auth: initialAuth }) {
   // Mirror every snapshot into ~/.config/claude-mc/sessions.json so the
   // user can resume yesterday's sessions tomorrow. The store debounces
   // its own writes (only updates lastSeen every 60s).
+  // TODO(perf): syncFromSnapshot → loadSessions() does an UNCACHED readFileSync +
+  // JSON.parse of sessions.json on EVERY call, and this effect fires on every
+  // snapshot change (frame rate while active, every 3s idle) → synchronous disk
+  // read+parse on the render path up to ~10×/s. Only writes are debounced, not
+  // reads. Fix: cache the parsed store in sessionStore, re-read only on mtime
+  // change or after our own persist().
   useEffect(() => {
     syncFromSnapshot(snapshot.agents, { historyLimit: settings.sessionHistoryLimit ?? 20 });
   }, [snapshot, settings.sessionHistoryLimit]);
