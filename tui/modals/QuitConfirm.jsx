@@ -6,12 +6,13 @@
 //   n/N/Esc   → cancel         (onCancel())
 // Every other key is ignored (no auto-dismiss, no race with App's `q` handler).
 //
-// Save is opt-in: a proper save is the ONLY exit that preserves resumable
-// conversations and token/cost totals. Any other exit (incl. just closing the
-// terminal) is a "clear" — `:resume-all` reopens only the recently-open repos as
-// fresh sessions. Enter maps to SAVE so an instinctive Enter never loses work.
-// onQuit sets the persist mode in the session store BEFORE Ink tears down; the
-// final write in main.jsx then records the right thing.
+// Save is the DEFAULT: every exit preserves resumable conversations + token/cost
+// totals UNLESS the user explicitly picks [d]. Closing the terminal (cmd+W →
+// SIGHUP), Ctrl-C, and this modal's [s] all keep the sessions; only [d] quit-no-save
+// downgrades to a "clear" — `:resume-all` then reopens those repos as fresh
+// sessions. Enter maps to SAVE so an instinctive Enter never loses work. onQuit
+// sets the persist mode in the session store BEFORE Ink tears down; the final write
+// in main.jsx then records the right thing (default 'save' if no key set it).
 
 import React from 'react';
 import { Box, Text, useInput, useApp } from 'ink';

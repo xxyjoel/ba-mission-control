@@ -2,6 +2,45 @@
 
 ## Current state
 
+**2026-07-28 — SESSION-SAVE data loss FIXED (cmd+W wiped sessions) + battery fix committed**
+— User report: "mc did not save my sessions + massive battery drain again." Battery =
+the OOM #18 leak below (React dev mode); recurred only because the `NODE_ENV=production`
+fix was still UNCOMMITTED and the running mc was the old build — now committed (bin/mc.mjs
++ perf.measures test). Restart mc to pick it up; a running process can't get NODE_ENV
+retroactively. **Session loss root cause**: `main.jsx` `shutdown()` forced
+`setQuitMode('clear')` on every signal exit, and cmd+W / window-close sends **SIGHUP** →
+the final persist dropped each live slot's `sessionId` + in/out/cost totals (confirmed in
+the user's `sessions.json`: slots downgraded to `fresh:true` stubs). **Fix**: signal exits
+(SIGHUP/SIGINT/SIGTERM) + crashes now leave the mode at the default `'save'`; the ONLY exit
+that clears is the explicit in-app **[d] quit-no-save** (QuitConfirm). claude rehydrates the
+conversation from its own on-disk transcript on `:resume-all`. Regression test
+`tests/sessionSave.sighup.test.mjs`. GOTCHA: the 5 already-lost sessions are still
+recoverable — their transcripts exist on disk and the sessionIds survive in `history`;
+restore them into the resume store if the user asks. To carry a CURRENTLY-open fleet across
+the restart onto the fixed build, quit the old build with **q→s (save & quit), not cmd+W**.
+
+**2026-07-28 — OOM #18 ROOT-CAUSED + FIXED; stabilization gate opened (same branch)**
+— User directive: no net-new features (0333 `:update` PARKED) until the product is
+provably solid — works as intended, installs easily, no memory leaks. Opened a
+3-track **stabilization gate** (tasks 0349–0352; see memory `stabilization-gate`).
+**0349**: root-caused the long-uptime OOM from the watchdog's 4.3GB heapsnapshot via
+a new streaming analyzer (`scripts/analyze-heapsnapshot.mjs` — no whole-file load).
+Dominant retainer = **3.3M `PerformanceMeasure` objects** + React profiler-track
+strings (`"Components ⚛"`, `"Changed Props"`, `"setState()"`). Cause: **React ran in
+DEV mode because `NODE_ENV` was unset** → ~7 unbounded `performance.measure()` entries
+per render, retained forever by perf_hooks → 2.5GB/31h → OOM. Proven: 400 Ink
+re-renders emit +2802 measures in dev, **0 in production**. **0352 FIX**: `bin/mc.mjs`
+now sets `process.env.NODE_ENV ??= 'production'` before the Ink import (boot stack
+confirms `react-reconciler.production.js` loads); regression test
+`tests/perf.measures.test.jsx` (prod → 0 measures + entry-wiring assert). The
+`subagentUsageTailer` `settled` Set was RULED OUT (not in retainers) — 0350 downgraded
+to a low-prio cleanup. Also re-validated the `accurate-session-status` plan (still
+sound; RC1/RC1b/RC2 all reproduce at `ptyAgent.mjs:919-945` — line refs drifted ~+68;
+plan doc updated). GOTCHAs: (1) the periodic `mc-heap-*.ndjson` logger only writes ONE
+boot-time line per process — useless as a growth trace; the watchdog is what caught
+this (follow-up: make it append over uptime). (2) Install still blocked: package not
+on npm (E404) — 0351 covers the one-time manual publish bootstrap.
+
 **2026-07-27 — energy fix, heap watchdog, model catalog refresh (same branch)**
 — **0346**: `subagentUsageTailer` now settles completed sub-agent files (stops re-stat'ing
 every file the subagents dir ever held, every poll — the idle-energy drain on long

@@ -43,17 +43,19 @@ function emptyStore() { return { version: 2, savedAt: 0, bySlot: {}, history: []
 // out ancient leftovers. Records that carry `live` ignore this entirely.
 const RESUME_RECENCY_MS = 120_000;
 
-// Quit mode governs what a persist writes. 'save' (the default during a running
-// session) records the FULL resumable record per open slot — sessionId plus the
-// in/out/cost totals — so a slot that crashes can be resumed and a proper
-// quit+save restores the live conversations. 'clear' records only the LOCATION
-// (cwd/branch/model/name); `:resume-all` then reopens those repos as fresh
-// sessions with no history and zeroed totals.
+// Quit mode governs what a persist writes. 'save' (the default, and what every
+// exit uses UNLESS the user explicitly asks to discard) records the FULL resumable
+// record per open slot — sessionId plus the in/out/cost totals — so a slot that
+// crashes, or the whole app closing (incl. cmd+W / terminal close → SIGHUP), can be
+// resumed and `:resume-all` restores the live conversations. 'clear' records only
+// the LOCATION (cwd/branch/model/name); `:resume-all` then reopens those repos as
+// fresh sessions with no history and zeroed totals.
 //
-// The mc-exit paths set 'clear' just before the final write so that "save is
-// opt-in": only the explicit [s] save & quit leaves the mode at 'save'. Every
-// other exit — [d] quit-no-save, terminal close (SIGHUP), Ctrl-C (SIGINT),
-// SIGTERM — calls setQuitMode('clear') in main.jsx's shutdown path.
+// Save is the DEFAULT, not opt-in: the ONLY exit that downgrades to 'clear' is the
+// explicit in-app [d] quit-no-save (QuitConfirm calls setQuitMode('clear') before
+// Ink exits). Signal exits (SIGHUP/SIGINT/SIGTERM) and crashes deliberately leave
+// the mode at 'save' so closing the terminal never silently drops a session's
+// sessionId — that was the "mc did not save my sessions" data loss.
 let quitMode = 'save';
 export function setQuitMode(mode) {
   quitMode = mode === 'save' ? 'save' : 'clear';
