@@ -2,6 +2,29 @@
 
 ## Current state
 
+**2026-07-29 — 4 secondary leak/battery findings FIXED (audit follow-up)**
+— A full leak/battery audit (beyond the two big ones below) surfaced 4 genuine
+long-uptime issues; all fixed this session. **#2 costStore gc dead code**: the 30s
+`gc()` interval in `App.jsx` had deps `[snapshot]`, so it was torn down/recreated
+every ≤3s and NEVER fired → `costStore.lastSeen` grew unbounded (persisted to
+`costs-week.json`). Now deps `[]` reading `snapshotRef`. **#3 per-frame session-store
+disk cycle**: `syncFromSnapshot` runs `loadSessions()` (read+parse) AND `persist()`
+(copy+write+rename) on EVERY call, and the effect fired at frame rate — the "writes
+debounced 60s" comment was false (`quitMode` defaults to `'save'` so every in-session
+sync is dirty). Fixed by THROTTLING the App.jsx effect to ~2s (leading+trailing via
+`snapshotRef`); shutdown's `persistOpenSet()` bypasses the throttle so the final save
+is intact. Left `sessionStore.js` untouched. **#1 subagentUsageTailer pure-poll**: no
+`fs.watch`, so an idle/never-fan-out slot ENOENT-`readdir`'d every 1.5s forever (~30
+FS-polls at 10 slots). Added a **dir-absent backoff** with a ~30s grace (prompt while
+active, ~1 check/12s once long-idle; appearance never missed). **#4 `settled` Set leak**
+(task 0350): now **reset on SID rotation** (drops the old session's filenames + re-primes
+the new dir at EOF), which kills the dominant growth path; the in-session count/age cap
+stays 0350 (double-count risk needs a before-fix fixture). Test seam: `startSubagentUsageTailer`
+gained `autoStart:false` + exposed `scan` for deterministic tests; `tests/subagentUsageTailer.test.mjs`
+gains rotation + backoff cases. GOTCHA: the tailer still has no `fs.watch` (deliberate —
+a promptness-oriented watch mirroring statusHookTailer is a possible follow-up, not needed
+for the idle-battery win).
+
 **2026-07-28 — SESSION-SAVE data loss FIXED (cmd+W wiped sessions) + battery fix committed**
 — User report: "mc did not save my sessions + massive battery drain again." Battery =
 the OOM #18 leak below (React dev mode); recurred only because the `NODE_ENV=production`
