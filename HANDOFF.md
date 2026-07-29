@@ -2,6 +2,90 @@
 
 ## Current state
 
+**2026-07-29 — CI flake #2 FIXED: shellLogging hardcoded `/bin/zsh`**
+— After the gh-hang fix, PR #25 CI surfaced a SECOND flake (different test each run =
+the build had multiple fragile tests). `tests/shell/shellLogging.test.mjs` forced
+`SHELL=/bin/zsh` then asserted `spawn.shell === '/bin/zsh'`, but `resolveShell()` only
+honours `$SHELL` if it's executable — on a runner without zsh it falls back to `/bin/bash`
+(zsh presence varies across GitHub ubuntu images → intermittent). Fix: assert against the
+ACTUALLY-resolved shell (`session.pty._bin`, the bin passed to spawn) — host-independent,
+still proves the logged shell path is real. Verified by running with `SHELL=/nonexistent`
+(falls back, still green). Proactive scan found no other real-binary/host-path deps in tests.
+
+**2026-07-29 — CI hang FIXED (PR #25 was red on a flaky `gh` test)**
+— PR #25's `tests` check failed intermittently: `tasks.test.mjs` → `listIssuesForCwd`
+shelled out to real `gh` and HUNG ~9 min (not an assertion failure). Cause: `execFile`'s
+`timeout` signals gh, but a grandchild inheriting the stdout pipe keeps the callback from
+ever firing, so the promise never resolves (and `--test-timeout` can't reap the spawned
+child). Also a real product bug — this runs from a TUI hotkey, so a hung gh would freeze
+the UI. **Fix** (`tui/lib/tasks.js`): rewrote around the child handle with a
+guaranteed-return backstop — on deadline, destroy our pipe ends (so a grandchild can't
+hold the event loop), SIGKILL the child, resolve `ok:false`. Added `bin`/`hardTimeoutMs`
+test seams + a regression test (600s-sleeping fake binary → resolves `<3s`). GOTCHA: this
+was the ONLY test that hit the network/real `gh` (scanned) — the flake source was singular.
+
+**2026-07-29 — 4 secondary leak/battery findings FIXED (audit follow-up)**
+— A full leak/battery audit (beyond the two big ones below) surfaced 4 genuine
+long-uptime issues; all fixed this session. **#2 costStore gc dead code**: the 30s
+`gc()` interval in `App.jsx` had deps `[snapshot]`, so it was torn down/recreated
+every ≤3s and NEVER fired → `costStore.lastSeen` grew unbounded (persisted to
+`costs-week.json`). Now deps `[]` reading `snapshotRef`. **#3 per-frame session-store
+disk cycle**: `syncFromSnapshot` runs `loadSessions()` (read+parse) AND `persist()`
+(copy+write+rename) on EVERY call, and the effect fired at frame rate — the "writes
+debounced 60s" comment was false (`quitMode` defaults to `'save'` so every in-session
+sync is dirty). Fixed by THROTTLING the App.jsx effect to ~2s (leading+trailing via
+`snapshotRef`); shutdown's `persistOpenSet()` bypasses the throttle so the final save
+is intact. Left `sessionStore.js` untouched. **#1 subagentUsageTailer pure-poll**: no
+`fs.watch`, so an idle/never-fan-out slot ENOENT-`readdir`'d every 1.5s forever (~30
+FS-polls at 10 slots). Added a **dir-absent backoff** with a ~30s grace (prompt while
+active, ~1 check/12s once long-idle; appearance never missed). **#4 `settled` Set leak**
+(task 0350): now **reset on SID rotation** (drops the old session's filenames + re-primes
+the new dir at EOF), which kills the dominant growth path; the in-session count/age cap
+stays 0350 (double-count risk needs a before-fix fixture). Test seam: `startSubagentUsageTailer`
+gained `autoStart:false` + exposed `scan` for deterministic tests; `tests/subagentUsageTailer.test.mjs`
+gains rotation + backoff cases. GOTCHA: the tailer still has no `fs.watch` (deliberate —
+a promptness-oriented watch mirroring statusHookTailer is a possible follow-up, not needed
+for the idle-battery win).
+
+**2026-07-28 — SESSION-SAVE data loss FIXED (cmd+W wiped sessions) + battery fix committed**
+— User report: "mc did not save my sessions + massive battery drain again." Battery =
+the OOM #18 leak below (React dev mode); recurred only because the `NODE_ENV=production`
+fix was still UNCOMMITTED and the running mc was the old build — now committed (bin/mc.mjs
++ perf.measures test). Restart mc to pick it up; a running process can't get NODE_ENV
+retroactively. **Session loss root cause**: `main.jsx` `shutdown()` forced
+`setQuitMode('clear')` on every signal exit, and cmd+W / window-close sends **SIGHUP** →
+the final persist dropped each live slot's `sessionId` + in/out/cost totals (confirmed in
+the user's `sessions.json`: slots downgraded to `fresh:true` stubs). **Fix**: signal exits
+(SIGHUP/SIGINT/SIGTERM) + crashes now leave the mode at the default `'save'`; the ONLY exit
+that clears is the explicit in-app **[d] quit-no-save** (QuitConfirm). claude rehydrates the
+conversation from its own on-disk transcript on `:resume-all`. Regression test
+`tests/sessionSave.sighup.test.mjs`. GOTCHA: the 5 already-lost sessions are still
+recoverable — their transcripts exist on disk and the sessionIds survive in `history`;
+restore them into the resume store if the user asks. To carry a CURRENTLY-open fleet across
+the restart onto the fixed build, quit the old build with **q→s (save & quit), not cmd+W**.
+
+**2026-07-28 — OOM #18 ROOT-CAUSED + FIXED; stabilization gate opened (same branch)**
+— User directive: no net-new features (0333 `:update` PARKED) until the product is
+provably solid — works as intended, installs easily, no memory leaks. Opened a
+3-track **stabilization gate** (tasks 0349–0352; see memory `stabilization-gate`).
+**0349**: root-caused the long-uptime OOM from the watchdog's 4.3GB heapsnapshot via
+a new streaming analyzer (`scripts/analyze-heapsnapshot.mjs` — no whole-file load).
+Dominant retainer = **3.3M `PerformanceMeasure` objects** + React profiler-track
+strings (`"Components ⚛"`, `"Changed Props"`, `"setState()"`). Cause: **React ran in
+DEV mode because `NODE_ENV` was unset** → ~7 unbounded `performance.measure()` entries
+per render, retained forever by perf_hooks → 2.5GB/31h → OOM. Proven: 400 Ink
+re-renders emit +2802 measures in dev, **0 in production**. **0352 FIX**: `bin/mc.mjs`
+now sets `process.env.NODE_ENV ??= 'production'` before the Ink import (boot stack
+confirms `react-reconciler.production.js` loads); regression test
+`tests/perf.measures.test.jsx` (prod → 0 measures + entry-wiring assert). The
+`subagentUsageTailer` `settled` Set was RULED OUT (not in retainers) — 0350 downgraded
+to a low-prio cleanup. Also re-validated the `accurate-session-status` plan (still
+sound; RC1/RC1b/RC2 all reproduce at `ptyAgent.mjs:919-945` — line refs drifted ~+68;
+plan doc updated). GOTCHAs: (1) the periodic `mc-heap-*.ndjson` logger only writes ONE
+boot-time line per process — useless as a growth trace; the watchdog is what caught
+this (follow-up: make it append over uptime). (2) Install still blocked: package not
+on npm (E404) — 0351 covers the one-time manual publish bootstrap.
+
 **2026-07-27 — energy fix, heap watchdog, model catalog refresh (same branch)**
 — **0346**: `subagentUsageTailer` now settles completed sub-agent files (stops re-stat'ing
 every file the subagents dir ever held, every poll — the idle-energy drain on long

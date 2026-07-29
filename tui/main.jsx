@@ -130,10 +130,15 @@ function persistOpenSet() {
 }
 
 const shutdown = () => {
-  // Signal-driven exits (Ctrl-C, terminal close, SIGTERM) are NOT a proper
-  // save — downgrade the final write to location-only so `:resume-all` reopens
-  // these repos fresh. Only the in-app [s] save & quit keeps the mode at 'save'.
-  setQuitMode('clear');
+  // Signal-driven exits (terminal close / cmd+W = SIGHUP, Ctrl-C, SIGTERM) are an
+  // IMPLICIT quit, not a request to throw work away. Leave the persist mode at its
+  // default ('save') so the final write keeps each live slot's FULL resumable
+  // record (sessionId + in/out/cost totals); claude rehydrates the conversation
+  // from its own on-disk transcript when `:resume-all` relaunches it. The ONLY
+  // exit that discards is the explicit in-app [d] quit-no-save, which sets
+  // 'clear' in QuitConfirm before Ink tears down. (Previously this handler forced
+  // 'clear' on every signal exit, so closing the terminal silently dropped every
+  // session's sessionId — the "mc did not save my sessions" data loss.)
   persistOpenSet();          // capture live set BEFORE killing
   try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
@@ -143,10 +148,10 @@ const shutdown = () => {
 };
 process.on('SIGINT',  shutdown);
 process.on('SIGTERM', shutdown);
-// SIGHUP = the controlling terminal was closed. Treat it like any other
-// non-save exit: persistOpenSet() runs with the default 'clear' quit mode, so
-// the resume store keeps only the open repo LOCATIONS (reopened fresh by
-// `:resume-all`) — the live conversations end with the killed children.
+// SIGHUP = the controlling terminal was closed (a cmd+W / window close is the
+// common source). persistOpenSet() runs with the default 'save' quit mode, so the
+// resume store keeps each live slot's FULL record — `:resume-all` rehydrates the
+// real conversations, not fresh stubs. Closing the terminal must not lose work.
 process.on('SIGHUP',  shutdown);
 
 // SIGTSTP (Ctrl+Z) / SIGCONT — a full-screen fleet controller must never be

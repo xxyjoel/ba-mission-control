@@ -328,19 +328,45 @@ export default function App({ fleet, auth: initialAuth }) {
     }
   }, [settings.maxSlots, fleet]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic GC of lastSeen entries for dead sessions.
+  // Periodic GC of lastSeen entries for dead sessions. Deps [] (NOT [snapshot]): keyed
+  // on snapshot this 30s interval was torn down and recreated every ≤3s (IDLE_TICK_MS),
+  // faster than its own period, so gc() never fired and costStore.lastSeen grew
+  // unbounded (one key per kill+relaunch, persisted to costs-week.json). A stable
+  // interval reads the latest agents via snapshotRef so the empty dep list stays correct.
   useEffect(() => {
-    const t = setInterval(() => { costStoreRef.current.gc(snapshot.agents); }, 30000);
+    const t = setInterval(() => { costStoreRef.current?.gc(snapshotRef.current.agents); }, 30000);
     return () => clearInterval(t);
-  }, [snapshot]);
+  }, []);
 
   // ── Session persistence (for resume) ───────────────────
-  // Mirror every snapshot into ~/.config/claude-mc/sessions.json so the
-  // user can resume yesterday's sessions tomorrow. The store debounces
-  // its own writes (only updates lastSeen every 60s).
+  // Mirror the snapshot into ~/.config/claude-mc/sessions.json so sessions can be
+  // resumed later. THROTTLED to ~2s: each syncFromSnapshot() does a readFileSync +
+  // JSON.parse AND — because quitMode defaults to 'save', every in-session sync is
+  // "dirty" — a persist() (copyFileSync + writeFileSync + renameSync). Keyed on
+  // snapshot (frame rate while active, every 3s idle) that was a full read+write
+  // disk cycle up to ~10×/s. Nothing needs sub-2s persistence (lastSeen only moves
+  // every 60s), and shutdown calls persistOpenSet() DIRECTLY (main.jsx), bypassing
+  // this throttle, so the final save at quit is never dropped. Leading + trailing:
+  // run immediately if >2s elapsed, else schedule one trailing flush of the latest
+  // snapshot (via snapshotRef) so we never persist a stale set.
+  const lastSyncRef = useRef(0);
+  const syncTimerRef = useRef(null);
   useEffect(() => {
-    syncFromSnapshot(snapshot.agents, { historyLimit: settings.sessionHistoryLimit ?? 20 });
+    const THROTTLE_MS = 2000;
+    const run = () => {
+      lastSyncRef.current = Date.now();
+      syncFromSnapshot(snapshotRef.current.agents, { historyLimit: settings.sessionHistoryLimit ?? 20 });
+    };
+    const since = Date.now() - lastSyncRef.current;
+    if (since >= THROTTLE_MS) {
+      run();
+    } else if (!syncTimerRef.current) {
+      syncTimerRef.current = setTimeout(() => { syncTimerRef.current = null; run(); }, THROTTLE_MS - since);
+    }
   }, [snapshot, settings.sessionHistoryLimit]);
+  // Clear the trailing timer on unmount only (not on every dep change — that would
+  // starve the trailing flush during a burst).
+  useEffect(() => () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); }, []);
 
   // ── Stuck-detection toast ─────────────────────────────
   // Toast exactly once when a slot enters the stuck state (stuckMin
