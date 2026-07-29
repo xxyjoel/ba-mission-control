@@ -7,5 +7,17 @@
 
 import { register } from 'tsx/esm/api';
 
+// Run React (via Ink) in PRODUCTION mode. With NODE_ENV unset, React 19 runs its
+// dev build, which emits ~7 unbounded `performance.measure()` User-Timing entries
+// per render; Node's perf_hooks timeline retains them forever (nothing calls
+// clearMeasures), so over a long uptime they accumulate to millions of
+// PerformanceMeasure objects → multi-GB heap → OOM (issue #18, root-caused
+// 2026-07-28 from a 4.3GB heapsnapshot: 3.3M such objects). Production React emits
+// zero and halves boot heap. Set BEFORE the dynamic import below that loads
+// React/Ink (static imports are hoisted, but React arrives via that import, so this
+// assignment lands first). Explicit `NODE_ENV=development` still overrides for local
+// debugging.
+process.env.NODE_ENV ??= 'production';
+
 register();
 await import('../tui/main.jsx');
