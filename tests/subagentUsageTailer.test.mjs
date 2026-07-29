@@ -144,3 +144,67 @@ test('settle: an actively-growing file is NOT wrongly settled', async () => {
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+// ── rotation reset + dir-absent backoff (leak/battery fixes) ───────────────────
+// Driven deterministically via the `scan` seam (autoStart:false) — no timing.
+
+test('rotation: sessionId change re-primes the new subagents dir at EOF and drops old-session state', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'mc-subusage-rot-'));
+  const sid1 = '0a1b2c3d-4e5f-6789-abcd-000000000001';
+  const sid2 = '0a1b2c3d-4e5f-6789-abcd-000000000002';
+  const dir1 = join(claudeProjectDir(cwd), sid1, 'subagents');
+  const dir2 = join(claudeProjectDir(cwd), sid2, 'subagents');
+  const agent = Object.assign(new EventEmitter(), makeAgent(), { cwd, sessionId: sid1, spark: [] });
+  const tailer = startSubagentUsageTailer({ agent, autoStart: false });
+  try {
+    mkdirSync(dir1, { recursive: true });
+    await tailer.scan(); // prime sid1 (empty)
+    writeFileSync(join(dir1, 'agent-s1.jsonl'), usageLine({ input_tokens: 100, output_tokens: 0 }));
+    await tailer.scan();
+    assert.equal(agent.tokensIn, 100, 'sid1 fan-out counted');
+
+    // Resume/rotate: sid2's dir already holds a HISTORICAL file whose spend is
+    // already in the persisted totals — it must be primed at EOF, not re-counted.
+    mkdirSync(dir2, { recursive: true });
+    writeFileSync(join(dir2, 'agent-s2old.jsonl'), usageLine({ input_tokens: 5000, output_tokens: 5000 }));
+    agent.sessionId = sid2;
+    await tailer.scan();
+    assert.equal(agent.tokensIn, 100, 'rotation re-primes sid2 at EOF — historical file not re-counted');
+
+    // New appends under sid2 ARE counted.
+    appendFileSync(join(dir2, 'agent-s2old.jsonl'), usageLine({ input_tokens: 7, output_tokens: 0 }));
+    await tailer.scan();
+    assert.equal(agent.tokensIn, 107, 'post-rotation appends counted');
+
+    // The old session's dir is no longer scanned — appends there are ignored, and
+    // its filenames no longer linger in `settled`/`offsets` (the leak).
+    appendFileSync(join(dir1, 'agent-s1.jsonl'), usageLine({ input_tokens: 999, output_tokens: 0 }));
+    await tailer.scan();
+    assert.equal(agent.tokensIn, 107, 'old-session dir not scanned after rotation');
+  } finally {
+    tailer.stop();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('backoff: a subagents dir that appears after a long absence is still detected (never permanently skipped)', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'mc-subusage-bk-'));
+  const sid = '0a1b2c3d-4e5f-6789-abcd-0000000000bb';
+  const dir = join(claudeProjectDir(cwd), sid, 'subagents');
+  const agent = Object.assign(new EventEmitter(), makeAgent(), { cwd, sessionId: sid, spark: [] });
+  const tailer = startSubagentUsageTailer({ agent, autoStart: false });
+  try {
+    // Long absence — well past the grace window, into the backed-off regime.
+    for (let i = 0; i < 40; i++) await tailer.scan();
+    assert.equal(agent.tokensIn, 0, 'nothing counted while the dir is absent');
+    // Dir finally appears with a fresh fan-out file (counted from byte 0).
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'agent-new.jsonl'), usageLine({ input_tokens: 42, output_tokens: 0 }));
+    let seen = false;
+    for (let i = 0; i < 40 && !seen; i++) { await tailer.scan(); seen = agent.tokensIn === 42; }
+    assert.equal(agent.tokensIn, 42, 'backoff re-checks and folds the newly-created dir (fresh fan-out from 0)');
+  } finally {
+    tailer.stop();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
