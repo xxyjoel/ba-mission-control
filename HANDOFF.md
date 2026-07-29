@@ -2,6 +2,18 @@
 
 ## Current state
 
+**2026-07-29 — CI hang FIXED (PR #25 was red on a flaky `gh` test)**
+— PR #25's `tests` check failed intermittently: `tasks.test.mjs` → `listIssuesForCwd`
+shelled out to real `gh` and HUNG ~9 min (not an assertion failure). Cause: `execFile`'s
+`timeout` signals gh, but a grandchild inheriting the stdout pipe keeps the callback from
+ever firing, so the promise never resolves (and `--test-timeout` can't reap the spawned
+child). Also a real product bug — this runs from a TUI hotkey, so a hung gh would freeze
+the UI. **Fix** (`tui/lib/tasks.js`): rewrote around the child handle with a
+guaranteed-return backstop — on deadline, destroy our pipe ends (so a grandchild can't
+hold the event loop), SIGKILL the child, resolve `ok:false`. Added `bin`/`hardTimeoutMs`
+test seams + a regression test (600s-sleeping fake binary → resolves `<3s`). GOTCHA: this
+was the ONLY test that hit the network/real `gh` (scanned) — the flake source was singular.
+
 **2026-07-29 — 4 secondary leak/battery findings FIXED (audit follow-up)**
 — A full leak/battery audit (beyond the two big ones below) surfaced 4 genuine
 long-uptime issues; all fixed this session. **#2 costStore gc dead code**: the 30s
