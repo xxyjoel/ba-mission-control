@@ -13,8 +13,35 @@ permissions:
   id-token: write   # npm provenance via GitHub OIDC (tokenless attestation)
 
 jobs:
+  # Gate the publish on the PUBLISHED ARTIFACT, not just the source tree. `npm test`
+  # exercises the working tree; verify-pack packs the tgz, installs it into a clean
+  # temp dir (--omit=dev, empty $HOME) and boots `MC_SMOKE=1 mc` — catching a broken
+  # `files:` manifest or a node-pty spawn-helper crash BEFORE it reaches npm. node-pty
+  # prebuilds are per-platform, so we prove macOS (where we ship from) AND linux, on
+  # both supported Node majors. The publish job `needs:` all four cells green.
+  verify:
+    name: verify tarball (${{ matrix.os }} · node ${{ matrix.node }})
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [20, 22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install + source tests
+        run: npm ci && npm test
+      - name: Verify the packed tarball (pack → install → boot + negative control)
+        run: npm run verify:pack
+
   publish:
     name: test + publish
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
