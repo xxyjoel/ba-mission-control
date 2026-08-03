@@ -88,6 +88,29 @@ function persist(store) {
   }
 }
 
+// Rolling retention for the historical cost buckets. Without a cap `weeks`/`days`
+// accrue one key forever (one/week, one/day) and are re-serialized on every
+// persist() — unbounded over the install lifetime (audit 2026-07-30, task 0354).
+// The window keeps enough recent history for any dashboard view while bounding
+// growth: ~1 year of weeks, ~3 months of days. Current week/day are always the
+// largest keys, so they survive the prune.
+export const WEEKS_KEEP = 53;
+export const DAYS_KEEP = 90;
+
+// Drop all but the most-recent `keep` keys from a bucket map. ISO-week
+// ("YYYY-Www") and UTC-day ("YYYY-MM-DD") keys sort lexicographically =
+// chronologically, so the tail of the sorted keys is the recent window. Returns
+// true if anything was removed. Safe: buckets are historical totals with no
+// re-read/double-count semantics (unlike subagent tailer offsets, task 0350).
+function pruneOldest(bucket, keep) {
+  const keys = Object.keys(bucket);
+  if (keys.length <= keep) return false;
+  keys.sort();
+  let changed = false;
+  for (const k of keys.slice(0, keys.length - keep)) { delete bucket[k]; changed = true; }
+  return changed;
+}
+
 // CostStore — singleton-ish. Constructed once and mutated via `update()`.
 export class CostStore {
   constructor() {
@@ -154,6 +177,11 @@ export class CostStore {
     for (const id of Object.keys(this.store.lastSeen)) {
       if (!liveIds.has(id)) { delete this.store.lastSeen[id]; changed = true; }
     }
+    // Bound the historical cost buckets (task 0354) — they otherwise grow one
+    // key per week/day forever. Current week/day are the largest keys, so the
+    // rolling-window prune never drops the live buckets.
+    if (pruneOldest(this.store.weeks, WEEKS_KEEP)) changed = true;
+    if (pruneOldest(this.store.days, DAYS_KEEP)) changed = true;
     if (changed) { persist(this.store); }
   }
 
