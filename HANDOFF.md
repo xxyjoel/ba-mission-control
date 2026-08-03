@@ -2,6 +2,30 @@
 
 ## Current state
 
+**2026-08-03 — PRE-PUBLISH VERIFY FRAMEWORK + launch-readiness dashboard**
+— Built the gap the release pipeline was missing: `npm test` tests the working
+tree, nothing tested the *tarball*. New `scripts/verify-pack.mjs` (`npm run
+verify:pack`) packs the real tgz → installs into a clean temp dir (empty `$HOME`,
+`--omit=dev`) → boots `MC_SMOKE=1 mc` (new headless self-check in
+`tui/selfCheck.mjs` + `bin/mc.mjs`: resolves the full import graph, real
+`pty.spawn`). Has an npx self-heal check AND a NEGATIVE CONTROL (self-heal off +
+broken spawn-helper MUST fail) — the verifier is proven non-hollow. `release.yml`
+now gates publish on a verify matrix (macOS+linux × node 20/22); `forge-ci.yml`
+runs one cell per push. All on branch `forge/stabilization/prepublish-verify-harness`
+(7 commits, NOT pushed). Fixed 3 scroll-fold test-staleness cases from the B2
+Help-scrollable change (`618c26f`): `Help.shell` (paging), 2 `reliability.recipes`
+Help asserts (new optional `rows` seam on Help.jsx · task 0358), and the
+`QuitConfirm` 10s timeout — which was a stale assertion, NOT a hang (task 0359).
+Created launch-readiness tasks 0358–0361 (0358/0359 done; 0360 README-npx +
+0361 first-CI-matrix blocked on 0351). Living dashboard: `docs/launch-readiness.html`
+→ artifact https://claude.ai/code/artifact/596b3cbb-35e6-4268-bcef-ee518166514c
+(update URL embedded in the file). VERDICT: NOT READY — 2 blockers remain: **0351
+npm publish** (needs maintainer creds) and the **accurate-session-status** track
+(22 tasks, not started). GOTCHA: node-pty 1.1.0 is N-API (one prebuild per
+platform, no bundled linux binary → CI-linux node-gyp-compiles; the matrix's node
+axis is about our code, not node-pty ABI). The pre-existing `tasks/done/*`
+deletions in the working tree predate this session — left untouched.
+
 **2026-07-29 — CI flake #2 FIXED: shellLogging hardcoded `/bin/zsh`**
 — After the gh-hang fix, PR #25 CI surfaced a SECOND flake (different test each run =
 the build had multiple fragile tests). `tests/shell/shellLogging.test.mjs` forced

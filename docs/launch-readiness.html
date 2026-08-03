@@ -270,8 +270,8 @@
     </div>
     <div class="gate pass">
       <span class="gate-name">Full test suite</span>
-      <span class="gate-detail"><b>Green — all 90 CI-path files pass.</b> Fixed the <code>Help.shell.test.jsx</code> scroll-fold staleness this session: the assertions now page through the scrollable Help window instead of greping only the first frame.
-        <span class="gate-next">2 real-terminal recipe tests remain red locally (CI-excluded): 2 stale Help asserts + one 10s QuitConfirm flake — tracked, non-blocking.</span></span>
+      <span class="gate-detail"><b>Green — CI-path (90 files) and full local (incl. recipes) both pass.</b> Fixed three scroll-fold test-staleness cases from the B2 Help scrollable-window change: <code>Help.shell</code> (paging), two <code>reliability.recipes</code> Help asserts (a <code>rows</code> render seam · 0358), and the <code>QuitConfirm</code> 10s-timeout — which turned out to be a stale assertion, not a product hang (0359).
+        <span class="gate-next">No known red tests remain.</span></span>
       <span class="pill pass">Ready</span>
     </div>
     <div class="gate pass">
@@ -307,6 +307,42 @@
     <div class="bug"><span class="id">0357</span><span class="txt">Zoom PtyPane scroll shows duplicated / misshapen text.</span></div>
     <div class="bug"><span class="id">0352</span><span class="txt">Duplicate health chip in the Zoom view.</span></div>
     <div class="bug"><span class="id">0350</span><span class="txt">Cap the subagent-tailer <code>settled</code> set (in-session growth).</span></div>
+  </div>
+
+  <h2>Tracked work — forge tasks</h2>
+  <div class="gates">
+    <div class="gate block">
+      <span class="gate-name">0351 · npm publish</span>
+      <span class="gate-detail">Bootstrap the first publish + verify clean-machine install. <b>Maintainer creds required.</b>
+        <span class="gate-next">One-time <code>npm login &amp;&amp; npm publish</code> from <code>v1.1.1</code>, then register the OIDC trusted publisher.</span></span>
+      <span class="pill block">Blocker · in progress</span>
+    </div>
+    <div class="gate block">
+      <span class="gate-name">accurate-session-status</span>
+      <span class="gate-detail">22-task track (0285–0305, 0338) — the <code>deriveStatus</code> rewrite. Not started.
+        <span class="gate-next">Begin 0285; this is the dominant quality gate.</span></span>
+      <span class="pill block">Blocker</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">0358 · stale Help recipe tests</span>
+      <span class="gate-detail">Scroll-fold staleness fixed via an optional <code>rows</code> render seam. Done this session.</span>
+      <span class="pill pass">Done</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">0359 · QuitConfirm 10s timeout</span>
+      <span class="gate-detail">Stale assertion (not a hang) — asserts on visible Help content now. 5/5 green. Done this session.</span>
+      <span class="pill pass">Done</span>
+    </div>
+    <div class="gate warn">
+      <span class="gate-name">0360 · README npm install</span>
+      <span class="gate-detail">Promote the <code>npx @bluearch/mission-control</code> one-liner + drop "coming soon". Blocked on 0351.</span>
+      <span class="pill warn">Blocked · dep 0351</span>
+    </div>
+    <div class="gate warn">
+      <span class="gate-name">0361 · first CI matrix run</span>
+      <span class="gate-detail">Verify all four verify cells go green end-to-end on the first tag (esp. the linux node-pty compile). Blocked on 0351.</span>
+      <span class="pill warn">Blocked · dep 0351</span>
+    </div>
   </div>
 
   <footer>
