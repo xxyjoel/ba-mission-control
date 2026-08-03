@@ -77,6 +77,18 @@ export function claudeProjectDir(cwd) {
 // (0188) — without that an idle slot sharing a cwd with an active sibling would
 // yank its card onto the sibling's transcript. Mirrors zoomSession's
 // mtime-snapshot heuristic. Returns a sid or null.
+// Pure: should the (expensive) rotation hunt run this poll? Once the pinned file
+// is dead AND a prior hunt found no replacement, we back off so a permanently-
+// idle session doesn't readdir + per-file-stat the whole (possibly 1600+ file)
+// project dir every 1.5s poll — the dominant idle CPU/disk drain (audit
+// 2026-07-30). `missTicks` = polls since we started missing; hunt on 0, then
+// every `backoff`-th poll (so a late rotation is still caught, just less
+// promptly). backoff<=1 disables the backoff (always hunt). Exported for tests.
+export function shouldHuntRotation(missTicks, backoff) {
+  if (!(backoff > 1)) return true;
+  return missTicks % backoff === 0;
+}
+
 export async function findRotatedSession(cwd, currentSid, minMtime = 0, excludeSids = []) {
   let entries;
   try { entries = await fsp.readdir(claudeProjectDir(cwd)); } catch { return null; }
@@ -132,6 +144,10 @@ export function startSessionTailer({
   // rotated transcript. Keeps the (cheap) readdir off the hot path for active
   // sessions; injectable so the rotation path is testable without real waits.
   rotateAfterFrozenPolls = 3,
+  // Once frozen and a rotation hunt has found nothing, only re-hunt every
+  // Nth poll instead of every poll (audit 2026-07-30 idle-drain fix). Injectable
+  // so the backoff cadence is testable; <=1 disables it (hunt every poll).
+  repointBackoff = 8,
   // 0188: a getter returning the sessionIds owned by OTHER live slots, so a
   // rotation hunt never re-points onto a sibling slot's transcript. A function
   // (not a snapshot) so it reflects re-points that happen after attach. Default
@@ -156,6 +172,7 @@ export function startSessionTailer({
   // polls; frozenPolls counts consecutive no-growth polls.
   let lastSize = 0;
   let frozenPolls = 0;
+  let repointMissTicks = 0;       // polls since a rotation hunt last found nothing (drives backoff)
 
   // No status decay timer. jsonlConnector.parseEvent is canonical
   // for status transitions — stop_reason='end_turn' on the final
@@ -305,8 +322,12 @@ export function startSessionTailer({
   async function maybeRepoint() {
     let size = -1, mtimeMs = 0;
     try { const st = await fsp.stat(path); size = st.size; mtimeMs = st.mtimeMs; } catch {}
-    if (size > lastSize) { lastSize = size; frozenPolls = 0; return; }
+    if (size > lastSize) { lastSize = size; frozenPolls = 0; repointMissTicks = 0; return; }
     if (++frozenPolls < rotateAfterFrozenPolls) return;
+    // Frozen: only run the expensive hunt on the backoff cadence (skips still
+    // increment the miss counter). Our own file's growth is detected by the cheap
+    // stat above every poll, so active/revived slots always reset promptly.
+    if (!shouldHuntRotation(repointMissTicks, repointBackoff)) { repointMissTicks++; return; }
     // Follow rotations FORWARD only: the replacement must be newer than the
     // (dead) file we're on — otherwise two files both newer than spawnedAt
     // would flip-flop the tailer back and forth every poll.
@@ -314,14 +335,14 @@ export function startSessionTailer({
     let excl = [];
     try { excl = claimedSids() || []; } catch {}
     const sid = await findRotatedSession(agent.cwd, agent.sessionId, floor, excl);
-    if (!sid) return;
+    if (!sid) { repointMissTicks++; return; } // no replacement yet — back off the next polls
     try { agent.appendTail?.({ kind: 'sys', text: `tailer: session rotated ${String(agent.sessionId).slice(0, 8)} → ${sid.slice(0, 8)}` }); } catch {}
     agent.sessionId = sid;
     let nextPath;
     try { nextPath = claudeSessionPath({ cwd: agent.cwd, sessionId: sid }); } catch { return; }
     path = nextPath;
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
-    offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0;
+    offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0;
     const primedTo = await primeStatusFromDisk();
     offset = primedTo != null ? primedTo : 0;
     attachWatcher();
