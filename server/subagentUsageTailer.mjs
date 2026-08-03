@@ -209,5 +209,10 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
     },
     // Exposed for tests: run one scan pass synchronously-awaitable.
     scan,
+    // Exposed for the heap probe (heapProbe.fleetCounts): `settled` grows one
+    // entry per completed sub-agent file and is only bounded by SID rotation —
+    // an in-session hard cap is deferred (task 0350). Surfacing its size lets the
+    // OOM watchdog NDJSON confirm whether it ever grows large in practice.
+    settledCount: () => settled.size,
   };
 }

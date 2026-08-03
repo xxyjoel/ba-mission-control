@@ -31,7 +31,7 @@ function ensureDir() {
 // Sum a per-agent numeric probe across the live fleet. Every access is wrapped
 // so a shape change (or a half-torn-down agent) can never throw into the timer.
 export function fleetCounts(fleet) {
-  let agents = 0, termLines = 0, pendingSub = 0, usageByMsg = 0, tail = 0;
+  let agents = 0, termLines = 0, pendingSub = 0, usageByMsg = 0, tail = 0, settledSub = 0;
   try {
     for (const a of fleet?.agents || []) {
       if (!a) continue;
@@ -40,9 +40,12 @@ export function fleetCounts(fleet) {
       try { pendingSub += a.pendingSubagents?.size || 0; } catch {}
       try { usageByMsg += a._usageByMsg?.size || 0; } catch {}
       try { tail       += a.tail?.length || 0; } catch {}
+      // subagentUsageTailer `settled` Set — still unbounded within a session
+      // (hard cap deferred to 0350); track it so the watchdog can catch growth.
+      try { settledSub += a.usageTailer?.settledCount?.() || 0; } catch {}
     }
   } catch {}
-  return { agents, termLines, pendingSub, usageByMsg, tail };
+  return { agents, termLines, pendingSub, usageByMsg, tail, settledSub };
 }
 
 // Write a full v8 heap snapshot to the state dir. Returns the path (or null on
