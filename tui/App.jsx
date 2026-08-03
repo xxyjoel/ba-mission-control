@@ -54,6 +54,7 @@ import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPath
 import { isPluginEnabled } from './lib/plugins.js';
 import { listIssuesForCwd } from './lib/tasks.js';
 import { fmtClock, fmtDuration, fmtMoney } from './lib/format.js';
+import { resolveKillTarget } from './lib/killTarget.js';
 
 // Permission modes claude CLI accepts. Source: `claude --help`.
 //   default              — prompt on every potentially-mutating tool
@@ -106,7 +107,7 @@ export default function App({ fleet, auth: initialAuth }) {
   const [zoomedId, setZoomedId] = useState(null);
   const [repos, setRepos] = useState([]);
   const [now, setNow] = useState(Date.now());
-  const [aggSpark, setAggSpark] = useState(() => Array(22).fill(1));
+  const [aggSpark, setAggSpark] = useState(() => Array(22).fill(0)); // 0 = idle (blank spark), not fill(1) which pinned a full block (M2)
 
   // Force re-render bumper, used by SIGWINCH listener so cardW recomputes
   // when the user resizes the terminal.
@@ -196,12 +197,15 @@ export default function App({ fleet, auth: initialAuth }) {
       setSnapshot(fresh);
       // Read `fresh` directly (snapshot isn't in our deps — listing it would
       // tear down + rebuild this timer on every change; audit #57).
-      const live = fresh.agents.filter(a => a.status !== 'empty');
-      const rate = live.reduce((s, a) => {
-        const sp = a.spark || [];
-        return s + (sp[sp.length - 1] || 0);
-      }, 0);
-      setAggSpark(prev => [...prev.slice(1), Math.max(1, rate)]);
+      // Aggregate throughput sample = sum of each WORKING agent's true last-sample
+      // rate (a.lastTokRate), matching fleetTpm. NOT the per-card spark array's
+      // last value — that carries a 0.5 idle floor (spark.mjs, intentional
+      // decoration) which, summed and normalized, pinned the aggregate spark at a
+      // solid full-height block even for an idle fleet (M2). Real 0 at idle lets
+      // sparkLine's all-zero guard render nothing.
+      const rate = fresh.agents.reduce((s, a) =>
+        a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0);
+      setAggSpark(prev => [...prev.slice(1), Math.max(0, rate)]);
       const active = fresh.agents.some(a => a.status === 'working' || a.status === 'waiting');
       timer = setTimeout(tick, active ? activeMs : IDLE_TICK_MS);
     };
@@ -847,14 +851,17 @@ export default function App({ fleet, auth: initialAuth }) {
           return null;
         }
       }
-      case 'kill': {
-        // `:kill!` (bang form) skips the confirm prompt — typing 6 chars
-        // is already an explicit-enough signal. `:kill` arms like K.
-        const force = cmd === 'kill' && arg.startsWith('!');
-        const argClean = force ? arg.slice(1).trim() : arg;
-        const n = parseInt(argClean, 10);
-        const target = (n >= 1 && n <= 10) ? agents.find(a => a.slot === n) : focusedAgent;
-        if (!target || target.status === 'empty') { pushToast(`no live session in slot ${n || focusedSlot}`, 'warn'); return null; }
+      case 'kill':
+      case 'kill!': {
+        // Target resolution is a pure, tested helper (tui/lib/killTarget.js).
+        // It (B1) REJECTS an out-of-range/typo'd slot instead of silently
+        // retargeting the focused session — previously `:kill !99` instantly
+        // killed the focused session — and (M3) recognizes the `:kill!` verb
+        // form (advertised by the arm-toast below) as a force-kill.
+        const { force, slot, error } = resolveKillTarget(cmd, arg, { focusedSlot, slots: snapshot.slots || 10 });
+        if (error) { pushToast(error, 'warn'); return null; }
+        const target = agents.find(a => a.slot === slot);
+        if (!target || target.status === 'empty') { pushToast(`no live session in slot ${slot ?? focusedSlot}`, 'warn'); return null; }
         const pending = pendingKillRef.current;
         if (force || (pending && pending.id === target.id)) {
           if (pending) { clearTimeout(pending.timer); pendingKillRef.current = null; }
