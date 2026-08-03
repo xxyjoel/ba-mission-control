@@ -112,9 +112,12 @@ function buildLines(view) {
   return lines;
 }
 
-export default function Help({ onClose, theme, width = 64, view = 'main' }) {
+export default function Help({ onClose, theme, width = 64, view = 'main', rows }) {
   const { stdout } = useStdout();
-  const termRows = stdout?.rows || 24;
+  // `rows` is an optional render seam: omitted, we use the live terminal height;
+  // a caller (e.g. a test at a fixed-size harness, or an embedder) can force a
+  // height so the keymap renders un-windowed. Behavior is unchanged when omitted.
+  const termRows = rows ?? (stdout?.rows || 24);
   const lines = buildLines(view);
   // Body capacity, leaving room for: this modal's border+padding, its header +
   // footer, App's wrapper padding, and the FeedbackStrip + StatusBar below it.

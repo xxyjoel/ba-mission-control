@@ -86,10 +86,13 @@ test('recipe: help — view="main" highlights NAVIGATION as current view', async
   });
 });
 
+// rows:100 renders the keymap un-windowed (the Help modal is a scrollable window
+// since 618c26f; at the harness's default 24-row terminal these sections scroll
+// below the fold). See task 0358.
 test('recipe: help — view="zoom" highlights ZOOM and SLASH sections', async () => {
   await runRecipe({
     component: Help,
-    props: { onClose: noop, theme, width: 100, view: 'zoom' },
+    props: { onClose: noop, theme, width: 100, rows: 100, view: 'zoom' },
     steps: [
       { expectFrame: [/▶ ZOOM.*CURRENT VIEW/, /▶ SLASH COMMANDS.*CURRENT VIEW/] },
     ],
@@ -99,7 +102,7 @@ test('recipe: help — view="zoom" highlights ZOOM and SLASH sections', async ()
 test('recipe: help documents the new kill-twice-to-confirm behavior', async () => {
   await runRecipe({
     component: Help,
-    props: { onClose: noop, theme, width: 100, view: 'main' },
+    props: { onClose: noop, theme, width: 100, rows: 100, view: 'main' },
     steps: [
       { expectFrame: [/press K twice/, /3s arm/] },
     ],
