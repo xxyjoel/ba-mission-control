@@ -34,7 +34,7 @@ import { cdToCwd } from '../server/shellSession.mjs';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS } from './lib/models.js';
-import { probeAll, saveModelCache, applyCacheToCatalog } from './lib/modelProbe.js';
+import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
@@ -568,8 +568,10 @@ export default function App({ fleet, auth: initialAuth }) {
         if (maybeDefault === 'refresh') {
           pushToast('probing models (opus · sonnet · haiku) — ~$0.10/ea, ~5s…', 'info');
           (async () => {
-            const results = await probeAll();
-            const cache = saveModelCache(results);
+            const [results, cliVersion] = await Promise.all([probeAll(), getClaudeVersion()]);
+            // Stamp the CLI version so boot's autoProbeOnVersionChange knows
+            // this claude has already been discovered (no double-billing).
+            const cache = saveModelCache(results, Date.now(), cliVersion);
             const { updated, added } = applyCacheToCatalog(MODELS, cache);
             const failed = results.filter(r => r.error);
             const bits = [];

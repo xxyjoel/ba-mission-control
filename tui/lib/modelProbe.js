@@ -72,11 +72,15 @@ export function parseModelUsage(resultOrJson) {
 // Never throws — refresh aggregates and reports partial results.
 export async function probeAlias(alias, { claudeBin = CLAUDE_BIN, timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   try {
-    const { stdout } = await execFileP(
+    const pending = execFileP(
       claudeBin,
       ['-p', '--model', alias, '--output-format', 'json', PROBE_PROMPT],
       { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
     );
+    // Probes are opportunistic — never let an in-flight one hold the event
+    // loop open and block mc's exit (surfaced as pty-recipe quit timeouts).
+    pending.child?.unref?.();
+    const { stdout } = await pending;
     const parsed = parseModelUsage(stdout);
     if (!parsed) return { alias, error: 'could not parse modelUsage from probe output' };
     return { alias, ...parsed };
@@ -106,13 +110,15 @@ export function loadModelCache() {
 
 // saveModelCache — persist successful probe results keyed by alias.
 // `now` is injected so tests stay deterministic; defaults to wall clock.
-export function saveModelCache(results, now = Date.now()) {
+// `claudeVersion` stamps which CLI produced these resolutions, so boot can
+// detect "claude updated since last probe" and re-discover automatically.
+export function saveModelCache(results, now = Date.now(), claudeVersion = null) {
   const models = {};
   for (const r of results || []) {
     if (!r || r.error || !r.cliModel) continue;
     models[r.alias] = { cliModel: r.cliModel, contextWindow: r.contextWindow, maxOut: r.maxOut };
   }
-  const payload = { fetchedAt: now, models };
+  const payload = { fetchedAt: now, ...(claudeVersion ? { claudeVersion } : {}), models };
   try {
     mkdirSync(dirname(CACHE_FILE), { recursive: true });
     writeFileSync(TMP_FILE, JSON.stringify(payload, null, 2));
@@ -124,6 +130,54 @@ export function saveModelCache(results, now = Date.now()) {
 export function isCacheStale(cache, ttlMs = MODEL_CACHE_TTL_MS, now = Date.now()) {
   if (!cache || !cache.fetchedAt) return true;
   return (now - cache.fetchedAt) > ttlMs;
+}
+
+// getClaudeVersion — `claude --version`, free and fast (~100ms, no API
+// call). Returns the semver string or null; never throws.
+export async function getClaudeVersion({ claudeBin = CLAUDE_BIN, timeoutMs = 10_000 } = {}) {
+  try {
+    const pending = execFileP(claudeBin, ['--version'], { timeout: timeoutMs });
+    pending.child?.unref?.(); // see probeAlias — never block mc's exit
+    const { stdout } = await pending;
+    const m = String(stdout).match(/\d+\.\d+\.\d+/);
+    return m ? m[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+// autoProbeOnVersionChange — the "claude updated → discover its models"
+// loop (task 0368, closes TODO(model-autodetect)). Compares the CLI's
+// current version to the one stamped in the cache; on mismatch (or an
+// unstamped legacy cache) runs the same probe → save → overlay path as
+// `:model refresh`. Each probe is a real billed turn, so this fires ONLY
+// when the version actually changed — steady-state boots cost nothing.
+// Fire-and-forget: resolves { probed, version, updated, added } for
+// logging, and never throws.
+export async function autoProbeOnVersionChange(models, {
+  claudeBin = CLAUDE_BIN,
+  loadCache = loadModelCache,
+  saveCache = saveModelCache,
+  probe = probeAll,
+  getVersion = getClaudeVersion,
+  now = () => Date.now(),
+} = {}) {
+  try {
+    const version = await getVersion({ claudeBin });
+    if (!version) return { probed: false, version: null };
+    const cache = loadCache();
+    if (cache && cache.claudeVersion === version) return { probed: false, version };
+    const results = await probe(KNOWN_ALIASES, { claudeBin });
+    // Don't stamp the version unless at least one alias resolved —
+    // otherwise a transient failure (offline, signed out) would silence
+    // discovery until the NEXT claude update.
+    const ok = results.some((r) => r && !r.error && r.cliModel);
+    const saved = saveCache(results, now(), ok ? version : null);
+    const applied = applyCacheToCatalog(models, saved);
+    return { probed: true, version, ...applied };
+  } catch {
+    return { probed: false, version: null };
+  }
 }
 
 // deriveFriendlyId — best-effort 'claude-opus-4-8' → 'opus-4.8'. Only used

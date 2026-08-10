@@ -19,6 +19,7 @@ process.env.MC_CONFIG_DIR = SANDBOX;
 const {
   parseModelUsage, deriveFriendlyId, applyCacheToCatalog,
   saveModelCache, loadModelCache, isCacheStale,
+  autoProbeOnVersionChange,
 } = await import('../tui/lib/modelProbe.js');
 
 // Trimmed real output of: claude -p --model opus --output-format json
@@ -101,6 +102,66 @@ test('saveModelCache / loadModelCache: round-trips successful probes, skips erro
   const loaded = loadModelCache();
   assert.equal(loaded.fetchedAt, 12345);
   assert.equal(loaded.models.opus.cliModel, 'claude-opus-4-8');
+});
+
+test('saveModelCache: stamps the claude CLI version when provided', () => {
+  const results = [{ alias: 'opus', cliModel: 'claude-opus-5', contextWindow: 1000000, maxOut: 128000 }];
+  const payload = saveModelCache(results, 123, '2.1.220');
+  assert.equal(payload.claudeVersion, '2.1.220');
+  assert.equal(loadModelCache().claudeVersion, '2.1.220');
+  // Unstamped save (version fetch failed) omits the field entirely.
+  assert.equal('claudeVersion' in saveModelCache(results, 124, null), false);
+});
+
+// autoProbeOnVersionChange — every collaborator injected; no processes spawn.
+const FAKE_PROBE_RESULTS = [
+  { alias: 'opus', cliModel: 'claude-opus-5', contextWindow: 1000000, maxOut: 128000 },
+];
+function fakes({ version = '2.1.220', cache = null } = {}) {
+  const calls = { probed: 0, saved: [] };
+  return {
+    calls,
+    opts: {
+      getVersion: async () => version,
+      loadCache: () => cache,
+      probe: async () => { calls.probed++; return FAKE_PROBE_RESULTS; },
+      saveCache: (results, now, v) => { calls.saved.push(v); return { fetchedAt: now, claudeVersion: v, models: { opus: FAKE_PROBE_RESULTS[0] } }; },
+      now: () => 1,
+    },
+  };
+}
+
+test('autoProbeOnVersionChange: same stamped version → no probe (no billing)', async () => {
+  const { calls, opts } = fakes({ cache: { fetchedAt: 1, claudeVersion: '2.1.220', models: {} } });
+  const r = await autoProbeOnVersionChange({}, opts);
+  assert.equal(r.probed, false);
+  assert.equal(r.version, '2.1.220');
+  assert.equal(calls.probed, 0);
+});
+
+test('autoProbeOnVersionChange: version changed → probes, saves stamp, merges discovery', async () => {
+  const models = { 'opus-4.8': { label: 'OPUS 4.8', cliModel: 'claude-opus-4-8', kind: 'opus', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5, costPerMTokOut: 25, costPerMTokCacheCreation: 6.25, costPerMTokCacheRead: 0.5 } };
+  const { calls, opts } = fakes({ cache: { fetchedAt: 1, claudeVersion: '2.1.219', models: {} } });
+  const r = await autoProbeOnVersionChange(models, opts);
+  assert.equal(r.probed, true);
+  assert.deepEqual(r.added, ['opus-5']);
+  assert.deepEqual(calls.saved, ['2.1.220']);
+  assert.ok(models['opus-5'], 'discovered model merged into the catalog');
+  assert.equal(models['opus-5'].estimatedPricing, true);
+});
+
+test('autoProbeOnVersionChange: unstamped legacy cache → probes once to stamp it', async () => {
+  const { calls, opts } = fakes({ cache: { fetchedAt: 1, models: {} } });
+  const r = await autoProbeOnVersionChange({}, opts);
+  assert.equal(r.probed, true);
+  assert.equal(calls.probed, 1);
+});
+
+test('autoProbeOnVersionChange: version unavailable → does nothing', async () => {
+  const { calls, opts } = fakes({ version: null });
+  const r = await autoProbeOnVersionChange({}, opts);
+  assert.equal(r.probed, false);
+  assert.equal(calls.probed, 0);
 });
 
 test('isCacheStale: honors TTL and missing fetchedAt', () => {
