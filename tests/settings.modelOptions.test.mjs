@@ -36,6 +36,13 @@ test('options() reflects a model discovered after module load', () => {
   }
 });
 
+test('boot-time model discovery has a user opt-out, default on', () => {
+  assert.equal(SETTINGS_DEFAULTS.syncModelsOnBoot, true);
+  const item = SETTINGS_SCHEMA.flatMap((g) => g.items).find((i) => i.key === 'syncModelsOnBoot');
+  assert.ok(item, 'syncModelsOnBoot toggle exists in the Settings schema');
+  assert.equal(item.kind, 'toggle');
+});
+
 test('the shipped defaultModel is a valid catalog id', () => {
   assert.ok(
     MODELS[SETTINGS_DEFAULTS.defaultModel],
