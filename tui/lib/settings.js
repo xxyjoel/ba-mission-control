@@ -77,6 +77,11 @@ export const SETTINGS_DEFAULTS = {
   // Newest statically-priced entry. Discovered models (e.g. opus-5) can be
   // made the default with `:model default <id>` once the probe has run.
   defaultModel: 'opus-4.8',
+  // Boot-time model discovery from the Models API (free GET /v1/models when
+  // an env credential exists) + the claude-version-change alias probe. Off →
+  // discovery only via manual `:model refresh` (security review 2026-08-10:
+  // boot egress must have an opt-out).
+  syncModelsOnBoot: true,
   defaultPermission: 'acceptEdits', // default | acceptEdits | bypassPermissions | plan
   gitPollSec: 6,
   // Repo scan locations for the New Session picker. Empty = use the
@@ -112,6 +117,7 @@ export const SETTINGS_SCHEMA = [
     { key: 'autoResumeOnStart', label: 'Auto-resume sessions on startup', kind: 'toggle', desc: 'On boot, restore every saved session whose slot is empty. Off → just shows a `:resume-all` hint instead.' },
     { key: 'sessionHistoryLimit', label: 'Session history limit', kind: 'number', min: 0, max: 200, step: 5, unit: ' sessions', desc: 'View-only history for `:history`. NOT used by :resume-all — that only restores the last-active state.' },
     { key: 'defaultModel', label: 'Default model',        kind: 'cycle',  options: modelIds, desc: 'New-session default. Lists the live catalog incl. probe-discovered models. `:model refresh` re-probes the source.' },
+    { key: 'syncModelsOnBoot', label: 'Discover models on startup', kind: 'toggle', desc: 'On boot: free Models-API catalog sync (needs ANTHROPIC_API_KEY/AUTH_TOKEN in env) + alias re-probe when the claude CLI version changed (billed, rare). Off → `:model refresh` only.' },
     { key: 'defaultPermission', label: 'Default permission mode', kind: 'cycle', options: ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'], desc: 'Default for new sessions only — change a live session via :perm <mode>. bypassPermissions removes all guardrails.' },
   ]},
   { id: 'layout', title: 'LAYOUT', items: [
