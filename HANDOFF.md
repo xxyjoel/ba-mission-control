@@ -22,7 +22,12 @@ mc's catalog every boot when an env API credential exists — add / update-limit
 mark-retired (never delete; degenerate lists can't mass-retire). No env
 credential (claude-CLI-only login, e.g. this machine) → clean skip; the alias
 probe carries discovery there, and a new model FAMILY on that path needs its
-alias added to `KNOWN_ALIASES` (one string).
+alias added to `KNOWN_ALIASES` (one string). Post-merge forge security review:
+PASS (0 critical/high); both MEDIUMs fixed same-day as 0370 — `syncModelsOnBoot`
+opt-out toggle, https-only base + redirect:'error' on the API fetch, job-level
+`contents: read` on the release verify matrix. OUTSTANDING (flagged by
+reviewer, unclaimed): `tasks/.events/security-queue` holds 52 commit-mode SHAs
+predating branch-mode review — needs a decision on draining.
 Also 0366: zoom's update-banner suppressor blanked the user's OWN typed
 composer row ("an update…has been made. a new model is available" matched
 `update…available` across the period) — cue-word gap now stops at sentence
