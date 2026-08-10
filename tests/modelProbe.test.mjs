@@ -19,7 +19,7 @@ process.env.MC_CONFIG_DIR = SANDBOX;
 const {
   parseModelUsage, deriveFriendlyId, applyCacheToCatalog,
   saveModelCache, loadModelCache, isCacheStale,
-  autoProbeOnVersionChange,
+  autoProbeOnVersionChange, listApiModels, syncCatalogFromApi,
 } = await import('../tui/lib/modelProbe.js');
 
 // Trimmed real output of: claude -p --model opus --output-format json
@@ -162,6 +162,98 @@ test('autoProbeOnVersionChange: version unavailable → does nothing', async () 
   const r = await autoProbeOnVersionChange({}, opts);
   assert.equal(r.probed, false);
   assert.equal(calls.probed, 0);
+});
+
+// ── Models API sync (0369) ──────────────────────────────────────────
+
+function freshCatalog() {
+  return {
+    'opus-4.8':  { label: 'OPUS 4.8',  cliModel: 'claude-opus-4-8',           kind: 'opus',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5, costPerMTokOut: 25, costPerMTokCacheCreation: 6.25, costPerMTokCacheRead: 0.5 },
+    'haiku-4.5': { label: 'HAIKU 4.5', cliModel: 'claude-haiku-4-5-20251001', kind: 'haiku', maxCtx: 200000,  maxOut: 64000,  costPerMTokIn: 1, costPerMTokOut: 5,  costPerMTokCacheCreation: 1.25, costPerMTokCacheRead: 0.1 },
+  };
+}
+
+test('listApiModels: no credential → ok:false, no fetch attempted', async () => {
+  let fetched = 0;
+  const r = await listApiModels({ apiKey: undefined, authToken: undefined, fetchImpl: async () => { fetched++; } });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /credential/);
+  assert.equal(fetched, 0);
+});
+
+test('listApiModels: paginates with after_id until has_more is false', async () => {
+  const pages = [
+    { data: [{ id: 'claude-opus-5' }], has_more: true, last_id: 'claude-opus-5' },
+    { data: [{ id: 'claude-sonnet-5' }], has_more: false, last_id: 'claude-sonnet-5' },
+  ];
+  const urls = [];
+  const r = await listApiModels({
+    apiKey: 'k',
+    fetchImpl: async (url) => { urls.push(url); return { ok: true, json: async () => pages.shift() }; },
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.models.map((m) => m.id), ['claude-opus-5', 'claude-sonnet-5']);
+  assert.match(urls[1], /after_id=claude-opus-5/);
+});
+
+test('listApiModels: HTTP error → ok:false with status', async () => {
+  const r = await listApiModels({ apiKey: 'k', fetchImpl: async () => ({ ok: false, status: 401 }) });
+  assert.deepEqual(r, { ok: false, reason: 'models API HTTP 401' });
+});
+
+test('syncCatalogFromApi: adds unknown API models with sibling pricing + real limits', () => {
+  const models = freshCatalog();
+  const { added } = syncCatalogFromApi(models, [
+    { id: 'claude-opus-4-8', max_input_tokens: 1000000, max_tokens: 128000 },
+    { id: 'claude-haiku-4-5', max_input_tokens: 200000, max_tokens: 64000 },
+    { id: 'claude-opus-5', max_input_tokens: 1000000, max_tokens: 128000 },
+  ]);
+  assert.deepEqual(added, ['opus-5']);
+  assert.equal(models['opus-5'].cliModel, 'claude-opus-5');
+  assert.equal(models['opus-5'].maxCtx, 1000000);
+  assert.equal(models['opus-5'].costPerMTokIn, 5); // inherited from opus-4.8
+  assert.equal(models['opus-5'].estimatedPricing, true);
+});
+
+test('syncCatalogFromApi: updates known limits; dated-vs-bare ids collapse, no dup', () => {
+  const models = freshCatalog();
+  const { added, updated } = syncCatalogFromApi(models, [
+    { id: 'claude-opus-4-8', max_input_tokens: 1000000, max_tokens: 128000 },
+    // API lists the bare alias while mc pins the dated snapshot — same model.
+    { id: 'claude-haiku-4-5', max_input_tokens: 200000, max_tokens: 128000 },
+  ]);
+  assert.deepEqual(added, []);
+  assert.ok(updated.includes('haiku-4.5'));
+  assert.equal(models['haiku-4.5'].maxOut, 128000);
+  assert.equal(Object.keys(models).length, 2, 'no duplicate haiku entry');
+});
+
+test('syncCatalogFromApi: catalog model absent from the API → retired (kept, not deleted)', () => {
+  const models = freshCatalog();
+  const { retired } = syncCatalogFromApi(models, [
+    { id: 'claude-haiku-4-5', max_input_tokens: 200000, max_tokens: 64000 },
+  ]);
+  assert.deepEqual(retired, ['opus-4.8']);
+  assert.equal(models['opus-4.8'].retired, true);
+  assert.equal(models['opus-4.8'].costPerMTokIn, 5, 'pricing kept for cost history');
+  // …and a later API list containing it again un-retires it.
+  const again = syncCatalogFromApi(models, [
+    { id: 'claude-opus-4-8', max_input_tokens: 1000000, max_tokens: 128000 },
+    { id: 'claude-haiku-4-5', max_input_tokens: 200000, max_tokens: 64000 },
+  ]);
+  assert.ok(again.updated.includes('opus-4.8'));
+  assert.equal(models['opus-4.8'].retired, undefined);
+});
+
+test('syncCatalogFromApi: skips legacy claude-3-* naming and empty lists', () => {
+  const models = freshCatalog();
+  const r = syncCatalogFromApi(models, [{ id: 'claude-3-haiku-20240307' }]);
+  assert.deepEqual(r.added, []);
+  assert.ok(!models['3-haiku']);
+  // Empty / failed list must be a no-op — never mass-retire the catalog.
+  const r2 = syncCatalogFromApi(models, []);
+  assert.deepEqual(r2, { added: [], updated: [], retired: [] });
+  assert.equal(models['opus-4.8'].retired, undefined);
 });
 
 test('isCacheStale: honors TTL and missing fetchedAt', () => {
