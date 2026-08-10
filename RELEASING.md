@@ -28,12 +28,40 @@ Update `CHANGELOG.md` in the **same commit** as the bump (add the dated section
 before running, or `--amend` after). Then the pushed `vX.Y.Z` tag triggers
 `.github/workflows/release.yml`:
 
-1. `npm ci && npm test` on the exact tagged tree,
+1. **verify matrix** (macOS + linux × Node 20 + 22) — on each cell: `npm ci &&
+   npm test`, then `npm run verify:pack`. The publish job `needs:` all four cells
+   green (see the tarball gate below),
 2. asserts the tag matches `package.json`,
 3. `npm publish --provenance --access public` (provenance links the tarball to
    this commit + CI run — the community can verify it at
    `npm view @bluearch/mission-control`),
 4. creates a GitHub Release.
+
+## The tarball gate (`npm run verify:pack`)
+`npm test` exercises the **working tree**; it cannot catch a file missing from
+`package.json` `files:`, a runtime dep that only resolves from your dev
+`node_modules`, or a node-pty spawn-helper that crashes on a fresh install —
+exactly the bugs that turn a clean local run into a broken
+`npx @bluearch/mission-control`. `scripts/verify-pack.mjs` tests the *published
+artifact* instead:
+
+- **PACK** — `npm pack` (the exact tgz npm would ship; repo stays clean).
+- **MANIFEST** — the critical files are in the tarball.
+- **INSTALL + BOOT** — install the tgz into a throwaway temp dir with an empty
+  `$HOME` + `MC_CONFIG_DIR` and `--omit=dev`, then run `MC_SMOKE=1 mc`
+  (`tui/selfCheck.mjs`): the full import graph resolves and a real
+  `pty.spawn('echo','hi')` succeeds. This is the ground-truth pass — if it's
+  green, "install is simple" is *verified*, not asserted.
+- **NPX-SELFHEAL** — reinstall with `--ignore-scripts` (npx skips postinstall)
+  and break the spawn-helper exec bit: the runtime self-heal (`fixNodePty`) must
+  repair it and still boot.
+- **NEGATIVE-CONTROL** — same broken helper with self-heal disabled *must* fail.
+  A green-only verifier proves nothing; this confirms the harness catches the
+  real `posix_spawnp` break.
+
+Run it locally before cutting any release: `npm run verify:pack` (exit 0 = safe
+to publish). `MC_VERIFY_KEEP=1` keeps the temp dirs for inspection; `--report
+<path>` writes a machine-readable summary.
 
 ## Verify
 ```bash

@@ -28,6 +28,23 @@ jobs:
             echo "No test framework detected; skipping."
           fi
 
+  verify-pack:
+    name: verify tarball (early warning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # One cheap cell on every push/PR: pack → install → boot the tarball so a
+      # broken `files:` manifest or spawn-helper regression is caught here, not
+      # only at release-tag time. release.yml runs the full macOS×linux × node
+      # 20/22 matrix as the actual publish gate.
+      - name: Verify the packed tarball
+        run: npm ci && npm run verify:pack
+
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

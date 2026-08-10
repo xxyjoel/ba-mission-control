@@ -20,4 +20,15 @@ import { register } from 'tsx/esm/api';
 process.env.NODE_ENV ??= 'production';
 
 register();
-await import('../tui/main.jsx');
+
+// Headless self-check (`MC_SMOKE=1 mc`): boot the runtime WITHOUT the Ink render
+// (which needs a TTY), prove the import graph resolves + a real pty.spawn works,
+// print `MC_SMOKE_OK <version>`, exit. This is the assertion scripts/verify-pack.mjs
+// runs against a freshly-installed tarball, so a broken `files:` manifest or a
+// non-executable node-pty spawn-helper fails BEFORE the build reaches npm.
+if (process.env.MC_SMOKE === '1') {
+  const { selfCheck } = await import('../tui/selfCheck.mjs');
+  await selfCheck();
+} else {
+  await import('../tui/main.jsx');
+}

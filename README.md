@@ -429,13 +429,40 @@ The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the h
 
 ## Model catalog
 
-The selectable models live in `tui/lib/models.js` — each entry maps a
-friendly id (`opus-4.8`, `sonnet-4.6`, …) to the CLI model name passed to
+The static table in `tui/lib/models.js` is only the **verified pricing
+book** — models are never hand-added to it. Each entry maps a friendly id
+(`opus-4.8`, `sonnet-4.6`, …) to the CLI model name passed to
 `claude --model`, plus display metadata (context window, per-MTok pricing,
-colour). The default for new sessions is **`opus-4.8`** (1M-token context);
-change it in Settings → GENERAL or with `:model default <id>`.
+colour). Every selector (Settings → GENERAL, the NewSession `←/→` cycler,
+`:model` validation) reads the **live** catalog via `modelIds()`, so models
+discovered at runtime are immediately selectable. The default for new
+sessions is **`opus-4.8`** (1M-token context); change it in Settings →
+GENERAL or with `:model default <id>`.
 
-### Programmatic refresh (`:model refresh`)
+### Automatic discovery
+
+Models are never hand-added — mc syncs from two live sources on boot, in the
+background:
+
+1. **Models API inventory** (`GET /v1/models` — the endpoint the Anthropic
+   SDK's `client.models.list()` wraps). Free, complete, and diffed against
+   mc's catalog on every boot when an API credential is in the environment
+   (`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`): unknown models are
+   added, known models' real context/output limits are updated, and models
+   the API no longer serves are marked retired (kept for cost history).
+   Skipped silently on claude-CLI-only logins, where no env credential
+   exists.
+2. **claude CLI alias probe** — resolves what `opus` / `sonnet` / `haiku`
+   point at *today* (which the API can't say) and covers credential-less
+   installs. Each probe is a billed turn, so it fires only when
+   `claude --version` differs from the version stamped in
+   `models-cache.json`. That's how Opus 5 appeared with zero code changes
+   when v2.1.220 shipped. Failed probes don't stamp, so discovery retries
+   next boot. A brand-new model *family* (its own alias) reaching
+   credential-less installs needs a one-string addition to `KNOWN_ALIASES`
+   in `tui/lib/modelProbe.js` — the API path needs nothing.
+
+### Manual refresh (`:model refresh`)
 
 The `claude` CLI has no "list models" command, so mc learns what an alias
 resolves to — and its real context window — by running a one-shot query
@@ -455,11 +482,13 @@ concurrently, then:
   the catalog (pricing inherited from the same family and flagged as
   estimated until confirmed).
 
-Each probe is a **real, billed turn** (~$0.10–0.15, ~2s), so this is
-manual-only. The result is cached to `~/.config/claude-mc/models-cache.json`
-and overlaid onto the static catalog **offline** on every boot — startup
-never probes. Re-run `:model refresh` after a new model ships (or roughly
-weekly) to stay current.
+Each probe is a **real, billed turn** (~$0.10–0.15, ~2s), so probes run
+only on manual `:model refresh` or a detected claude version change (above)
+— never on a steady-state boot. The result is cached to
+`~/.config/claude-mc/models-cache.json` (stamped with the CLI version) and
+overlaid onto the static catalog **offline** on every boot. A discovered
+model's pricing is inherited from its newest same-family sibling and
+flagged `estimatedPricing` until a verified row lands in the pricing book.
 
 ## Slack feedback / customer requests
 

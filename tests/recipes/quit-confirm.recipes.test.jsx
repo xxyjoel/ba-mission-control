@@ -74,8 +74,13 @@ test('pty: Esc inside QuitConfirm cancels (same as n)', async () => {
       { press: 'q', tick: 200, expectFrame: [/Quit mc\?/] },
       { press: '\x1b', tick: 200, expectNotFrame: [/Quit mc\?/] },
       { label: 'mc still alive — verify by opening Help (?)',
+        // Assert on Help content that's ALWAYS in view at the top of the modal.
+        // The old /SETTINGS|NAVIGATE|Quit/ broke once Help became a scrollable
+        // window (618c26f): SETTINGS/Quit are below the fold at rows:30 and
+        // "NAVIGATE" never matched the section "NAVIGATION" — so the frame never
+        // matched and recipe-pty waited the full 10s before failing (task 0359).
         press: '?', tick: 200,
-        expectFrame: [/SETTINGS|NAVIGATE|Quit/] },
+        expectFrame: [/━━ KEYBOARD ━━|NAVIGATION/] },
       { label: 'close Help and quit via q→y',
         press: '\x1b', tick: 200 },
       { press: 'q', tick: 200 },

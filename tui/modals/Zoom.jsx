@@ -134,14 +134,16 @@ export default function Zoom({
   // back to stdout.rows-4 if it wasn't provided.
   // Per-region breakdown (matches the JSX below top-to-bottom):
   //   2 border + 2 padY + 1 header + (1 marginTop + 1 compact-stats)
-  //   + (1 marginTop + 1 PTY body marginTop is part of bodyRows)
-  //   + 1 footer = 10 always-on rows.
+  //   + 1 PTY-body marginTop + 1 footer = 9 always-on rows.
+  // (Was 10 — a double-count that ate one PTY row; the caller now subtracts the
+  // real FeedbackStrip height, so this must be the true chrome count or claude's
+  // bottom line clips. Idle bodyRows is unchanged: zoomHeight shrank by 1 too.)
   // Optional panels each add their own marginTop=1 wrapper, so
   // statsExpanded is +7 (not +6) and showTools is +2 (not +1).
   // todos panel adds 1 marginTop on top of todoRows (header + items + overflow).
   const availableRows = height || Math.max(10, (stdout?.rows || 50) - 4);
   const fixedRows =
-    10 +
+    9 +
     (statsExpanded ? 7 : 0) +
     (showTools ? 2 : 0) +
     (todoRows > 0 ? todoRows + 1 : 0);

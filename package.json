@@ -42,6 +42,7 @@
     "dev:sandbox": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx bin/mc.mjs",
     "dev:sandbox:watch": "MC_CONFIG_DIR=\"$HOME/.config/claude-mc-dev\" tsx watch bin/mc.mjs",
     "test": "node scripts/run-tests.mjs",
+    "verify:pack": "node scripts/verify-pack.mjs",
     "preversion": "npm test",
     "postversion": "git push --follow-tags",
     "prepublishOnly": "node scripts/prepublish-guard.mjs",

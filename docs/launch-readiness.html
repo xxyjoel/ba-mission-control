@@ -1,0 +1,352 @@
+<!-- LIVING DOC — republish to the SAME url to update it:
+     Artifact url=https://claude.ai/code/artifact/596b3cbb-35e6-4268-bcef-ee518166514c
+     (a session that didn't publish this mints a NEW url unless it passes that url).
+     The tarball-gate rows are driven by `npm run verify:pack`. -->
+<title>Mission Control — Launch Readiness</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --panel: #ffffff; --panel-2: #eef1f6; --border: #dce2ec;
+    --text: #18202e; --muted: #5a6678; --faint: #8b96a8;
+    --accent: #0d7c8f; --accent-soft: rgba(13,124,143,0.10);
+    --pass: #1a7f37; --pass-soft: rgba(26,127,55,0.12);
+    --warn: #9a6700; --warn-soft: rgba(154,103,0,0.12);
+    --block: #cf222e; --block-soft: rgba(207,34,46,0.12);
+    --shadow: 0 1px 2px rgba(20,30,50,0.06), 0 8px 24px rgba(20,30,50,0.06);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f16; --panel: #121826; --panel-2: #0d1320; --border: #1e2839;
+      --text: #d8dfea; --muted: #8592a6; --faint: #5e6a7e;
+      --accent: #57d0e3; --accent-soft: rgba(87,208,227,0.12);
+      --pass: #3fb950; --pass-soft: rgba(63,185,80,0.14);
+      --warn: #d9a441; --warn-soft: rgba(217,164,65,0.14);
+      --block: #f0616d; --block-soft: rgba(240,97,109,0.14);
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f6fa; --panel: #ffffff; --panel-2: #eef1f6; --border: #dce2ec;
+    --text: #18202e; --muted: #5a6678; --faint: #8b96a8;
+    --accent: #0d7c8f; --accent-soft: rgba(13,124,143,0.10);
+    --pass: #1a7f37; --pass-soft: rgba(26,127,55,0.12);
+    --warn: #9a6700; --warn-soft: rgba(154,103,0,0.12);
+    --block: #cf222e; --block-soft: rgba(207,34,46,0.12);
+    --shadow: 0 1px 2px rgba(20,30,50,0.06), 0 8px 24px rgba(20,30,50,0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0f16; --panel: #121826; --panel-2: #0d1320; --border: #1e2839;
+    --text: #d8dfea; --muted: #8592a6; --faint: #5e6a7e;
+    --accent: #57d0e3; --accent-soft: rgba(87,208,227,0.12);
+    --pass: #3fb950; --pass-soft: rgba(63,185,80,0.14);
+    --warn: #d9a441; --warn-soft: rgba(217,164,65,0.14);
+    --block: #f0616d; --block-soft: rgba(240,97,109,0.14);
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 30px rgba(0,0,0,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: clamp(20px, 4vw, 52px) clamp(16px, 4vw, 40px) 80px; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint); margin: 0;
+  }
+  h1 {
+    font-family: var(--mono); font-weight: 600; letter-spacing: -0.02em;
+    font-size: clamp(24px, 4vw, 34px); margin: 6px 0 0; text-wrap: balance;
+  }
+  h1 .cursor { color: var(--accent); font-weight: 400; }
+  h2 {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); font-weight: 600;
+    margin: 44px 0 16px; display: flex; align-items: baseline; gap: 10px;
+  }
+  h2::before { content: "▚"; color: var(--accent); font-size: 12px; }
+
+  /* ── Verdict banner ─────────────────────────────────────────── */
+  .verdict {
+    margin-top: 26px; border: 1px solid var(--border); border-radius: 14px;
+    background: var(--panel); box-shadow: var(--shadow); overflow: hidden;
+    display: grid; grid-template-columns: 1.3fr 1fr;
+  }
+  @media (max-width: 720px) { .verdict { grid-template-columns: 1fr; } }
+  .verdict-main { padding: 26px 28px; border-right: 1px solid var(--border); }
+  @media (max-width: 720px) { .verdict-main { border-right: none; border-bottom: 1px solid var(--border); } }
+  .verdict-status {
+    font-family: var(--mono); font-size: clamp(26px, 5vw, 40px); font-weight: 600;
+    letter-spacing: -0.02em; margin: 10px 0 4px; color: var(--block); line-height: 1.05;
+  }
+  .verdict-sub { color: var(--muted); font-size: 15px; margin: 0; max-width: 46ch; }
+  .verdict-meter { padding: 26px 28px; display: flex; flex-direction: column; justify-content: center; gap: 14px; background: var(--panel-2); }
+  .meter-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .meter-num { font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: -0.02em; }
+  .meter-label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+  .bar { height: 8px; border-radius: 99px; background: var(--border); overflow: hidden; display: flex; }
+  .bar span { display: block; height: 100%; }
+  .bar .s-pass { background: var(--pass); }
+  .bar .s-warn { background: var(--warn); }
+  .bar .s-block { background: var(--block); }
+  .bar .s-pend { background: var(--faint); opacity: 0.5; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: middle; }
+
+  /* ── Status pill ────────────────────────────────────────────── */
+  .pill {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .pill.pass { color: var(--pass); background: var(--pass-soft); }
+  .pill.warn { color: var(--warn); background: var(--warn-soft); }
+  .pill.block { color: var(--block); background: var(--block-soft); }
+  .pill.pend { color: var(--faint); background: var(--border); }
+  .pill::before { content: "●"; font-size: 8px; }
+
+  /* ── Leg cards ──────────────────────────────────────────────── */
+  .legs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 720px) { .legs { grid-template-columns: 1fr; } }
+  .leg {
+    position: relative; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 18px 18px 20px; box-shadow: var(--shadow); overflow: hidden;
+  }
+  .leg::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+  .leg.pass::before { background: var(--pass); }
+  .leg.warn::before { background: var(--warn); }
+  .leg.block::before { background: var(--block); }
+  .leg h3 { margin: 0 0 4px; font-size: 15px; font-family: var(--sans); font-weight: 650; letter-spacing: -0.01em; }
+  .leg p { margin: 8px 0 0; font-size: 13.5px; color: var(--muted); }
+  .leg .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+  /* ── Gate list ──────────────────────────────────────────────── */
+  .gates { display: flex; flex-direction: column; gap: 10px; }
+  .gate {
+    position: relative; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 11px; box-shadow: var(--shadow); overflow: hidden;
+    display: grid; grid-template-columns: 200px 1fr auto; align-items: center; gap: 16px;
+    padding: 15px 18px 15px 20px;
+  }
+  @media (max-width: 720px) { .gate { grid-template-columns: 1fr auto; } .gate .gate-detail { grid-column: 1 / -1; } }
+  .gate::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
+  .gate.pass::before { background: var(--pass); }
+  .gate.warn::before { background: var(--warn); }
+  .gate.block::before { background: var(--block); }
+  .gate.pend::before { background: var(--faint); }
+  .gate-name { font-family: var(--mono); font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em; }
+  .gate-detail { font-size: 13.5px; color: var(--muted); }
+  .gate-detail b { color: var(--text); font-weight: 600; }
+  .gate-detail code { font-family: var(--mono); font-size: 12px; background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .gate-next { display: block; margin-top: 3px; font-size: 12.5px; color: var(--faint); }
+  .gate-next::before { content: "→ "; color: var(--accent); }
+
+  /* ── Verify framework block ─────────────────────────────────── */
+  .verify {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 13px;
+    padding: 22px 24px; box-shadow: var(--shadow);
+  }
+  .verify-lead { margin: 0 0 4px; font-size: 14px; color: var(--muted); max-width: 72ch; }
+  .verify-lead b { color: var(--text); }
+  .stages { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .stage { background: var(--panel); padding: 13px 14px; }
+  .stage .s-name { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--faint); text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; }
+  .stage .s-name .tick { color: var(--pass); font-weight: 700; }
+  .stage .s-desc { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .runline {
+    font-family: var(--mono); font-size: 12.5px; margin-top: 16px; padding: 12px 14px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--muted);
+    overflow-x: auto; white-space: pre; -webkit-overflow-scrolling: touch;
+  }
+  .runline .ok { color: var(--pass); }
+  .runline .cmd { color: var(--accent); }
+
+  /* ── Bugs ───────────────────────────────────────────────────── */
+  .bugs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  @media (max-width: 620px) { .bugs { grid-template-columns: 1fr; } }
+  .bug { display: flex; gap: 12px; align-items: baseline; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 15px; box-shadow: var(--shadow); }
+  .bug .id { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; }
+  .bug .txt { font-size: 13.5px; color: var(--muted); }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; align-items: baseline; }
+  footer p { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--faint); letter-spacing: 0.03em; }
+  footer .stamp b { color: var(--muted); font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">BlueArch Mission Control · v1.1.1 · Product Hunt launch</p>
+  <h1>Launch readiness<span class="cursor">▊</span></h1>
+
+  <section class="verdict" aria-label="Overall verdict">
+    <div class="verdict-main">
+      <p class="eyebrow" style="color:var(--block)">Verdict</p>
+      <p class="verdict-status">NOT READY</p>
+      <p class="verdict-sub">Two hard blockers stand between here and a clean launch: the package isn't on npm, and the status-correctness track hasn't started. The test suite is green again. Readiness is gated by blockers, not by the green ratio.</p>
+    </div>
+    <div class="verdict-meter">
+      <div class="meter-row">
+        <span class="meter-num">6<span style="color:var(--faint);font-size:20px">/9</span></span>
+        <span class="meter-label">gates green</span>
+      </div>
+      <div class="bar" role="img" aria-label="6 passing, 1 at risk, 2 blocked">
+        <span class="s-pass" style="width:66.6%"></span>
+        <span class="s-warn" style="width:11.1%"></span>
+        <span class="s-block" style="width:22.2%"></span>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--pass)"></i>Ready</span>
+        <span><i style="background:var(--warn)"></i>At risk</span>
+        <span><i style="background:var(--block)"></i>Blocker</span>
+        <span><i style="background:var(--faint)"></i>Pending</span>
+      </div>
+    </div>
+  </section>
+
+  <h2>Stabilization gate</h2>
+  <div class="legs">
+    <div class="leg block">
+      <div class="head"><h3>Status correctness</h3><span class="pill block">Blocker</span></div>
+      <p>The <code style="font-family:var(--mono);font-size:12px">deriveStatus</code> rewrite (tasks 0285–0305, 0338) is fully scoped but <b style="color:var(--text)">not started</b> — the largest remaining quality risk. Cards can show stale/wrong agent state.</p>
+    </div>
+    <div class="leg pass">
+      <div class="head"><h3>Memory / OOM</h3><span class="pill pass">Ready</span></div>
+      <p>The React-dev-mode heap leak (#18) plus four secondary leak paths and unbounded cost buckets are all fixed (0354–0356, PR #25). Long-uptime stable. Keep watching heap under real load.</p>
+    </div>
+    <div class="leg warn">
+      <div class="head"><h3>Easy install</h3><span class="pill warn">At risk</span></div>
+      <p>The tarball now provably boots clean on a fresh machine (new harness, below) — but the package isn't published, so <code style="font-family:var(--mono);font-size:12px">npx</code> still 404s. Verified in principle; blocked on the first publish.</p>
+    </div>
+  </div>
+
+  <h2>Ship gates</h2>
+  <div class="gates">
+    <div class="gate block">
+      <span class="gate-name">Published to npm</span>
+      <span class="gate-detail"><code>npm view @bluearch/mission-control</code> → <b>E404</b>. Every new user's <code>npx @bluearch/mission-control</code> 404s.
+        <span class="gate-next">Maintainer: one-time <code>npm login &amp;&amp; npm publish</code> from the <code>v1.1.1</code> tag, then configure the OIDC trusted publisher (task 0351 — needs npm creds).</span></span>
+      <span class="pill block">Blocker</span>
+    </div>
+    <div class="gate block">
+      <span class="gate-name">Status correctness</span>
+      <span class="gate-detail">Agent-state derivation rewrite not yet begun; 22 open tasks in the track.
+        <span class="gate-next">Start 0285 (extract <code>deriveStatus</code>) → replay harness → before-fix fixtures.</span></span>
+      <span class="pill block">Blocker</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">Tarball verify harness</span>
+      <span class="gate-detail"><b>New.</b> <code>npm run verify:pack</code> packs, installs into a clean temp dir, boots <code>MC_SMOKE=1 mc</code>, and proves a real <code>pty.spawn</code> — with a negative control that confirms it catches the real break.
+        <span class="gate-next">Green locally on macOS · node 24. Details below.</span></span>
+      <span class="pill pass">Ready</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">CI publish gate</span>
+      <span class="gate-detail"><b>New.</b> <code>release.yml</code> now gates publish on a verify matrix — macOS + linux × Node 20 &amp; 22 — between <code>npm test</code> and <code>npm publish</code>. A red tarball can't reach npm.
+        <span class="gate-next">First exercised on the next <code>vX.Y.Z</code> tag push.</span></span>
+      <span class="pill pass">Ready</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">Provenance / OIDC publish</span>
+      <span class="gate-detail">Tokenless publish with <code>--provenance</code> wired; tag-vs-<code>package.json</code> drift guard + <code>prepublish-guard</code> in place.
+        <span class="gate-next">Trusted-publisher must be registered on npmjs.com during the 0351 bootstrap.</span></span>
+      <span class="pill pass">Ready</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">Security audit</span>
+      <span class="gate-detail">Security / efficiency / deployment audit swept and fixes landed (commit <code>62a81d6</code>). No argv-string injection; <code>CLAUDE_BIN</code> treated as untrusted.
+        <span class="gate-next">Re-run <code>/forge-security-pass</code> on the pre-launch diff.</span></span>
+      <span class="pill pass">Ready</span>
+    </div>
+    <div class="gate warn">
+      <span class="gate-name">README install path</span>
+      <span class="gate-detail">Interim <code>npx github:xxyjoel/ba-mission-control</code> works today; the <code>npx @bluearch/mission-control</code> one-liner is marked "coming soon" behind a TODO.
+        <span class="gate-next">On publish: promote the registry install to the primary block, drop the github fallback.</span></span>
+      <span class="pill warn">At risk</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">Full test suite</span>
+      <span class="gate-detail"><b>Green — CI-path (90 files) and full local (incl. recipes) both pass.</b> Fixed three scroll-fold test-staleness cases from the B2 Help scrollable-window change: <code>Help.shell</code> (paging), two <code>reliability.recipes</code> Help asserts (a <code>rows</code> render seam · 0358), and the <code>QuitConfirm</code> 10s-timeout — which turned out to be a stale assertion, not a product hang (0359).
+        <span class="gate-next">No known red tests remain.</span></span>
+      <span class="pill pass">Ready</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">Crash / terminal safety</span>
+      <span class="gate-detail">Global crash net restores the alt-screen + cursor and prints a report link; SIGHUP/SIGTSTP handled so a closed terminal can't strand a zombie or lose sessions.</span>
+      <span class="pill pass">Ready</span>
+    </div>
+  </div>
+
+  <h2>The tarball gate — what's new</h2>
+  <div class="verify">
+    <p class="verify-lead"><b>The problem it closes:</b> <code>npm test</code> exercises the working tree, so it can't catch a file missing from <code>package.json</code> <code>files:</code>, a runtime dep that only resolves from a dev <code>node_modules</code>, or a node-pty spawn-helper that crashes on a fresh install — exactly the bugs that turn a clean local run into a broken <code>npx</code>. <code>verify-pack</code> tests the <b>published artifact</b> instead.</p>
+    <div class="stages">
+      <div class="stage"><div class="s-name">Pack <span class="tick">✓</span></div><div class="s-desc">The exact tgz npm would ship — 77 files, 229&nbsp;KB.</div></div>
+      <div class="stage"><div class="s-name">Manifest <span class="tick">✓</span></div><div class="s-desc">All critical files present in the tarball.</div></div>
+      <div class="stage"><div class="s-name">Install + boot <span class="tick">✓</span></div><div class="s-desc">Clean temp dir, empty <code>$HOME</code>, <code>--omit=dev</code> → <code>MC_SMOKE_OK</code>.</div></div>
+      <div class="stage"><div class="s-name">Npx self-heal <span class="tick">✓</span></div><div class="s-desc">Postinstall skipped + broken exec bit → runtime <code>fixNodePty</code> repairs it.</div></div>
+      <div class="stage"><div class="s-name">Negative control <span class="tick">✓</span></div><div class="s-desc">Self-heal off + broken helper <b>must</b> fail — proves the verifier isn't hollow.</div></div>
+    </div>
+    <div class="runline"><span class="cmd">$ npm run verify:pack</span>
+  ✓ PACK      bluearch-mission-control-1.1.1.tgz · 77 files · 229KB
+  ✓ MANIFEST  all 8 critical files present
+  ✓ INSTALL   clean temp dir, --omit=dev, empty $HOME
+  ✓ BOOT      MC_SMOKE_OK 1.1.1
+  ✓ NEGATIVE-CONTROL  broken spawn-helper + no self-heal → failed as required
+  ✓ NPX-SELFHEAL      postinstall skipped + broken helper → repaired + booted
+<span class="ok">verify-pack: ALL GREEN — safe to publish</span></div>
+  </div>
+
+  <h2>Open bugs — quality watch</h2>
+  <div class="bugs">
+    <div class="bug"><span class="id">0353</span><span class="txt">Shell overlay renders blank after <code>clear</code>.</span></div>
+    <div class="bug"><span class="id">0357</span><span class="txt">Zoom PtyPane scroll shows duplicated / misshapen text.</span></div>
+    <div class="bug"><span class="id">0352</span><span class="txt">Duplicate health chip in the Zoom view.</span></div>
+    <div class="bug"><span class="id">0350</span><span class="txt">Cap the subagent-tailer <code>settled</code> set (in-session growth).</span></div>
+  </div>
+
+  <h2>Tracked work — forge tasks</h2>
+  <div class="gates">
+    <div class="gate block">
+      <span class="gate-name">0351 · npm publish</span>
+      <span class="gate-detail">Bootstrap the first publish + verify clean-machine install. <b>Maintainer creds required.</b>
+        <span class="gate-next">One-time <code>npm login &amp;&amp; npm publish</code> from <code>v1.1.1</code>, then register the OIDC trusted publisher.</span></span>
+      <span class="pill block">Blocker · in progress</span>
+    </div>
+    <div class="gate block">
+      <span class="gate-name">accurate-session-status</span>
+      <span class="gate-detail">22-task track (0285–0305, 0338) — the <code>deriveStatus</code> rewrite. Not started.
+        <span class="gate-next">Begin 0285; this is the dominant quality gate.</span></span>
+      <span class="pill block">Blocker</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">0358 · stale Help recipe tests</span>
+      <span class="gate-detail">Scroll-fold staleness fixed via an optional <code>rows</code> render seam. Done this session.</span>
+      <span class="pill pass">Done</span>
+    </div>
+    <div class="gate pass">
+      <span class="gate-name">0359 · QuitConfirm 10s timeout</span>
+      <span class="gate-detail">Stale assertion (not a hang) — asserts on visible Help content now. 5/5 green. Done this session.</span>
+      <span class="pill pass">Done</span>
+    </div>
+    <div class="gate warn">
+      <span class="gate-name">0360 · README npm install</span>
+      <span class="gate-detail">Promote the <code>npx @bluearch/mission-control</code> one-liner + drop "coming soon". Blocked on 0351.</span>
+      <span class="pill warn">Blocked · dep 0351</span>
+    </div>
+    <div class="gate warn">
+      <span class="gate-name">0361 · first CI matrix run</span>
+      <span class="gate-detail">Verify all four verify cells go green end-to-end on the first tag (esp. the linux node-pty compile). Blocked on 0351.</span>
+      <span class="pill warn">Blocked · dep 0351</span>
+    </div>
+  </div>
+
+  <footer>
+    <p class="stamp">Last updated <b>2026-08-03</b> · session-generated</p>
+    <p>Blocker-gated · verify:pack drives the tarball rows</p>
+  </footer>
+</div>

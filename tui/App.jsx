@@ -34,7 +34,7 @@ import { cdToCwd } from '../server/shellSession.mjs';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS } from './lib/models.js';
-import { probeAll, saveModelCache, applyCacheToCatalog } from './lib/modelProbe.js';
+import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
@@ -568,8 +568,10 @@ export default function App({ fleet, auth: initialAuth }) {
         if (maybeDefault === 'refresh') {
           pushToast('probing models (opus · sonnet · haiku) — ~$0.10/ea, ~5s…', 'info');
           (async () => {
-            const results = await probeAll();
-            const cache = saveModelCache(results);
+            const [results, cliVersion] = await Promise.all([probeAll(), getClaudeVersion()]);
+            // Stamp the CLI version so boot's autoProbeOnVersionChange knows
+            // this claude has already been discovered (no double-billing).
+            const cache = saveModelCache(results, Date.now(), cliVersion);
             const { updated, added } = applyCacheToCatalog(MODELS, cache);
             const failed = results.filter(r => r.error);
             const bits = [];
@@ -1904,7 +1906,14 @@ export default function App({ fleet, auth: initialAuth }) {
     // PTY body to (termRows - chrome) using the full terminal height,
     // and claude's bottom 2 rows of UI (status bar, update banner) bleed
     // past mc's footer.
-    const zoomHeight = Math.max(10, termRows - 4);
+    // FeedbackStrip renders a header row + ≥1 content row (idle "ready…"), and
+    // grows one row per active toast; StatusBar is 1 row; the wrapper adds
+    // paddingY=2. Subtract the strip's ACTUAL height so a burst of feedback
+    // messages can't push the zoom modal past the screen and clip claude's
+    // bottom rows — where claude's own Shift+Tab MODE SELECTOR renders. (Bug:
+    // the selector "disappeared from view" whenever feedback was showing.)
+    const feedbackRows = 1 + Math.max(1, toasts.length);
+    const zoomHeight = Math.max(10, termRows - (3 + feedbackRows));
     return (
       <Box flexDirection="column" width={termCols} height={termRows}>
         <Box paddingX={2} paddingY={1}>
@@ -1931,6 +1940,9 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'shell') {
     // Shell overlay height: wrapper consumes paddingY=2 + FeedbackStrip (1) +
     // StatusBar (1) = 4 rows. Mirror the zoom pattern exactly.
+    // TODO(shell-height): FeedbackStrip is really 1 header + max(1,toasts) rows,
+    // not 1 — same undercount the zoom path had (task 0362). Subtract the real
+    // `1 + Math.max(1, toasts.length) + 3` so a toast burst can't clip the shell.
     const shellHeight = Math.max(10, termRows - 4);
     return (
       <Box flexDirection="column" width={termCols} height={termRows}>

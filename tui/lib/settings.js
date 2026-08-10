@@ -8,6 +8,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFil
 import { dirname, join } from 'node:path';
 import { getConfigDir } from './configDir.js';
 import { PLUGINS, applyPluginDefaults } from './plugins.js';
+// The Default-model cycler lists the LIVE catalog (static entries + models
+// discovered from the claude CLI probe). Passed as a function so it is
+// re-evaluated on every cycle — a hardcoded array here silently fell out of
+// sync with the catalog twice (0367).
+import { modelIds } from './models.js';
 
 const CONFIG_DIR  = getConfigDir();
 const CONFIG_FILE = join(CONFIG_DIR, 'settings.json');
@@ -69,6 +74,8 @@ export const SETTINGS_DEFAULTS = {
   // limit retroactively grows the trail; lowering it trims to the
   // newest N on the next sync tick.
   sessionHistoryLimit: 20,
+  // Newest statically-priced entry. Discovered models (e.g. opus-5) can be
+  // made the default with `:model default <id>` once the probe has run.
   defaultModel: 'opus-4.8',
   defaultPermission: 'acceptEdits', // default | acceptEdits | bypassPermissions | plan
   gitPollSec: 6,
@@ -104,7 +111,7 @@ export const SETTINGS_SCHEMA = [
     { key: 'clock24',      label: '24-hour clock',        kind: 'toggle' },
     { key: 'autoResumeOnStart', label: 'Auto-resume sessions on startup', kind: 'toggle', desc: 'On boot, restore every saved session whose slot is empty. Off → just shows a `:resume-all` hint instead.' },
     { key: 'sessionHistoryLimit', label: 'Session history limit', kind: 'number', min: 0, max: 200, step: 5, unit: ' sessions', desc: 'View-only history for `:history`. NOT used by :resume-all — that only restores the last-active state.' },
-    { key: 'defaultModel', label: 'Default model',        kind: 'cycle',  options: ['opus-4.8', 'sonnet-4.6', 'opus-4.7', 'haiku-4.5'], desc: 'New-session default. `:model refresh` re-probes the live catalog (ctx window, resolved name).' },
+    { key: 'defaultModel', label: 'Default model',        kind: 'cycle',  options: modelIds, desc: 'New-session default. Lists the live catalog incl. probe-discovered models. `:model refresh` re-probes the source.' },
     { key: 'defaultPermission', label: 'Default permission mode', kind: 'cycle', options: ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'], desc: 'Default for new sessions only — change a live session via :perm <mode>. bypassPermissions removes all guardrails.' },
   ]},
   { id: 'layout', title: 'LAYOUT', items: [

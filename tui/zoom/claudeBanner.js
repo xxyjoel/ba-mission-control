@@ -13,10 +13,17 @@
 // Tunable + gated behind the `hideClaudeUpdateBanner` setting (default on), so a
 // false positive is a setting toggle away, and the exact wording can be widened
 // here in one place if claude changes its banner.
+//
+// The cue-word gap deliberately stops at sentence punctuation ([^.!?]) —
+// claude's real banner is a single clause ("Update available: 2.1.180"),
+// while a user's typed prose spans sentences. Repro 2026-08-10: the composer
+// row "…an update to claude code has been made. a new model is available…"
+// matched across the period and PtyPane blanked the user's own wrapped input
+// row mid-typing (task 0366).
 
 const PATTERNS = [
-  /\b(update|upgrade)\b[^\n]*\b(available|installed|now|to\s+\d|restart)\b/i,
-  /\brestart\b[^\n]*\bto\s+(apply|update)\b/i,
+  /\b(update|upgrade)\b[^\n.!?]*\b(available|installed|now|to\s+\d|restart)\b/i,
+  /\brestart\b[^\n.!?]*\bto\s+(apply|update)\b/i,
   /\b(new|newer)\s+version\b/i,
   /\bclaude\s+update\b/i,
   /npm\s+i(?:nstall)?\s+-g[^\n]*claude-code/i,
