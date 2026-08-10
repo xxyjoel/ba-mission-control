@@ -44,6 +44,19 @@ test('does NOT match ordinary prose that merely says "update"', () => {
   }
 });
 
+test('does NOT match cue words split across sentence boundaries (0366 repro)', () => {
+  // Exact user-typed composer row that PtyPane blanked on 2026-08-10: the
+  // "update … available" cue pair only co-occurs across a period. Real
+  // banners are a single clause; typed prose spans sentences.
+  for (const s of [
+    '- an update to claude code has been made. a new model is available. i selected that new model',
+    'the update failed yesterday. it is available again today.',
+    'we should upgrade eventually! this version is fine for now',
+  ]) {
+    assert.equal(matchUpdateBanner(s), null, `should NOT match: ${JSON.stringify(s)}`);
+  }
+});
+
 test('tolerates non-string input', () => {
   assert.equal(matchUpdateBanner(null), null);
   assert.equal(matchUpdateBanner(undefined), null);
