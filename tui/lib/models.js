@@ -34,6 +34,14 @@
 // $5/$25 per MTok (previously mis-mirrored from an old 15/75 figure); Opus 4.7
 // and Sonnet 4.6 are 1M context (previously 200K). Cache rates follow the file
 // convention: cacheCreation = 1.25×in, cacheRead = 0.10×in.
+// NEW MODELS ARE NOT ADDED HERE BY HAND. This table is the offline pricing
+// book for models whose published rates we've verified. Net-new models
+// (e.g. Opus 5, which claude v2.1.220's bare `opus` alias resolves to) are
+// DISCOVERED from the source of truth — the claude CLI itself — via
+// tui/lib/modelProbe.js: probe → models-cache.json → applyCacheToCatalog()
+// merges them into this object at boot / on `:model refresh` / on a claude
+// version change, with pricing inherited from the newest same-kind sibling
+// and flagged estimatedPricing until a verified row is added here.
 export const MODELS = {
   'opus-4.8':   { label: 'OPUS 4.8',   cliModel: 'claude-opus-4-8',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.7':   { label: 'OPUS 4.7',   cliModel: 'claude-opus-4-7',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
@@ -53,7 +61,13 @@ export const MODELS = {
 // TODO(model-autodetect): probe `claude` on version change and reconcile new
 // aliases into this catalog automatically (task 0348).
 
-export const MODEL_IDS = Object.keys(MODELS);
+// modelIds — LIVE view of the catalog's ids. A function, not a frozen
+// array: applyCacheToCatalog() mutates MODELS after module load (boot
+// cache overlay, `:model refresh`, version-change auto-probe), and every
+// selector (Settings cycler, NewSession ←/→, :model validation) must see
+// discovered models. The old `MODEL_IDS = Object.keys(MODELS)` snapshot
+// silently excluded anything discovered after import.
+export function modelIds() { return Object.keys(MODELS); }
 
 // modelByCli — reverse-lookup a catalog entry by its CLI model name. claude
 // reports the resolved cli model in every assistant event (→ agent.resolvedModel),

@@ -95,8 +95,11 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
       return;
     }
     if (item.kind === 'cycle') {
-      const i = item.options.indexOf(cur);
-      const next = item.options[(i + dir + item.options.length) % item.options.length];
+      // options may be a function (live list — e.g. the model catalog grows
+      // when the probe discovers a new claude model). Resolve per keypress.
+      const opts = typeof item.options === 'function' ? item.options() : item.options;
+      const i = opts.indexOf(cur);
+      const next = opts[(i + dir + opts.length) % opts.length];
       setSettings({ ...settings, [item.key]: next });
       return;
     }

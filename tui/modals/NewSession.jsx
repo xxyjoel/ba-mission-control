@@ -27,7 +27,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, basename, join } from 'node:path';
 import TextField from '../lib/TextField.jsx';
-import { MODEL_IDS, MODELS } from '../lib/models.js';
+import { modelIds, MODELS } from '../lib/models.js';
 import RepoPicker from './RepoPicker.jsx';
 
 const SUGGEST_VIEW = 8;          // visible suggestion rows
@@ -197,9 +197,10 @@ export default function NewSession({
     // inactive in this mode so it won't fire onSubmit itself.
     if (key.return) { submit(); return; }
     if (key.leftArrow || key.rightArrow) {
-      const i = MODEL_IDS.indexOf(model);
+      const ids = modelIds(); // live catalog — includes probe-discovered models
+      const i = ids.indexOf(model);
       const dir = key.rightArrow ? 1 : -1;
-      setModel(MODEL_IDS[(i + dir + MODEL_IDS.length) % MODEL_IDS.length]);
+      setModel(ids[(i + dir + ids.length) % ids.length]);
       return;
     }
   });
