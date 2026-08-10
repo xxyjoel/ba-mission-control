@@ -201,6 +201,20 @@ test('listApiModels: HTTP error → ok:false with status', async () => {
   assert.deepEqual(r, { ok: false, reason: 'models API HTTP 401' });
 });
 
+test('listApiModels: refuses a non-https base URL before any fetch (credential-leak guard)', async () => {
+  let fetched = 0;
+  const r = await listApiModels({ apiKey: 'k', baseUrl: 'http://evil.example', fetchImpl: async () => { fetched++; } });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /non-https/);
+  assert.equal(fetched, 0);
+});
+
+test('listApiModels: fetches with redirect:"error" so x-api-key cannot follow a hop', async () => {
+  let opts;
+  await listApiModels({ apiKey: 'k', fetchImpl: async (url, o) => { opts = o; return { ok: true, json: async () => ({ data: [], has_more: false }) }; } });
+  assert.equal(opts.redirect, 'error');
+});
+
 test('syncCatalogFromApi: adds unknown API models with sibling pricing + real limits', () => {
   const models = freshCatalog();
   const { added } = syncCatalogFromApi(models, [

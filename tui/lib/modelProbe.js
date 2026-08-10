@@ -203,6 +203,13 @@ export async function listApiModels({
   if (!apiKey && !authToken) {
     return { ok: false, reason: 'no API credential (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN)' };
   }
+  // x-api-key is a custom header: unlike Authorization, fetch's redirect
+  // rules do NOT strip it on a cross-origin hop. Refuse plaintext bases and
+  // refuse to follow redirects so the credential can only ever reach the
+  // origin the user configured.
+  if (!/^https:\/\//.test(baseUrl)) {
+    return { ok: false, reason: `refusing non-https ANTHROPIC_BASE_URL (${baseUrl})` };
+  }
   const headers = { 'anthropic-version': '2023-06-01' };
   if (apiKey) headers['x-api-key'] = apiKey;
   else { headers.authorization = `Bearer ${authToken}`; headers['anthropic-beta'] = 'oauth-2025-04-20'; }
@@ -212,7 +219,7 @@ export async function listApiModels({
     // /v1/models paginates with after_id / has_more / last_id.
     for (let page = 0; page < 10; page++) {
       const url = `${baseUrl}/v1/models?limit=100${afterId ? `&after_id=${encodeURIComponent(afterId)}` : ''}`;
-      const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetchImpl(url, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) return { ok: false, reason: `models API HTTP ${res.status}` };
       const body = await res.json();
       for (const m of body.data || []) if (m && m.id) models.push(m);

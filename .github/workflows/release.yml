@@ -21,6 +21,11 @@ jobs:
   # both supported Node majors. The publish job `needs:` all four cells green.
   verify:
     name: verify tarball (${{ matrix.os }} · node ${{ matrix.node }})
+    # Least privilege: this job installs and EXECUTES the packed tarball
+    # (incl. postinstall); it must not inherit the workflow-level
+    # contents:write + id-token:write, which only `publish` needs.
+    permissions:
+      contents: read
     strategy:
       fail-fast: true
       matrix:
