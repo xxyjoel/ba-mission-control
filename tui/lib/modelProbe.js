@@ -180,6 +180,132 @@ export async function autoProbeOnVersionChange(models, {
   }
 }
 
+// ── Models API source (authoritative inventory) ─────────────────────
+// GET /v1/models — the same endpoint the Anthropic SDK's
+// client.models.list() wraps. FREE (no tokens billed) and complete: every
+// model the credential can see, with real context/output limits. This is
+// the primary sync source; the alias probes above remain for (a) alias
+// RESOLUTION (which model `opus` points at today — the API can't say) and
+// (b) users with only a claude-CLI login, where no API credential is
+// available in the environment and this endpoint can't be called.
+
+// listApiModels — fetch the full model inventory. Auth comes from the
+// environment (ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN with the OAuth
+// beta header). Returns { ok:true, models:[{id, display_name,
+// max_input_tokens, max_tokens}, …] } or { ok:false, reason }. Never throws.
+export async function listApiModels({
+  fetchImpl = globalThis.fetch,
+  apiKey = process.env.ANTHROPIC_API_KEY,
+  authToken = process.env.ANTHROPIC_AUTH_TOKEN,
+  baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+  timeoutMs = 15_000,
+} = {}) {
+  if (!apiKey && !authToken) {
+    return { ok: false, reason: 'no API credential (ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN)' };
+  }
+  const headers = { 'anthropic-version': '2023-06-01' };
+  if (apiKey) headers['x-api-key'] = apiKey;
+  else { headers.authorization = `Bearer ${authToken}`; headers['anthropic-beta'] = 'oauth-2025-04-20'; }
+  const models = [];
+  let afterId = null;
+  try {
+    // /v1/models paginates with after_id / has_more / last_id.
+    for (let page = 0; page < 10; page++) {
+      const url = `${baseUrl}/v1/models?limit=100${afterId ? `&after_id=${encodeURIComponent(afterId)}` : ''}`;
+      const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) return { ok: false, reason: `models API HTTP ${res.status}` };
+      const body = await res.json();
+      for (const m of body.data || []) if (m && m.id) models.push(m);
+      if (!body.has_more || !body.last_id) break;
+      afterId = body.last_id;
+    }
+    return { ok: true, models };
+  } catch (e) {
+    return { ok: false, reason: e?.message || 'models API fetch failed' };
+  }
+}
+
+// syncCatalogFromApi — diff mc's catalog against the API inventory and
+// reconcile mc to match. MUTATES `models` (same contract as
+// applyCacheToCatalog):
+//   • API model unknown to mc → ADD (friendly id derived from the cli id,
+//     pricing inherited from the newest same-kind sibling + flagged
+//     estimatedPricing, limits from the API)
+//   • known model            → UPDATE maxCtx/maxOut from the API's real
+//     limits, and clear any stale `retired` flag
+//   • catalog model absent from the API → mark `retired: true` (kept, not
+//     deleted — cost derivation for past sessions still needs its pricing)
+// Dated-vs-bare id collisions (API lists claude-haiku-4-5 while mc pins
+// claude-haiku-4-5-20251001) collapse to one friendly id: treated as the
+// same model, updated not duplicated, never retired.
+// Returns { added, updated, retired } friendly-id arrays.
+export function syncCatalogFromApi(models, apiModels) {
+  const out = { added: [], updated: [], retired: [] };
+  if (!Array.isArray(apiModels) || apiModels.length === 0) return out;
+
+  const byCli = new Map(Object.entries(models).map(([id, m]) => [m.cliModel, id]));
+  const seenFriendly = new Set();
+
+  for (const am of apiModels) {
+    const cliModel = am?.id;
+    // Modern naming only (claude-<family>-…, family alphabetic). The legacy
+    // claude-3-* generation derives to junk ids ('3-haiku') and was never
+    // supported by mc — skip rather than pollute the picker.
+    if (!cliModel || !/^claude-[a-z]+(-|$)/.test(cliModel)) continue;
+    const friendly = deriveFriendlyId(cliModel);
+    seenFriendly.add(friendly);
+
+    const knownId = byCli.get(cliModel) || (models[friendly] ? friendly : null);
+    if (knownId) {
+      const m = models[knownId];
+      let touched = false;
+      if (am.max_input_tokens && m.maxCtx !== am.max_input_tokens) { m.maxCtx = am.max_input_tokens; touched = true; }
+      if (am.max_tokens && m.maxOut !== am.max_tokens) { m.maxOut = am.max_tokens; touched = true; }
+      if (m.retired) { delete m.retired; touched = true; }
+      if (touched && !out.updated.includes(knownId)) out.updated.push(knownId);
+      continue;
+    }
+
+    const kind = friendly.split('-')[0];
+    const sibling = Object.values(models).find((m) => m.kind === kind);
+    models[friendly] = {
+      label: friendly.toUpperCase().replace('-', ' '),
+      cliModel,
+      kind,
+      maxCtx: am.max_input_tokens || (sibling ? sibling.maxCtx : 200000),
+      maxOut: am.max_tokens || (sibling ? sibling.maxOut : undefined),
+      costPerMTokIn: sibling ? sibling.costPerMTokIn : 0,
+      costPerMTokOut: sibling ? sibling.costPerMTokOut : 0,
+      costPerMTokCacheCreation: sibling ? sibling.costPerMTokCacheCreation : 0,
+      costPerMTokCacheRead: sibling ? sibling.costPerMTokCacheRead : 0,
+      estimatedPricing: true,
+    };
+    byCli.set(cliModel, friendly);
+    out.added.push(friendly);
+  }
+
+  // Anything mc lists that the API no longer serves → retired (kept for
+  // cost history; selectors may dim it but it stays resolvable). Only when
+  // the list yielded at least one recognized model — a degenerate list
+  // (all-legacy, wrong account) must never mass-retire the catalog.
+  if (seenFriendly.size === 0) return out;
+  for (const [id, m] of Object.entries(models)) {
+    if (!seenFriendly.has(id) && !m.retired) {
+      m.retired = true;
+      out.retired.push(id);
+    }
+  }
+  return out;
+}
+
+// syncModelsFromApi — one-call convenience for boot: fetch + diff + merge.
+// Resolves { ok, reason?, added?, updated?, retired? }; never throws.
+export async function syncModelsFromApi(models, opts = {}) {
+  const r = await listApiModels(opts);
+  if (!r.ok) return r;
+  return { ok: true, ...syncCatalogFromApi(models, r.models) };
+}
+
 // deriveFriendlyId — best-effort 'claude-opus-4-8' → 'opus-4.8'. Only used
 // for models the probe discovers that aren't already in the catalog; known
 // models are matched by cliModel and updated in place. Drops 8-digit date

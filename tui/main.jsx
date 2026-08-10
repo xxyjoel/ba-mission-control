@@ -18,7 +18,7 @@ import { isSandboxed, getConfigDir } from './lib/configDir.js';
 import { loadSettings } from './lib/settings.js';
 import { syncFromSnapshot, setQuitMode } from './lib/sessionStore.js';
 import { MODELS } from './lib/models.js';
-import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange } from './lib/modelProbe.js';
+import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange, syncModelsFromApi } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
 import { killShellSession } from '../server/shellSession.mjs';
 
@@ -85,16 +85,24 @@ try {
   if (cache) applyCacheToCatalog(MODELS, cache);
 } catch { /* a bad cache must never block boot */ }
 
-// Model discovery from the source of truth (task 0368): if the claude CLI
-// version changed since the cache was stamped, re-probe in the background
-// and merge any net-new models into the live catalog — they become
-// selectable immediately (modelIds() is a live view). Billed only on an
-// actual version change; steady-state boots make one free `--version` call.
-// Runs here (not in App) so component tests never spawn probes.
+// Model discovery from the sources of truth (tasks 0368/0369), background,
+// never blocks boot. Two complementary sources feed the live catalog
+// (modelIds() is a live view, so anything merged is immediately selectable):
+//   1. The Models API inventory (GET /v1/models — what the SDK's
+//      client.models.list() wraps). FREE, complete, diffed against mc's
+//      catalog every boot: adds unknown models, updates real ctx/output
+//      limits, marks models the API no longer serves as retired. Needs an
+//      API credential in the env; silently skipped without one.
+//   2. The claude CLI alias probe — resolves what opus/sonnet/haiku point
+//      at TODAY (the API can't say) and works with CLI-only logins. Billed,
+//      so it fires only when `claude --version` changed since the stamp.
 // Skipped in sandbox mode (dev:sandbox + pty recipe tests): a throwaway
 // MC_CONFIG_DIR never has a stamped cache, so every sandbox boot would
 // trigger real billed probes.
 if (!isSandboxed()) {
+  syncModelsFromApi(MODELS)
+    .then((r) => { if (r?.ok) dlog('models', 'models-API sync', r); })
+    .catch(() => { /* discovery must never block or crash boot */ });
   autoProbeOnVersionChange(MODELS)
     .then((r) => { if (r?.probed) dlog('models', 'auto-probe on claude version change', r); })
     .catch(() => { /* discovery must never block or crash boot */ });
