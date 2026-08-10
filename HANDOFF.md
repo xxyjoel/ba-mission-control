@@ -2,6 +2,36 @@
 
 ## Current state
 
+**2026-08-10 — MODEL DISCOVERY FROM SOURCE (Opus 5) + banner false-positive fix; branch merged to main**
+— claude v2.1.220 shipped **Opus 5** (`opus` alias → `claude-opus-5`) and mc
+couldn't select it. Root causes: Settings default-model cycler was a hardcoded
+4-entry array, and `MODEL_IDS` was an import-time snapshot hiding even
+probe-discovered models. Per maintainer directive (**no hardcoded model data —
+list from the source via a function**): `modelIds()` is now a live view read by
+every selector (0367), and boot auto-discovers via `autoProbeOnVersionChange()`
+in `tui/lib/modelProbe.js` — `claude --version` vs. a version stamp in
+models-cache.json; on mismatch, probe → cache → `applyCacheToCatalog` (0368).
+Probes bill only on an actual CLI version change; failed probes don't stamp
+(retry next boot); sandbox boots never probe; probe children are `unref`'d so
+an in-flight probe can't block quit (this initially hung 2 pty sandbox
+recipes). Verified end-to-end: opus-5 discovered live, cache stamped 2.1.220.
+`models.js` static table = verified pricing book only; discovered entries carry
+`estimatedPricing`. Second source added same session (0369): `syncModelsFromApi()`
+diffs the FULL Models API inventory (GET /v1/models, free, paginated) against
+mc's catalog every boot when an env API credential exists — add / update-limits /
+mark-retired (never delete; degenerate lists can't mass-retire). No env
+credential (claude-CLI-only login, e.g. this machine) → clean skip; the alias
+probe carries discovery there, and a new model FAMILY on that path needs its
+alias added to `KNOWN_ALIASES` (one string).
+Also 0366: zoom's update-banner suppressor blanked the user's OWN typed
+composer row ("an update…has been made. a new model is available" matched
+`update…available` across the period) — cue-word gap now stops at sentence
+punctuation. Suite: all 104 test files green. **0365 (rogue session-label
+crossover) VERIFIED STILL UNFIXED** — recurred 2026-08-10 (slot 1 labeled
+ba-mission-control hosting crm-helper); sessions.json still holds 14 slots
+w/ dup cwds; verification notes appended to the task file. Next: 0365 needs
+an MC_DEBUG-instrumented repro before anyone touches the resume path.
+
 **2026-08-03 — PRE-PUBLISH VERIFY FRAMEWORK + launch-readiness dashboard**
 — Built the gap the release pipeline was missing: `npm test` tests the working
 tree, nothing tested the *tarball*. New `scripts/verify-pack.mjs` (`npm run
