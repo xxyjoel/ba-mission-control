@@ -214,7 +214,12 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   const allDone = todoTotal > 0 && todoDone >= todoTotal;
   const showBurndown = todoTotal > 0 && (agent.status === 'working' || agent.status === 'idle');
   let action, actionColor;
-  if (agent.status === 'error') {
+  if (agent.signalHealth === 'blind' && agent.status !== 'error' && agent.status !== 'paused') {
+    // 0293: zero signals (no hook feed ever + transcript never attached).
+    // Say so instead of a confident idle — live specimen 2026-08-12: a
+    // gtm-gov-miner session mined for half an hour while its card read idle.
+    action = 'no signal · mc cannot see this session'; actionColor = theme.red;
+  } else if (agent.status === 'error') {
     action = 'errored · see log'; actionColor = theme.red;
   } else if (agent.status === 'paused') {
     action = 'paused'; actionColor = theme.dim;
