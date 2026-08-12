@@ -33,6 +33,7 @@ import { fullStatus } from './git.mjs';
 import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
 import { startSubagentUsageTailer } from './subagentUsageTailer.mjs';
 import { startStatusHookTailer } from './statusHookTailer.mjs';
+import { deriveBaseStatus } from './deriveStatus.mjs';
 import { dlog } from '../tui/lib/debugLog.js';
 import { buildHookSettings } from './hookSettings.mjs';
 
@@ -913,47 +914,35 @@ export class PtyAgent extends EventEmitter {
     // overlay, unchanged — that path still needs the scrapers.
     const connectorStatus = this.status; // getter → _statusValue || 'idle'
     const ptyFresh = (Date.now() - this.lastPtyTs) < WORKING_FRESH_MS;
-    let status;
-    let approvalWaiting = false;
-    if (this.hookStatus != null) {
-      if (this.hookStatus === 'waiting') {
-        status = 'waiting';                       // permission_prompt confirmed
-      } else if (this.hookStatus === 'working') {
-        // A tool is outstanding (PreToolUse, no Stop yet). Sticky 'working' until
-        // Stop — covers the intra-turn end_turn flash (0198) with NO #scanWorking.
-        // Run ONLY the gated approval scraper as the instant-INPUT fast-path.
-        //
-        // 0256: gate the scrape on the PTY having SETTLED (!ptyFresh). A real
-        // permission box BLOCKS the session — PreToolUse fires, then output goes
-        // quiet while the box sits, so within WORKING_FRESH_MS the buffer stops
-        // changing. But a session that is genuinely WORKING streams bytes the whole
-        // time AND may render approval-SHAPED content it doesn't own — its own
-        // approvalPrompt.test.mjs / this detector's source, a web page with
-        // "Do you want to… / 1. Yes / No,…". Without the freshness gate that
-        // content false-flipped actively-working cards to INPUT? (repro: this MC
-        // session + auto-job-applier + crm-helper, all editing/browsing approval-
-        // shaped text). A genuine prompt still qualifies ~WORKING_FRESH_MS after
-        // the box paints — far ahead of the ~10-20s permission_prompt hook.
-        approvalWaiting = !ptyFresh && this.#scanApprovalPrompt();
-        status = approvalWaiting ? 'waiting' : 'working';
-      } else {
-        // hookStatus === 'idle' (Stop/idle_prompt). Idle wins when the Stop is
-        // fresher than the last JSONL event (lastConnectorTs — JSONL-only, so PTY
-        // repaint chatter can't keep the connector looking fresher; real-app
-        // verify, 2026-07-01). If the connector is freshly 'working' (a text-only
-        // turn with no PreToolUse), the connector wins so streaming reads working.
-        status = (this.hookStatusTs > this.lastConnectorTs) ? 'idle' : connectorStatus;
-      }
-    } else {
-      // UN-hooked fallback — the 0180/0198/0200 overlay, unchanged. #scanWorking
-      // bridges the turn-boundary idle window (needs BOTH the "esc to interrupt"
-      // hint AND fresh PTY output, else an idle frozen frame pins 'working'
-      // forever); #scanApprovalPrompt overlays 'waiting' on a rendered prompt.
-      const workingOverlay = connectorStatus === 'idle' && ptyFresh && this.#scanWorking();
-      const baseStatus = workingOverlay ? 'working' : connectorStatus;
-      approvalWaiting = baseStatus === 'working' && this.#scanApprovalPrompt();
-      status = approvalWaiting ? 'waiting' : baseStatus;
-    }
+    // 0293: base status comes from the pure derivation (deriveStatus.mjs) —
+    // the NEWEST signal wins, symmetrically. The old three-branch block only
+    // compared timestamps in the hookStatus==='idle' arm: 'waiting' was
+    // unconditional (stale INPUT? shown over live streaming) and 'working'
+    // was sticky until a Stop that ~8% of real feeds drop (fixtures/status-
+    // corpus/6776f170-dropped-stop; live specimen 2026-08-12: a gtm-gov-miner
+    // card read WORKING 31.9 min after its turn_duration). Scraper gating is
+    // unchanged and stays HERE (the pure fn takes results, not closures):
+    //   • approval scan — hooked path keeps the 0256 settle gate (!ptyFresh);
+    //     un-hooked path scans un-gated as before (0180/0200).
+    //   • working overlay scan — un-hooked only, double-gated (hint + fresh
+    //     bytes) exactly as 0180/0198 shipped it.
+    // Also new: signalHealth === 'blind' when there are ZERO signals (no hook
+    // feed ever + transcript never attached) — previously rendered as a
+    // confident 'idle' (live specimen 2026-08-12: gtm-gov-miner working hard,
+    // card said idle, no status ndjson + no transcript match existed).
+    const derived = deriveBaseStatus({
+      hookStatus: this.hookStatus ?? null,
+      hookStatusTs: this.hookStatusTs ?? 0,
+      connectorStatus,
+      lastConnectorTs: this.lastConnectorTs,
+      approvalScan: this.hookStatus != null
+        ? (!ptyFresh && this.#scanApprovalPrompt())
+        : this.#scanApprovalPrompt(),
+      workingScan: this.hookStatus == null && ptyFresh && this.#scanWorking(),
+    }, Date.now());
+    const status = derived.status;
+    const approvalWaiting = derived.approvalWaiting;
+    const signalHealth = derived.signalHealth;
     // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
     // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
     // user (waiting) or done (idle). Hooked: only a stuck outstanding tool
@@ -991,6 +980,7 @@ export class PtyAgent extends EventEmitter {
       ahead: this.ahead,
       behind: this.behind,
       status,
+      signalHealth,
       activeSubagents,
       context: this.context,
       tokensIn: this.tokensIn,

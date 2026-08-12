@@ -842,6 +842,10 @@ export class Agent extends EventEmitter {
       id: this.id,
       slot: this.slot,
       name: this.name,
+      // Parity with PtyAgent.toJSON (0293). The stream-json path derives
+      // state from its own event stream — by definition un-hooked, never
+      // blind (the stream IS the signal).
+      signalHealth: 'unhooked',
       model: this.model,
       // Claude's reported model after alias resolution. Card / Zoom
       // prefer this for display so `:perm` swaps and stale aliases are
