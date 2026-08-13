@@ -2,6 +2,17 @@
 
 ## Current state
 
+**2026-08-12 (follow-up) — 0371/0372 cherry-picked to main + security PASS
+(0 findings) + detection tightened** — the incident fixes were cherry-picked
+off the 0293 branch onto fix/quit-stall-bg-claim, gated (104/104), merged,
+pushed (782113e). Security review passed with zero findings; its one
+actionable observation was applied same-day: bg-claim detection now anchors
+on claude's FULL refusal phrase ("currently running as a background agent")
+so `--resume`-replayed conversation text can't false-match and suppress a
+crashing slot's restarts. Residual noted, not actioned: SIGKILL reaches the
+pty session leader, not claude's grandchildren (deep MCP subprocesses can
+still orphan on hard kill) — file a task if it ever bites.
+
 **2026-08-12 — LIVE INCIDENT root-caused: quit-stall → force-close → daemon
 adopts orphan as BACKGROUND AGENT → session unresumable ("can't connect")**
 — gtm-gov-miner's pane sat on a permission prompt; `q → save` hung because
