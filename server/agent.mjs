@@ -764,16 +764,27 @@ export class Agent extends EventEmitter {
       try { this.proc.kill('SIGTERM'); } catch {}
     }
     if (this.transcriptStream) {
-      try {
-        this.transcriptStream.write(JSON.stringify({
-          ts: Date.now(),
-          source: 'local',
-          tailEntry: { kind: 'sys', text: 'transcript closed · session killed' },
-        }) + '\n');
-        this.transcriptStream.end();
-      } catch {}
-      this.transcriptStream = null;
+      this._closeTranscript();
     }
+  }
+
+  // hardKill — SIGKILL escalation for shutdown; see ptyAgent.hardKill.
+  hardKill() {
+    if (this.proc) {
+      try { this.proc.kill('SIGKILL'); } catch {}
+    }
+  }
+
+  _closeTranscript() {
+    try {
+      this.transcriptStream.write(JSON.stringify({
+        ts: Date.now(),
+        source: 'local',
+        tailEntry: { kind: 'sys', text: 'transcript closed · session killed' },
+      }) + '\n');
+      this.transcriptStream.end();
+    } catch {}
+    this.transcriptStream = null;
   }
 
   // Switch a running session to a new permission mode. claude doesn't
