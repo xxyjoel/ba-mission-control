@@ -491,7 +491,12 @@ export class PtyAgent extends EventEmitter {
     // a force-closed mc — 2026-08-12 incident). Every retry fails
     // identically, so don't burn the restart budget on it; surface the
     // actionable remediation instead.
-    if (code !== 0 && /background agent/i.test(this._spawnProbeBuf || '')) {
+    // Anchor on claude's full refusal phrase, not a loose substring:
+    // `--resume` replays prior conversation into the PTY, so replayed
+    // prose mentioning "background agent" must not suppress the restart
+    // of a genuinely-crashing slot (security-review observation,
+    // 2026-08-12).
+    if (code !== 0 && /currently running as a background agent/i.test(this._spawnProbeBuf || '')) {
       this.appendTail({
         kind: 'err',
         text: 'session is held by a claude background agent (orphan from a previous force-close?) — `claude agents` to attach/stop it, then :resume this slot',
