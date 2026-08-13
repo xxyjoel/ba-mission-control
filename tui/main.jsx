@@ -247,3 +247,18 @@ await app.waitUntilExit();
 persistOpenSet();            // capture live set BEFORE killing on clean quit
 try { killShellSession(); } catch {}
 try { fleet.killAll(); } catch {}
+// Quit-stall guard (2026-08-12 incident): this path previously ended here
+// with NO process.exit — node waited for the event loop to drain. A child
+// that ignores SIGTERM (wedged on a permission prompt / entangled with
+// claude's daemon) keeps its PTY handle open, so the loop never drains and
+// mc hangs after `q → save`; the user's force-close then orphans that child
+// into claude's daemon as a background agent, which blocks resuming the
+// session on the next boot ("currently running as a background agent").
+// Give SIGTERM a short grace, SIGKILL stragglers, and exit explicitly —
+// matching the signal path's semantics. unref() keeps the timer from
+// holding the loop open itself: a clean drain still exits immediately.
+const reapTimer = setTimeout(() => {
+  try { fleet.hardKillAll(); } catch {}
+  process.exit(0);
+}, 1500);
+reapTimer.unref?.();

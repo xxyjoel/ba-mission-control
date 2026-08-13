@@ -2,6 +2,29 @@
 
 ## Current state
 
+**2026-08-12 — LIVE INCIDENT root-caused: quit-stall → force-close → daemon
+adopts orphan as BACKGROUND AGENT → session unresumable ("can't connect")**
+— gtm-gov-miner's pane sat on a permission prompt; `q → save` hung because
+tui/main.jsx's clean-quit tail had NO process.exit (event loop held open by
+the SIGTERM-ignoring child's PTY handle); user force-closed; claude's daemon
+adopted the orphan as a bg agent (verified: `claude agents --json` showed
+ed034538 bg/waiting pid 4925); every mc respawn then exited 1 with
+"currently running as a background agent". REMEDIATED live: killed pid 4925,
+verified resume works, user `:resume 7`. FIXED (0371): quit tail now
+killAll → 1.5s unref'd grace → fleet.hardKillAll (SIGKILL) → exit(0);
+hardKill added to both agent classes. FIXED (0372): bg-claim refusal is
+detected from the first 4KB of spawn output → actionable card error, no
+restart-budget burn (normal crashes still restart — tested). NOTE appended
+to 0365: crm-helper's old sid c0855468 is ALSO bg-held while its slot runs a
+new sid — resume-failure → silent identity change is a plausible 0365
+mechanism; instrument resume failures during the repro. ALSO: another bg
+orphan remains (c0855468, pid 32615, idle) — user's call to stop it. Docs:
+README reliability/caveats + backoff numbers corrected; website feature grid
+gains model-switching + day-one-model-discovery cards and a resume-focused
+restore card. ALL committed on `forge/status-accuracy/0293-recency-arbitration`
+(working tree was on that other session's branch; 0371/0372 merge with it —
+or cherry-pick 4 commits to main if 0293 stalls). NOT pushed.
+
 **2026-08-10 — MODEL DISCOVERY FROM SOURCE (Opus 5) + banner false-positive fix; branch merged to main**
 — claude v2.1.220 shipped **Opus 5** (`opus` alias → `claude-opus-5`) and mc
 couldn't select it. Root causes: Settings default-model cycler was a hardcoded

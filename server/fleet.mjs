@@ -166,6 +166,15 @@ export class Fleet extends EventEmitter {
     for (const a of this.agents) if (a) a.kill();
   }
 
+  // hardKillAll — SIGKILL any child that survived killAll()'s SIGTERM.
+  // Shutdown escalation only: a wedged claude (permission prompt, daemon
+  // entanglement) that ignores SIGTERM holds its PTY handle open and stalls
+  // mc's quit forever; the force-close that follows orphans it into claude's
+  // daemon as a background agent, which then blocks resuming that session.
+  hardKillAll() {
+    for (const a of this.agents) if (a) a.hardKill?.();
+  }
+
   // Propagate a new default per-slot cost cap to every live agent and
   // to the fleet's stored default (used when new sessions launch).
   // Emits 'change' so any UI showing the cap state refreshes.

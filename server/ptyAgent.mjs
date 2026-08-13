@@ -394,9 +394,11 @@ export class PtyAgent extends EventEmitter {
     //      latest claude output — read by zoom on mount/re-mount)
     //   2) liveness for stuck-detection in toJSON()
     try {
+      this._spawnProbeBuf = ''; // first output after (re)spawn — read on early exit
       this._termDataSub = this.pty.onData((chunk) => {
         this.lastEventTs = Date.now();
         this.lastPtyTs = Date.now(); // PTY-only clock for the idle→working overlay
+        if (this._spawnProbeBuf.length < 4096) this._spawnProbeBuf += chunk;
         if (this.term) {
           try { this.term.write(chunk); } catch {}
         }
@@ -483,6 +485,21 @@ export class PtyAgent extends EventEmitter {
     if (this.killed) return;
     if (signal === 'SIGSTOP' || signal === 'SIGCONT') return;
     this.appendTail({ kind: 'sys', text: `process exited code=${code} signal=${signal || ''}` });
+
+    // Session claimed elsewhere: claude refuses `--resume` when the session
+    // is held by its daemon as a background agent (typically an orphan from
+    // a force-closed mc — 2026-08-12 incident). Every retry fails
+    // identically, so don't burn the restart budget on it; surface the
+    // actionable remediation instead.
+    if (code !== 0 && /background agent/i.test(this._spawnProbeBuf || '')) {
+      this.appendTail({
+        kind: 'err',
+        text: 'session is held by a claude background agent (orphan from a previous force-close?) — `claude agents` to attach/stop it, then :resume this slot',
+      });
+      this.status = 'error';
+      this.emit('change');
+      return;
+    }
 
     // Auto-restart on transient (non-zero, non-null) exit. Backoff
     // 2s, 5s, 15s up to RESTART_MAX. Uses --resume because JSONL exists from
@@ -679,6 +696,17 @@ export class PtyAgent extends EventEmitter {
     }
     if (this.pty) {
       try { this.pty.kill('SIGTERM'); } catch {}
+    }
+  }
+
+  // hardKill — SIGKILL escalation for shutdown. A claude child wedged on a
+  // permission prompt (or entangled with the claude daemon) can ignore
+  // SIGTERM; its open PTY handle then holds mc's event loop forever — the
+  // quit-stall → force-close → orphan-adopted-as-background-agent chain
+  // (2026-08-12 incident, gtm-gov-miner). kill() must have run first.
+  hardKill() {
+    if (this.pty) {
+      try { this.pty.kill('SIGKILL'); } catch {}
     }
   }
 

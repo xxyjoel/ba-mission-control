@@ -563,3 +563,42 @@ test('PtyAgent.markUserSubmitted: flips status to working synchronously', () => 
   assert.ok(changed >= 1, 'must emit change event');
   p.kill();
 });
+
+// ─── shutdown escalation + bg-agent claim (0371/0372) ─────────────
+
+test('hardKill: SIGKILLs the pty after kill()\'s SIGTERM (quit-stall escalation)', () => {
+  const fake = makeFakeSpawn();
+  const p = makeAgent(fake);
+  p.start();
+  const pty = fake.spawned[0];
+  p.kill();
+  assert.deepEqual(pty._kills, ['SIGTERM']);
+  p.hardKill();
+  assert.deepEqual(pty._kills, ['SIGTERM', 'SIGKILL']);
+});
+
+test('bg-agent claim on exit: actionable error, NO restart budget burned', () => {
+  const fake = makeFakeSpawn();
+  const p = makeAgent(fake);
+  p.start();
+  const pty = fake.spawned[0];
+  pty.fireData('Session abc is currently running as a background agent (bg). Use `claude agents` to find and attach to it.');
+  pty.fireExit({ exitCode: 1 });
+  assert.equal(p.status, 'error');
+  assert.equal(p.restartTimer, null, 'no auto-restart scheduled — every retry fails identically');
+  const tail = p.tail.map((l) => l.text).join('\n');
+  assert.match(tail, /background agent/);
+  assert.match(tail, /:resume/);
+  p.kill();
+});
+
+test('ordinary crash still auto-restarts (bg-claim detection must not overtrigger)', () => {
+  const fake = makeFakeSpawn();
+  const p = makeAgent(fake);
+  p.start();
+  const pty = fake.spawned[0];
+  pty.fireData('some normal claude output\n');
+  pty.fireExit({ exitCode: 1 });
+  assert.notEqual(p.restartTimer, null, 'transient crash schedules a restart');
+  p.kill();
+});

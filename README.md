@@ -693,11 +693,20 @@ These guard against the failure modes that hit hardest at fleet scale.
   flow; `:kill!` (bang) bypasses for explicit batch use.
 - **Auto-restart on transient errors.** When a `claude` subprocess exits
   unprompted with a non-zero code, the slot retries up to **3 times** with
-  exponential backoff (1s → 2s → 4s), restarting via `--resume <session-id>`
+  widening backoff (2s → 5s → 15s), restarting via `--resume <session-id>`
   so the in-progress conversation is preserved. The retry counter resets on
   the next successful `init` event, so a recovered slot is eligible again
   on its next independent failure. After 3 failed restarts the slot enters
   the errored state with `K clears slot` hint.
+- **Quit can't stall.** `q → save` SIGTERMs every child, gives them a 1.5s
+  grace, SIGKILLs any straggler, and exits — a claude wedged on a permission
+  prompt can no longer hold mc's shutdown hostage (previously the quit hung
+  until a force-close, which orphaned that child into claude's daemon).
+- **Background-agent claim detection.** If a session can't resume because
+  claude's daemon holds it as a background agent (the usual leftover of a
+  force-closed terminal), the card says exactly that — with the fix
+  (`claude agents` → stop the orphan, then `:resume` the slot) — instead of
+  silently burning restart attempts on a failure that can't succeed.
 - **Stuck-detection.** When a slot is in `working` or `waiting` status but
   hasn't emitted any event from the subprocess in the last 5 minutes, the
   card shows a red `STUCK Nm` chip and a one-shot toast fires (`slot N ·
@@ -727,6 +736,12 @@ These guard against the failure modes that hit hardest at fleet scale.
 ## Known caveats
 
 - **Single user.** No multi-user sessions, no per-user repos.
+- **Force-killing mc orphans its children.** claude's daemon adopts an
+  orphaned pane as a *background agent*, and that session then refuses
+  `--resume` ("currently running as a background agent") until the orphan is
+  stopped via `claude agents`. mc's card surfaces this state with the
+  remediation; prefer `q → save` (which now cannot stall) over killing the
+  terminal.
 - **Pause via SIGSTOP** freezes the process but does not cancel in-flight API
   requests. The claude subprocess will receive their results when SIGCONT'd.
 - **Permission prompts in `default` mode.** The stream-json wire format does
