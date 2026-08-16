@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel a superseded run on the same ref — testing an older sha is irrelevant
+# once a newer push lands. See forge docs/ci.md "CI cost & efficiency".
+concurrency:
+  group: forge-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: tests
