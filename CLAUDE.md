@@ -50,6 +50,20 @@ The TUI reads `fleet.snapshot()` directly and subscribes to
 - Always prefer adding a TODO comment over deferring work in chat. Format:
   `// TODO(<short-tag>): <what + why>` at the relevant line.
 
+## Records — task db only (org directive, 2026-08-15)
+
+The task db (`tasks/`) is the single record for this project. The HANDOFF
+method is retired (archive: `docs/archive/HANDOFF-retired-2026-08-15.md`).
+
+- Write the narrative context of a change in the task's **Why** section.
+- Write the outcome (sha, files, test result) in the task's **Result** section.
+- For an incident that spans tasks, put the full story in the first task's
+  Why section. Link the other tasks by id inside the task files.
+- Do **not** create `HANDOFF.md` or `NOTES.md`. The forge pre-push gate
+  activates when such a file exists, and it would block pushes again.
+- Cross-session continuity comes from `tasks/_index.md`, the task files, and
+  the git log — not from a narrative document.
+
 ## Non-goals (don't add)
 
 - Web frontend / HTTP server. We deleted Express on purpose — the CLI is the
@@ -58,20 +72,36 @@ The TUI reads `fleet.snapshot()` directly and subscribes to
 - Multi-user, auth, network exposure. Localhost / single user only.
 
 
-<!-- forge:claude-md:v1 -->
+<!-- forge:claude-md:v2 -->
 ## Forge integration
 
 This project uses **forge** (`~/.claude/forge/`) for goal decomposition,
 task tracking, GitFlow discipline, security review, cost gates, and
 self-improvement telemetry.
 
+### Authority
+
+While forge is installed, **forge is THE authoritative operating procedure for
+this project** — not a default that can be worked around. All of the following
+flow through forge and nowhere else:
+
+- **Tasks** — created, tracked, and closed through the `tasks/` tree (never ad-hoc).
+- **Issues** — filed via `forge-bug-logger`; kept in parity with tasks by `/forge:sync`.
+- **Planning** — charters in `.claude/plans/`, decomposed via `/forge:goal`.
+- **Objectives** — tracked in `docs/objectives.md` (the conformance contract).
+- **Conformance** — `/forge:doctor` verifies this project obeys every directive.
+
+When this section conflicts with another project convention, **forge wins for
+this project.** Bypassing a forge gate requires `FORGE_SKIP=1` (logged), never a
+silent workaround.
+
 ### Entry points
 
-- `/forge-goal "<one-line goal>"` — start a new initiative
-- `/forge-status` — see the dashboard
-- `/forge-deploy <target>` — gated cloud deploy
-- `/forge-improve` — run the telemetry → improvement-tasks loop
-- `/forge-context-check` — should we /compact or /clear?
+- `/forge:goal "<one-line goal>"` — start a new initiative
+- `/forge:status` — see the dashboard
+- `/forge:deploy <target>` — gated cloud deploy
+- `/forge:improve` — run the telemetry → improvement-tasks loop
+- `/forge:context-check` — should we /compact or /clear?
 
 ### Conventions
 
@@ -85,22 +115,25 @@ self-improvement telemetry.
 
 ### Agent roster
 
-Forge ships 22 specialized subagents. Common ones to invoke directly:
+Forge ships 13 specialized subagents. Common ones to invoke directly:
 
 - `forge-code-implementer` — implement ONE bite-sized task
 - `forge-test-author` — write the paired test first
 - `forge-test-runner` — execute tests, hand failures to bug-logger
-- `forge-security-reviewer` — pre-push diff audit
-- `forge-pillar-{operational-excellence,security,reliability,performance,cost,sustainability}` — WAF pillar gates for deploys
-- `forge-energy-profiler` — per-process energy + perf measurement (mJ where available)
+- `forge-security-reviewer` — pre-push diff audit (code security)
+- `forge-deploy-reviewer` — single pre-deploy gate: all 6 WAF pillars + cost estimate
+- `forge-improve` — post-deploy observability + telemetry→improvement loop (cost variance, energy/perf, usage distill)
 
 Full list: `ls ~/.claude/forge/agents/`.
 
 ### Hard rules
 
 - Tasks > 3 files or > 100 LOC must be split.
+- Code formatting is enforced at commit by the `pre-commit` format gate —
+  staged files only, block on drift, detect (never install) the project's
+  formatter. Override with `.forge-format`. See `docs/formatting.md`.
 - Every cloud deploy goes through `/forge-deploy` (never raw `terraform apply`).
 - Security review runs on every push to `main`.
-- Improvement tasks from `forge-usage-distiller` are ALWAYS surfaced for
+- Improvement tasks from `forge-improve` are ALWAYS surfaced for
   human approval — the system never auto-acts on user telemetry.
-<!-- /forge:claude-md:v1 -->
+<!-- /forge:claude-md:v2 -->
