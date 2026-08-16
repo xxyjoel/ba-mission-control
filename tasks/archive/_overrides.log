@@ -55,3 +55,8 @@
 2026-07-23T20:56:57Z skip=pre-commit reason=user-override branch=forge/overlay-terminal/batch-1
 2026-07-23T21:00:00Z 0326 FORGE_SKIP=1 LOC=230 limit=200 reason=test-author-only-no-product-code branch=forge/overlay-terminal/batch-1 note=174-LOC-injection-test-file(8-tests-covering-7-metachar-vectors)+56-LOC-task-file-Result-prose;zero-hand-written-product-code-impl-pre-existed-in-0311
 2026-07-23T21:05:51Z skip=pre-commit reason=user-override branch=forge/overlay-terminal/batch-1
+2026-08-03T00:43:25Z skip=pre-commit reason=user-override branch=forge/stabilization/release-blockers
+2026-08-03T00:43:25Z skip=pre-commit reason=user-override branch=forge/stabilization/release-blockers
+2026-08-03T22:58:23Z skip=pre-commit reason=user-override branch=forge/stabilization/prepublish-verify-harness
+2026-08-12T20:47:22Z skip=pre-commit reason=user-override branch=forge/status-accuracy/0293-recency-arbitration
+2026-08-16T01:18:39Z skip=pre-commit reason=user-override branch=docs/retire-handoff
