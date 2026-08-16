@@ -2,6 +2,13 @@
 
 ## Current state
 
+**2026-08-15 — forge 1.6.1 re-wired + CI concurrency fix** — `/forge:init`
+re-registered the project (profile: cli/semver, human-confirmed). Doctor:
+27 pass / 7 warn / 0 fail. Fixed the one actionable warn: forge-ci.yml now
+cancels a superseded run on the same ref. Remaining warns are triaged as
+not-applicable (targets.yaml — no cloud surface) or cosmetic (plan charter
+sections; project-local CI-iterate docs).
+
 **2026-08-12 (follow-up) — 0371/0372 cherry-picked to main + security PASS
 (0 findings) + detection tightened** — the incident fixes were cherry-picked
 off the 0293 branch onto fix/quit-stall-bg-claim, gated (104/104), merged,
