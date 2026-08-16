@@ -61,26 +61,20 @@ over SSH.
 
 ## Quick start
 
-<!-- TODO(release): after `npm publish` of @bluearch/mission-control succeeds,
-     promote the registry install (`npx @bluearch/mission-control`) back to the
-     primary block and drop the "coming soon" note + the github: fallback. The
-     github: install below is the interim path while npm/Homebrew aren't live. -->
-Requires **Node 20+**. Installs straight from the public repo — works today:
+Requires **Node 20+** and platform build tools for the PTY layer (macOS:
+Xcode Command Line Tools; Linux: `build-essential`).
 
 ```sh
 # Run it now, no install:
-npx github:xxyjoel/ba-mission-control
+npx @bluearch/mission-control
 
 # …or install the `mc` command globally:
-npm install -g github:xxyjoel/ba-mission-control
+npm install -g @bluearch/mission-control
 mc
 ```
 
-> **📦 npm-registry & Homebrew installs are coming soon.** Once the package is
-> published to npm you'll also be able to `npx @bluearch/mission-control`,
-> `npm i -g @bluearch/mission-control`, or
-> `brew tap bluearchio/tap && brew install mission-control`. Until then, use the
-> GitHub install above (or [from source](#from-source)) — same app, same `mc`.
+> Installing from the repo also works (`npx github:xxyjoel/ba-mission-control`)
+> and tracks `main` instead of the released version. A Homebrew tap is planned.
 
 Prefer to hack on it? See [From source](#from-source) below and
 [CONTRIBUTING.md](./CONTRIBUTING.md).
