@@ -36,3 +36,5 @@ templates.json
 
 # Forge task registry — internal dev state, not part of the public product.
 tasks/
+tasks/.cache/
+.forge/plugin-precedence.yml

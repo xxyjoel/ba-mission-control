@@ -1,0 +1,67 @@
+# .forge/targets.yaml — per-environment deploy config for this project.
+# Non-secret: commit this file. Real credentials (OIDC role ARN, region) live
+# in GitHub Environments and are never written here.
+# Rename to targets.yaml and fill in account/ARN/budget for each environment.
+# Schema reference: docs/deploy-environments.md
+
+environments:
+
+  dev:
+    # deploy: local — dev is always in-session; never deployed from CI.
+    deploy: local
+    # AWS region for local IaC runs.
+    region: us-east-1
+    # AWS account ID for this environment (non-secret; no creds stored here).
+    account: "ACCOUNT_ID"
+    # IaC tool: terraform | cdk | pulumi | cloudformation
+    iac: terraform
+    # IaC workspace / stack name.
+    workspace: dev
+    # Spend ceiling in USD; forge-deploy-reviewer blocks if estimated cost exceeds this.
+    budget_usd: 50
+    # Per-env gate rigor. These ARE the zero-migration defaults applied when the
+    # block is absent — see docs/env-expectations.md. Edit only to deviate.
+    expectations:
+      security: advisory     # secrets-in-code still always blocks
+      cost: advisory
+      energy: block          # >15% regression vs tasks/.energy baselines blocks
+
+  staging:
+    # deploy: ci — staging is deployed automatically on every push to main.
+    deploy: ci
+    region: us-east-1
+    account: "ACCOUNT_ID"
+    iac: terraform
+    workspace: staging
+    budget_usd: 200
+    # OIDC IAM role assumed by the CI job (required for deploy: ci).
+    # Create this role in your AWS account; set the GitHub Environment variable
+    # OIDC_ROLE_ARN to this value — do NOT paste real ARNs here.
+    oidc_role_arn: "arn:aws:iam::ACCOUNT_ID:role/forge-deploy-staging"
+    # Defaults-when-absent per docs/env-expectations.md.
+    expectations:
+      security: block        # full WAF rigor — gap-critical blocks
+      cost: block
+      uat: required          # human sign-off recorded in .forge/env-state.yaml
+      isolation: required    # no customer-facing endpoints in staging plan
+
+  prod:
+    # deploy: ci — prod is deployed via release-tag or workflow_dispatch only.
+    deploy: ci
+    region: us-east-1
+    account: "ACCOUNT_ID"
+    iac: terraform
+    workspace: prod
+    budget_usd: 1000
+    oidc_role_arn: "arn:aws:iam::ACCOUNT_ID:role/forge-deploy-prod"
+    # manual: true — forge-doctor and the CI workflow enforce a GitHub Environment
+    # required-reviewer gate before any prod apply runs.
+    manual: true
+    # Defaults-when-absent per docs/env-expectations.md. stress_test_cmd has no
+    # default — prod deploys REFUSE until you set one.
+    expectations:
+      security: block-stringent      # gap-medium in security/reliability also blocks
+      cost: block
+      promotion_integrity: block     # prod SHA must equal staging's UAT-approved SHA
+      stress_test_cmd: "<cmd>"       # e.g. "make stress" — required for prod
+      new_functionality: forbidden   # zero net new functionality at prod
