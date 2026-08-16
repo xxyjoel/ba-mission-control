@@ -1,0 +1,26 @@
+# .forge-format — per-project formatter override for the forge pre-commit gate.
+#
+# To activate: copy this file to `.forge-format` at your repo root, then put ONE
+# line below naming the formatter command (binary + flags ONLY). forge appends
+# the staged file paths for you — do NOT add file arguments or shell operators; the
+# line is parsed as argv and run directly (never eval'd), so `;`, `|`, command
+# substitution are inert.
+#
+# The first word must be an allowed formatter binary. Default allowlist:
+#   prettier black ruff isort yapf autopep8 gofmt rustfmt cargo clang-format
+#   shfmt dprint eslint taplo ktlint swiftformat php-cs-fixer yamlfmt
+# Permit another binary with: FORGE_FORMAT_ALLOW=mytool git commit  (colon-sep).
+#
+# Examples (one line, no file args — forge appends the staged paths):
+#
+#   prettier --write
+#   black
+#   ruff format
+#   gofmt -w
+#   rustfmt
+#   clang-format -i
+#
+# Leave this file as `.forge-format.example` (inert) if auto-detection already
+# picks the right formatter — see docs/formatting.md for the detection order.
+#
+# --- put your one-line formatter command below this line ---
