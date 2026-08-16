@@ -21,6 +21,19 @@
 #   review is the in-session forge-deploy-reviewer agent per
 #   docs/deploy-environments.md — neither half replaces the other.
 
+# DEACTIVATED (.example suffix) — this project has no cloud surface
+# (.forge/profile.yml: type cli; no infra/ tree; no .forge/targets.yaml).
+# Left active, this workflow fires on every push to main, fails at the AWS
+# credentials step, and auto-creates unprotected GitHub Environments
+# (security review 2026-08-15, issue #29).
+#
+# Before you activate it (rename to forge-deploy.yml):
+#   1. Fill .forge/targets.yaml (accounts, oidc_role_arn, budgets).
+#   2. Create the `prod` GitHub Environment WITH a required-reviewer rule —
+#      that rule is the only human gate on prod terraform apply.
+#   3. Pin the third-party actions (tfsec-action, checkov-action) to full
+#      commit SHAs — they run with deploy credentials in scope.
+#   4. Reconsider tfsec (unmaintained since 2023); trivy-action scans config.
 name: forge-deploy
 
 on:

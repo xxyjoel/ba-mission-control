@@ -1,0 +1,119 @@
+# forge-security-review.yml — always-on headless security backstop (CI half of
+# the hybrid model). This workflow is deterministic and requires no API key or
+# Claude Code. It handles the two tractable headless checks:
+#   1. Secret/pattern scan of changed files (push + PR)
+#   2. Dependency advisory scan via GitHub Advisory Database (PR only)
+#
+# The in-session director half (forge-security-reviewer agent driven by Claude)
+# does the deeper, context-aware analysis per docs/security.md. CI can't invoke
+# Claude — this workflow is the always-on backstop, not a replacement.
+#
+# Severity → job result (per docs/security.md):
+#   CRITICAL → job fails (non-zero exit / dependency-review fail-on-severity)
+#   HIGH     → GH issue filed, job passes
+#   MEDIUM   → GH issue filed informational, job passes
+#   LOW      → GH issue filed informational, job passes
+
+name: forge-security-review
+
+on:
+  push:
+    # Skip the scan on push when only docs/tasks/Markdown housekeeping changed.
+    # NOT applied to pull_request: a skipped run never reports, which would
+    # permanently block a required status check. See docs/ci.md.
+    paths-ignore:
+      - 'docs/**'
+      - 'tasks/**'
+      - 'HANDOFF.md'
+      - '**/*.md'
+  pull_request:
+
+# Cancel a superseded scan on the same ref — scanning an older sha is irrelevant
+# once a newer push lands. See docs/ci.md "CI cost & efficiency".
+concurrency:
+  group: forge-security-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secret-scan:
+    name: Secret / pattern scan
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan diff for secrets and shell-injection patterns
+        id: scan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Values come via env (never inlined into the script) to avoid
+          # GitHub Actions expression injection (CWE-94).
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            DIFF=$(git diff "origin/${BASE_REF}...HEAD")
+          else
+            DIFF=$(git diff HEAD~1 HEAD 2>/dev/null || git show HEAD)
+          fi
+
+          SECRET_PAT='(-----BEGIN [A-Z ]+PRIVATE KEY-----|AKIA[0-9A-Z]{16}|xox[abp]-[A-Za-z0-9-]{20,})'
+          INJECT_PAT='(\$\([^)]*\beval\b|\bexec\b[[:space:]]*\$[{(]|\bos\.system\([^)]*\$)'
+
+          HITS=$(echo "$DIFF" | grep -E "$SECRET_PAT|$INJECT_PAT" | head -5 || true)
+
+          if [[ -n "$HITS" ]]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "hits<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$HITS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File GH issue (dedupe) and fail on secret find
+        if: steps.scan.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          SHA: ${{ github.sha }}
+          HITS: ${{ steps.scan.outputs.hits }}
+        run: |
+          # All expression values arrive via env and are referenced as shell
+          # vars — never inlined into the script — to avoid Actions injection.
+          # BRANCH is attacker-influenced (branch name); sanitize before reuse.
+          SAFE_BRANCH=$(printf '%s' "$BRANCH" | tr -cd 'A-Za-z0-9._/-')
+          TITLE="security: secret/injection pattern detected on ${SAFE_BRANCH} @ ${SHA:0:8}"
+          LABELS="security,critical,branch:${SAFE_BRANCH}"
+
+          # Dedupe: check for open issue with same title fragment
+          EXISTING=$(gh issue list --label "security,critical" --state open \
+            --json number,title \
+            --jq ".[] | select(.title | contains(\"${SAFE_BRANCH}\")) | .number" | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" \
+              --body "$(printf 'Re-scan hit on %s:\n\n```\n%s\n```' "$SHA" "$HITS")"
+          else
+            gh issue create --title "$TITLE" --label "$LABELS" \
+              --body "$(printf '**Severity:** CRITICAL\n**SHA:** %s\n**Branch:** %s\n\n```\n%s\n```' "$SHA" "$SAFE_BRANCH" "$HITS")"
+          fi
+
+          echo "::error::CRITICAL secret/injection pattern found — see filed issue."
+          exit 1
+
+  dependency-review:
+    name: Dependency vulnerability review (GitHub Advisory DB)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: critical
