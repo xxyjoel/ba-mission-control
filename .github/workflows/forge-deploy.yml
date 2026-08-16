@@ -1,0 +1,197 @@
+# forge-deploy.yml — always-on headless CI deploy (staging auto + prod manual).
+#
+# DESIGN NOTES
+# ============
+# OIDC / no static keys:
+#   Auth uses aws-actions/configure-aws-credentials@v4 with role-to-assume.
+#   No AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY appears anywhere in this
+#   file or in GitHub secrets. Role ARNs live in GitHub Environments
+#   (vars.OIDC_ROLE_ARN) and are never committed to the repo.
+#
+# Injection-safe (CWE-94):
+#   Every ${{ }} expression value that reaches a run: block is passed via
+#   env: and referenced as a plain shell variable ($VAR). No ${{ github.* }},
+#   ${{ steps.*.outputs.* }}, or other expressions are inlined directly in
+#   run: scripts. This is the same defence applied in forge-security-review.yml
+#   after the injection bug was caught in our own security loop.
+#
+# Headless half only:
+#   This workflow runs terraform plan + tfsec/checkov before every apply.
+#   A policy failure or plan error blocks the apply. The deeper, interactive
+#   review is the in-session forge-deploy-reviewer agent per
+#   docs/deploy-environments.md — neither half replaces the other.
+
+name: forge-deploy
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (prod only — staging deploys automatically on push to main)"
+        required: true
+        default: prod
+        type: choice
+        options:
+          - prod
+
+# Serialize deploys per environment, but NEVER cancel one in flight. Aborting a
+# running `terraform apply` can leave infrastructure half-applied and require
+# manual recovery, so cancel-in-progress is false — the next deploy QUEUES behind
+# the running one. (CI/security workflows cancel; deploy must not.) The group keys
+# on the target environment so staging (push) and prod (release/dispatch) queue
+# independently. See docs/ci.md "CI cost & efficiency".
+concurrency:
+  group: forge-deploy-${{ github.event_name == 'push' && 'staging' || 'prod' }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # deploy-staging
+  # Triggers automatically on every push to main.
+  # GitHub Environment "staging" scopes the OIDC role and any per-env vars.
+  # ---------------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy — staging
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: infra
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -out=tfplan -no-color
+        working-directory: infra
+
+      - name: tfsec — static policy gate
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: infra
+          soft_fail: false
+
+      - name: checkov — policy-as-code gate
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: infra
+
+  # ---------------------------------------------------------------------------
+  # deploy-prod
+  # Triggers ONLY on a published GitHub Release or manual workflow_dispatch.
+  # There is NO push trigger for prod.
+  # GitHub Environment "prod" MUST have a required-reviewer protection rule —
+  # that rule is the manual gate; forge cannot provision it (project sets it up).
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    name: Deploy — prod
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    environment: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release ref for dispatch
+        id: ref
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        # Pass event context via env — never inline ${{ }} in run: scripts (CWE-94).
+        run: |
+          echo "Deploying ref: ${REF_NAME} (trigger: ${EVENT_NAME})"
+
+      - name: Promotion integrity — same SHA as staging + UAT approved (forge)
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+        # Pass context via env — never inline ${{ }} in run: scripts (CWE-94).
+        # Contract: docs/env-expectations.md — prod runs the exact SHA staging
+        # validated (zero net new functionality), with human UAT sign-off.
+        run: |
+          state=".forge/env-state.yaml"
+          if [ ! -f "$state" ]; then
+            echo "::error::no $state at this commit — deploy staging + record UAT before promoting to prod"
+            exit 1
+          fi
+          # last_deploy is the first line of the staging block; anchor uat to its
+          # own sub-line so a gate key named "status" can't be picked up instead.
+          staging_sha=$(awk '/^  staging:/{f=1;next} /^  [a-z]+:/{f=0} f&&/last_deploy:/{print; exit}' "$state" | grep -oE 'sha: [0-9a-f]+' | head -1 | awk '{print $2}')
+          uat=$(awk '/^  staging:/{f=1;next} /^  [a-z]+:/{f=0} f&&/^    uat:/{print; exit}' "$state" | grep -oE 'status: [a-z]+' | head -1 | awk '{print $2}')
+          if ! printf '%s' "$staging_sha" | grep -qE '^[0-9a-f]{7,40}$'; then
+            echo "::error::SHA MISMATCH: no valid staging sha recorded (got '${staging_sha:-none}') — deploy staging first"
+            exit 1
+          fi
+          case "$CANDIDATE_SHA" in
+            "$staging_sha"*) : ;;
+            *)
+              echo "::error::SHA MISMATCH: candidate $CANDIDATE_SHA is not staging's validated sha (${staging_sha:-none}) — promote the staging-validated commit"
+              exit 1 ;;
+          esac
+          if [ "$uat" != "approved" ]; then
+            echo "::error::STAGING UAT NOT APPROVED (status: ${uat:-none}) — forge-env-state.sh uat approve staging --by <user>"
+            exit 1
+          fi
+          echo "promotion integrity OK: $CANDIDATE_SHA matches staging ($staging_sha), UAT approved"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.OIDC_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: infra
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -out=tfplan -no-color
+        working-directory: infra
+
+      - name: tfsec — static policy gate
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: infra
+          soft_fail: false
+
+      - name: checkov — policy-as-code gate
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: infra

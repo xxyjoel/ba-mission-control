@@ -39,7 +39,7 @@ commits). Pick one:
 - [ ] Set repo description + topics (`claude-code`, `tui`, `agents`,
       `tmux-alternative`) and upload a 1280×640 **social preview** image.
 
-## 4. Content still needed (tracked in HANDOFF)
+## 4. Content still needed (tracked in the task db)
 
 - [ ] BlueArch brand kit → finalize `docs/assets/tokens.css`.
 - [ ] Generate demo GIFs: `brew install vhs && vhs tapes/hero.tape` →

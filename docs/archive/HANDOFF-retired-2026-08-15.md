@@ -1,4 +1,10 @@
-# HANDOFF — ba-mission-control
+# HANDOFF — ba-mission-control (RETIRED 2026-08-15)
+
+> This document is an archive. The org retired the HANDOFF method on
+> 2026-08-15. The task db (`tasks/`) is now the single record. Write
+> narrative context in a task's Why section. Write outcomes in its Result
+> section. Do not create a new `HANDOFF.md` or `NOTES.md` — the forge
+> pre-push gate re-arms if one exists. See `CLAUDE.md` § Records.
 
 ## Current state
 

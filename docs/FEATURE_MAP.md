@@ -171,8 +171,8 @@ CLAUDE.md "Forge integration" section. Hard rules:
 - Tasks > 3 files or > 100 LOC must be split
 - Pre-commit hook: 5-file / 200-LOC max (override: `FORGE_SKIP=1`,
   logged to `tasks/archive/_overrides.log`)
-- Pre-push hook: tests must pass, HANDOFF.md must reflect code
-  changes
+- Pre-push hook: tests must pass. (The HANDOFF gate is inactive here —
+  HANDOFF was retired 2026-08-15; the task db is the record.)
 - Every cloud deploy goes through `/forge-deploy` — never raw IaC
 
 `/forge-status`, `/forge-goal`, `/forge-deploy`, `/forge-improve`,
