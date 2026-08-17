@@ -2,12 +2,13 @@
 
 <p align="center">
   <strong>Fleet command for your Claude Code agents.</strong><br>
-  A keyboard-first terminal TUI for running up to 10 <strong>real</strong> <code>claude</code> CLI sessions at once —
-  with live cost, context, and sub-agent tracking. No GUI. No Electron. No prefix keys.
+  A keyboard-first terminal TUI to monitor &amp; run dozens of <strong>real</strong> <code>claude</code> CLI agents —
+  10 live at once, every session saved and instantly resumable — with live cost,
+  context, and sub-agent tracking. No GUI. No Electron. No prefix keys.
 </p>
 
 <p align="center">
-  <em>Ten agents, one keyboard. Open source, self-hosted, and made in the USA. 🇺🇸</em>
+  <em>Dozens of agents, one keyboard. Open source, self-hosted, and made in the USA. 🇺🇸</em>
 </p>
 
 <p align="center">
