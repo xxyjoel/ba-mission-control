@@ -158,9 +158,15 @@ async function main() {
       record('NPX-SELFHEAL', false, 'no spawn-helper found post-install — cannot simulate the break (node-pty layout changed?)');
     } else {
       for (const h of helpers) chmodSync(h, 0o644); // break the exec bit (the posix_spawnp crash)
-      const neg = boot(dir, { MC_SMOKE_NO_HEAL: '1' });
-      // Negative control PASSES when the boot FAILED (broke as designed).
-      record('NEGATIVE-CONTROL', !neg.ok, !neg.ok ? 'broken spawn-helper + no self-heal → boot failed as required' : 'HOLLOW: broken helper still booted — verifier would miss the real bug');
+      if (process.platform === 'darwin') {
+        const neg = boot(dir, { MC_SMOKE_NO_HEAL: '1' });
+        // Negative control PASSES when the boot FAILED (broke as designed).
+        record('NEGATIVE-CONTROL', !neg.ok, !neg.ok ? 'broken spawn-helper + no self-heal → boot failed as required' : 'HOLLOW: broken helper still booted — verifier would miss the real bug');
+      } else {
+        // node-pty only execs spawn-helper on darwin; elsewhere a broken exec
+        // bit can't fail the boot, so the control has nothing to prove.
+        record('NEGATIVE-CONTROL', true, 'skipped: spawn-helper is not load-bearing off darwin — control only meaningful on macOS');
+      }
 
       // Re-break (the failed boot leaves the bit off) and boot WITH self-heal.
       for (const h of spawnHelpers(dir)) chmodSync(h, 0o644);
