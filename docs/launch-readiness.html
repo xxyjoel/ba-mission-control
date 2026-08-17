@@ -246,14 +246,14 @@
     </div>
     <div class="gate pass">
       <span class="gate-name">CI publish gate</span>
-      <span class="gate-detail"><b>New.</b> <code>release.yml</code> now gates publish on a verify matrix — macOS + linux × Node 20 &amp; 22 — between <code>npm test</code> and <code>npm publish</code>. A red tarball can't reach npm.
-        <span class="gate-next">First exercised on the next <code>vX.Y.Z</code> tag push.</span></span>
+      <span class="gate-detail"><code>release.yml</code> gates publish on a verify matrix — macOS + linux × Node 20 &amp; 22 — between <code>npm test</code> and <code>npm publish</code>. First exercised on <code>v1.1.2</code>: it correctly blocked, but for a verifier bug — the negative control assumed spawn-helper is load-bearing on linux (it's darwin-only). Fixed in <code>428c54c</code>; all real checks were green on every cell that ran.
+        <span class="gate-next">Next tag verifies the full matrix green (0361).</span></span>
       <span class="pill pass">Ready</span>
     </div>
     <div class="gate pass">
       <span class="gate-name">Provenance / OIDC publish</span>
       <span class="gate-detail">Tokenless publish with <code>--provenance</code> wired; tag-vs-<code>package.json</code> drift guard + <code>prepublish-guard</code> in place.
-        <span class="gate-next">Trusted-publisher must be registered on npmjs.com during the 0351 bootstrap.</span></span>
+        <span class="gate-next">1.1.2 published manually (bootstrap). Remaining: register the trusted publisher on npmjs.com → package settings so CI can publish future tags.</span></span>
       <span class="pill pass">Ready</span>
     </div>
     <div class="gate pass">
@@ -262,11 +262,10 @@
         <span class="gate-next">Re-run <code>/forge-security-pass</code> on the pre-launch diff.</span></span>
       <span class="pill pass">Ready</span>
     </div>
-    <div class="gate warn">
+    <div class="gate pass">
       <span class="gate-name">README install path</span>
-      <span class="gate-detail">Interim <code>npx github:xxyjoel/ba-mission-control</code> works today; the <code>npx @bluearch/mission-control</code> one-liner is marked "coming soon" behind a TODO.
-        <span class="gate-next">On publish: promote the registry install to the primary block, drop the github fallback.</span></span>
-      <span class="pill warn">At risk</span>
+      <span class="gate-detail"><code>npx @bluearch/mission-control</code> is the primary quick start in README + landing page; the github: install is the tracks-main alternate.</span>
+      <span class="pill pass">Ready</span>
     </div>
     <div class="gate pass">
       <span class="gate-name">Full test suite</span>
@@ -311,11 +310,11 @@
 
   <h2>Tracked work — forge tasks</h2>
   <div class="gates">
-    <div class="gate block">
+    <div class="gate pass">
       <span class="gate-name">0351 · npm publish</span>
-      <span class="gate-detail">Bootstrap the first publish + verify clean-machine install. <b>Maintainer creds required.</b>
-        <span class="gate-next">One-time <code>npm login &amp;&amp; npm publish</code> from <code>v1.1.1</code>, then register the OIDC trusted publisher.</span></span>
-      <span class="pill block">Blocker · in progress</span>
+      <span class="gate-detail"><b>Live: <code>@bluearch/mission-control@1.1.2</code></b> (2026-08-17). Manual bootstrap publish from the clean <code>v1.1.2</code> tag; clean-shell <code>npx</code> smoke test green (<code>MC_SMOKE_OK 1.1.2</code>).
+        <span class="gate-next">Register the OIDC trusted publisher on npmjs.com so future tags publish from CI.</span></span>
+      <span class="pill pass">Done</span>
     </div>
     <div class="gate block">
       <span class="gate-name">accurate-session-status</span>
@@ -333,15 +332,16 @@
       <span class="gate-detail">Stale assertion (not a hang) — asserts on visible Help content now. 5/5 green. Done this session.</span>
       <span class="pill pass">Done</span>
     </div>
-    <div class="gate warn">
+    <div class="gate pass">
       <span class="gate-name">0360 · README npm install</span>
-      <span class="gate-detail">Promote the <code>npx @bluearch/mission-control</code> one-liner + drop "coming soon". Blocked on 0351.</span>
-      <span class="pill warn">Blocked · dep 0351</span>
+      <span class="gate-detail">Registry one-liner promoted in README + landing page (commit <code>7b2c27d</code>). Done with the 1.1.2 release.</span>
+      <span class="pill pass">Done</span>
     </div>
     <div class="gate warn">
       <span class="gate-name">0361 · first CI matrix run</span>
-      <span class="gate-detail">Verify all four verify cells go green end-to-end on the first tag (esp. the linux node-pty compile). Blocked on 0351.</span>
-      <span class="pill warn">Blocked · dep 0351</span>
+      <span class="gate-detail">v1.1.2 matrix blocked on the darwin-only negative-control bug (fixed, 0374). Linux node-pty compile + install + boot all green on the cell that ran.
+        <span class="gate-next">Next tag: expect 4/4 verify cells + CI publish green (needs trusted publisher registered).</span></span>
+      <span class="pill warn">Pending next tag</span>
     </div>
   </div>
 

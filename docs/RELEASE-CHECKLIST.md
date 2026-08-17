@@ -46,16 +46,22 @@ commits). Pick one:
       commit `assets/hero.gif` to `main` (README + landing reference it).
 - [ ] Fill the CoC enforcement contact in `CODE_OF_CONDUCT.md`.
 
-## 5. npm publish (`@bluearch/mission-control`)
+## 5. npm publish (`@bluearch/mission-control`) — DONE 2026-08-17
 
-- [ ] Confirm the `@bluearch` npm org exists and you're a member.
-- [ ] Enable **2FA** on the npm account (required for publish).
-- [ ] `npm publish --dry-run` → confirm the tarball is only the `files`
-      allowlist (bin/tui/server + fix-node-pty + README + LICENSE).
-- [ ] `npm publish --access public` (publishConfig already sets access=public).
-- [ ] Smoke test: `npx @bluearch/mission-control` in a clean shell.
+- [x] Confirm the `@bluearch` npm org exists and you're a member
+      (`bluearchgroup`, owner).
+- [x] Enable **2FA** on the npm account (`auth-and-writes`).
+- [x] `npm publish --dry-run` → tarball is exactly the `files` allowlist
+      (77 files: bin/tui/server + fix-node-pty + README + LICENSE).
+- [x] `npm publish` — `1.1.2` live, dist-tag `latest`. Note: the browser-OTP
+      flow needs a live interactive terminal; approving after the CLI exits
+      uploads nothing.
+- [x] Smoke test: clean-shell `npx` → `MC_SMOKE_OK 1.1.2`.
+- [ ] Register the OIDC trusted publisher (npmjs.com → package → Settings →
+      Trusted publisher: repo `xxyjoel/ba-mission-control`, workflow
+      `release.yml`) so future tags publish from CI.
 
 ## 6. Tag the release
 
-- [ ] `git tag v1.0.0 && git push --tags`.
+- [x] `v1.1.2` tagged and pushed (cut via `npm version`; suite green).
 - [ ] Cut a GitHub Release with the hero GIF + a short "what is this" blurb.
