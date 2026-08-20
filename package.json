@@ -54,7 +54,7 @@
     "ink": "^7.1.0",
     "node-pty": "1.1.0",
     "react": "^19.2.7",
-    "tsx": "^4.19.2"
+    "tsx": "^4.23.12"
   },
   "devDependencies": {
     "ink-testing-library": "^4.0.0"
