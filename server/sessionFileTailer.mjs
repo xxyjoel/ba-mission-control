@@ -89,6 +89,37 @@ export function shouldHuntRotation(missTicks, backoff) {
   return missTicks % backoff === 0;
 }
 
+// Pure: given the project dir's current mtime and the one recorded at the last
+// hunt, is the (expensive) per-file hunt worth running? A rotation necessarily
+// creates a new file in the project dir, which bumps the dir's own mtime — so
+// an unchanged mtime proves there is nothing new to find and the whole
+// readdir + per-file-stat fan-out (140+ serial stats on real project dirs) can
+// be skipped for the cost of ONE stat (energy review 2026-08, finding 2:
+// ~119 wakeups/s at full idle). An unconditional hunt still runs every
+// `unconditionalEvery`-th poll-tick as a backstop for cloud-synced paths where
+// dir mtimes are unreliable. dirMtimeMs=0 (stat failed) disables the gate.
+// Exported for tests.
+export function shouldHuntDirMtime(dirMtimeMs, lastHuntDirMtimeMs, missTicks, unconditionalEvery = DIR_HUNT_UNCONDITIONAL_EVERY) {
+  if (!dirMtimeMs) return true;                       // can't stat the dir — don't trust the gate
+  if (dirMtimeMs !== lastHuntDirMtimeMs) return true; // dir changed since our last hunt
+  if (!(unconditionalEvery > 1)) return true;
+  return missTicks % unconditionalEvery === 0;        // slow unconditional backstop
+}
+
+// Poll-ticks between unconditional (gate-bypassing) hunts: 40 × 1.5s = every
+// ~60s an idle slot re-hunts even with an unchanged dir mtime.
+const DIR_HUNT_UNCONDITIONAL_EVERY = 40;
+
+// Pure: creation-poll delay for the Nth attempt. The watched file appears
+// within seconds when the user prompts right after launch; a
+// launched-but-unprompted slot otherwise creation-polls 2×/s forever —
+// +4 wakeups/s per such slot (energy review 2026-08, finding 4). Fast for the
+// first `fastAttempts` (10s of coverage at the defaults), slow after.
+// Shared by sessionFileTailer and statusHookTailer. Exported for tests.
+export function creationPollDelay(attempt, fastMs = 500, fastAttempts = 20, slowMs = 2000) {
+  return attempt < fastAttempts ? fastMs : slowMs;
+}
+
 export async function findRotatedSession(cwd, currentSid, minMtime = 0, excludeSids = []) {
   let entries;
   try { entries = await fsp.readdir(claudeProjectDir(cwd)); } catch { return null; }
@@ -153,6 +184,10 @@ export function startSessionTailer({
   // (not a snapshot) so it reflects re-points that happen after attach. Default
   // claims nothing — single-slot behaviour is unchanged.
   claimedSids = () => [],
+  // 0381: 'self' (default) owns its stat-poll interval as before; 'external'
+  // creates NO backstop timer — the caller (Fleet's single tailer driver)
+  // invokes tick() instead, collapsing 3 timers × N agents into one wakeup.
+  drive = 'self',
 } = {}) {
   if (!agent) throw new Error('sessionTailer: agent is required');
   // 0187: `path` is reassignable — claude can rotate its transcript (a `/clear`
@@ -172,6 +207,7 @@ export function startSessionTailer({
   // polls; frozenPolls counts consecutive no-growth polls.
   let lastSize = 0;
   let frozenPolls = 0;
+  let lastHuntDirMtime = 0; // project-dir mtime recorded at the last hunt (dir-mtime gate)
   let repointMissTicks = 0;       // polls since a rotation hunt last found nothing (drives backoff)
 
   // No status decay timer. jsonlConnector.parseEvent is canonical
@@ -328,6 +364,12 @@ export function startSessionTailer({
     // increment the miss counter). Our own file's growth is detected by the cheap
     // stat above every poll, so active/revived slots always reset promptly.
     if (!shouldHuntRotation(repointMissTicks, repointBackoff)) { repointMissTicks++; return; }
+    // Dir-mtime gate: one stat of the project dir replaces the whole per-file
+    // fan-out when nothing in the dir has changed since our last hunt.
+    let dirMt = 0;
+    try { dirMt = (await fsp.stat(claudeProjectDir(agent.cwd))).mtimeMs; } catch {}
+    if (!shouldHuntDirMtime(dirMt, lastHuntDirMtime, repointMissTicks)) { repointMissTicks++; return; }
+    lastHuntDirMtime = dirMt;
     // Follow rotations FORWARD only: the replacement must be newer than the
     // (dead) file we're on — otherwise two files both newer than spawnedAt
     // would flip-flop the tailer back and forth every poll.
@@ -342,7 +384,7 @@ export function startSessionTailer({
     try { nextPath = claudeSessionPath({ cwd: agent.cwd, sessionId: sid }); } catch { return; }
     path = nextPath;
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
-    offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0;
+    offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0; lastHuntDirMtime = 0;
     const primedTo = await primeStatusFromDisk();
     offset = primedTo != null ? primedTo : 0;
     attachWatcher();
@@ -369,17 +411,21 @@ export function startSessionTailer({
     }
 
     if (!attachWatcher()) {
-      // File not created yet — poll every 500ms until it appears,
-      // then switch to fs.watch. Polling is cheap and avoids racing
-      // with the PTY child's first write.
-      pollTimer = setInterval(() => {
+      // File not created yet — poll until it appears, then switch to fs.watch.
+      // Fast (500ms) for the first ~10s, then 2s: claude doesn't write the
+      // JSONL until the first user message commits, so an unprompted slot
+      // would otherwise poll 2×/s for its whole life (creationPollDelay).
+      let creationAttempts = 0;
+      const pollCreate = () => {
         if (stopped) return;
         if (attachWatcher()) {
-          clearInterval(pollTimer);
           pollTimer = null;
           readNew();
+          return;
         }
-      }, 500);
+        pollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
+      };
+      pollTimer = setTimeout(pollCreate, creationPollDelay(0));
     } else {
       // Watcher attached on an existing file — kick a first read in
       // case the PTY child appended between our stat and our watch.
@@ -393,11 +439,13 @@ export function startSessionTailer({
     // when nothing grew (stats.size <= offset), so it's cheap. Runs regardless
     // of whether fs.watch attached. 0187: the same poll drives rotation
     // detection (maybeRepoint), which only does work once our file is dead.
-    statPollTimer = setInterval(() => {
-      if (stopped) return;
-      readNew();
-      maybeRepoint();
-    }, statPollMs);
+    if (drive !== 'external') {
+      statPollTimer = setInterval(() => {
+        if (stopped) return;
+        readNew();
+        maybeRepoint();
+      }, statPollMs);
+    }
   }
 
   init();
@@ -418,6 +466,13 @@ export function startSessionTailer({
         clearInterval(statPollTimer);
         statPollTimer = null;
       }
+    },
+    // 0381: one externally-driven backstop pass (drive: 'external'). Same body
+    // as the self-owned interval; safe to call on a stopped tailer.
+    tick() {
+      if (stopped) return;
+      readNew();
+      maybeRepoint();
     },
   };
 }
