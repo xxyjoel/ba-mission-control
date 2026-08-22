@@ -31,12 +31,17 @@ const MODES = {
 };
 
 // Local blink so we don't need to thread a `now` prop just for the caret.
-function useBlink(intervalMs = 500) {
+// `enabled` gates the interval entirely: the caret is only rendered while the
+// command bar is open, and an always-on 500ms interval forces 2 full Ink
+// frames/sec at idle whose output is byte-identical and discarded — the
+// largest single idle-CPU term in the 2026-08 energy reviews.
+function useBlink(enabled, intervalMs = 500) {
   const [on, setOn] = useState(true);
   useEffect(() => {
+    if (!enabled) { setOn(true); return; }
     const t = setInterval(() => setOn(o => !o), intervalMs);
     return () => clearInterval(t);
-  }, [intervalMs]);
+  }, [enabled, intervalMs]);
   return on;
 }
 
@@ -47,7 +52,7 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
                      : cmdMode === 'command' ? 'cmdInput'
                      : mode;
   const m = MODES[effectiveMode] || MODES.normal;
-  const caret = useBlink();
+  const caret = useBlink(cmdMode !== 'normal');
   const debugKeys = useDebugKeys();
 
   return (

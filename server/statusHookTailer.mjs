@@ -10,9 +10,9 @@
 
 import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { statusFilePath } from './statusFile.mjs';
+import { creationPollDelay } from './sessionFileTailer.mjs';
 
 // Mirror sessionFileTailer.mjs intervals (0179 pattern).
-const CREATION_POLL_MS = 500;  // poll until file appears, then switch to fs.watch
 const STAT_POLL_MS = 1500;     // backstop for cloud-synced paths where fs.watch never fires
 
 /**
@@ -25,7 +25,9 @@ const STAT_POLL_MS = 1500;     // backstop for cloud-synced paths where fs.watch
  * Returns { stop() } — stop() is idempotent (safe to call twice).
  *
  */
-export function startStatusHookTailer({ agent }) {
+// drive: 'self' (default) owns its 1500ms backstop interval; 'external' creates
+// no timer — the caller (Fleet's single tailer driver, 0381) invokes tick().
+export function startStatusHookTailer({ agent, drive = 'self' }) {
   const filePath = statusFilePath({ sessionId: agent.sessionId });
   const core = createReadCore(filePath);
 
@@ -70,25 +72,38 @@ export function startStatusHookTailer({ agent }) {
     // between our stat and the watch attachment.
     doRead();
   } else {
-    creationPollTimer = setInterval(() => {
+    // Creation poll with backoff: the status NDJSON only appears on the first
+    // hook event, so an unprompted slot would otherwise poll 2×/s forever.
+    // Fast for ~10s, then 2s (creationPollDelay — shared with sessionFileTailer).
+    let creationAttempts = 0;
+    const pollCreate = () => {
       if (stopped) return;
       if (attachWatcher()) {
-        clearInterval(creationPollTimer);
         creationPollTimer = null;
         doRead();
+        return;
       }
-    }, CREATION_POLL_MS);
+      creationPollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
+    };
+    creationPollTimer = setTimeout(pollCreate, creationPollDelay(0));
   }
 
   // Stat-poll backstop: fs.watch silently never fires on many cloud-synced
   // paths (sync daemon writes via temp+rename). Poll doRead() on a modest
   // interval; it early-returns cheaply when nothing grew.
-  statPollTimer = setInterval(() => {
-    if (stopped) return;
-    doRead();
-  }, STAT_POLL_MS);
+  if (drive !== 'external') {
+    statPollTimer = setInterval(() => {
+      if (stopped) return;
+      doRead();
+    }, STAT_POLL_MS);
+  }
 
   return {
+    // 0381: one externally-driven backstop pass (drive: 'external').
+    tick() {
+      if (stopped) return;
+      doRead();
+    },
     stop() {
       if (stopped) return; // idempotent
       stopped = true;

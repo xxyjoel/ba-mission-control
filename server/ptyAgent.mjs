@@ -413,7 +413,7 @@ export class PtyAgent extends EventEmitter {
     // creation (R2: claude doesn't write JSONL until first user msg
     // commits) then switches to fs.watch.
     try {
-      this.tailer = startSessionTailer({ agent: this, claimedSids: this._siblingSids });
+      this.tailer = startSessionTailer({ agent: this, claimedSids: this._siblingSids, drive: 'external' });
     } catch (e) {
       this.appendTail({ kind: 'err', text: `tailer start failed: ${e.message}` });
     }
@@ -423,7 +423,7 @@ export class PtyAgent extends EventEmitter {
     // Mirrors the JSONL tailer lifecycle exactly (started on every spawn /
     // restart, stopped on every exit path) so no file watchers leak.
     try {
-      this.statusTailer = startStatusHookTailer({ agent: this });
+      this.statusTailer = startStatusHookTailer({ agent: this, drive: 'external' });
     } catch (e) {
       this.appendTail({ kind: 'err', text: `statusTailer start failed: ${e.message}` });
     }
@@ -432,7 +432,8 @@ export class PtyAgent extends EventEmitter {
     // consumption into this parent's totals + tok/min. The main tailer reads
     // only <sessionId>.jsonl, so without this a fan-out session undercounts.
     try {
-      this.usageTailer = startSubagentUsageTailer({ agent: this });
+      this.usageTailer = startSubagentUsageTailer({ agent: this, autoStart: false });
+      this.usageTailer.scan(); // prime immediately; steady-state runs off the fleet driver
     } catch (e) {
       this.appendTail({ kind: 'err', text: `usageTailer start failed: ${e.message}` });
     }
@@ -447,6 +448,16 @@ export class PtyAgent extends EventEmitter {
 
     this.refreshGit().catch(() => {});
     this.emit('change');
+  }
+
+  // 0381: one backstop pass over this agent's three tailers, invoked by the
+  // Fleet's single shared driver (they're started with drive:'external' /
+  // autoStart:false above). Each tick is a no-op guard + cheap stat when
+  // nothing changed; tailers of a dead/restarting agent guard on `stopped`.
+  tailerTick() {
+    try { this.tailer?.tick?.(); } catch {}
+    try { this.statusTailer?.tick?.(); } catch {}
+    try { this.usageTailer?.scan?.(); } catch {}
   }
 
   async refreshGit() {

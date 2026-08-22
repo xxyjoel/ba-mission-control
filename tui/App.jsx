@@ -68,6 +68,41 @@ const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', '
 // Toast kinds drive color. Auto-dismissed by a timer in App.
 const TOAST_COLORS = { error: 'red', warn: 'yellow', info: 'accent', ok: 'green' };
 
+// Feedback strip — always rendered above the status bar so the affordance
+// is visible. Shows queued toasts (actions, errors, command output) or a
+// short idle hint when empty. Multiple toasts stack vertically.
+// Module-level on purpose: defined inside App it got a fresh component
+// identity every render, so React unmounted + remounted the subtree (Yoga
+// node churn) on every single frame (energy review 2026-08, finding 8).
+function FeedbackStrip({ toasts, theme }) {
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Box>
+        <Text color={theme.accent}>▸ FEEDBACK</Text>
+        <Text color={theme.dim}> · </Text>
+        <Text color={theme.faint}>{toasts.length === 0 ? 'idle' : `${toasts.length} message${toasts.length === 1 ? '' : 's'}`}</Text>
+      </Box>
+      {toasts.length === 0 ? (
+        <Box>
+          <Text color={theme.faint}>  ready · </Text>
+          <Text color={theme.dim}>press </Text>
+          <Text color={theme.accent}>?</Text>
+          <Text color={theme.dim}> for help · </Text>
+          <Text color={theme.accent}>n</Text>
+          <Text color={theme.dim}> new session · </Text>
+          <Text color={theme.accent}>:</Text>
+          <Text color={theme.dim}> command bar</Text>
+        </Box>
+      ) : toasts.map(t => (
+        <Box key={t.id}>
+          <Text color={theme[TOAST_COLORS[t.kind] || 'accent']}>  ● </Text>
+          <Text color={theme.fg} wrap="truncate">{t.text}</Text>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
 // Frame budget for coalescing fleet 'change' events into re-renders. Agents
 // emit 'change' at high frequency (every JSONL line across ~11 sessions);
 // without coalescing the whole App re-rendered + re-snapshotted per event,
@@ -441,7 +476,10 @@ export default function App({ fleet, auth: initialAuth }) {
   useEffect(() => {
     const t = setInterval(() => {
       const u = readUsage();
-      if (u) setUsage(u);
+      // Identity-compare on the file's own timestamp: readUsage() allocates a
+      // fresh object every call, so an unconditional setUsage forces a full
+      // (discarded) Ink frame every 8s even when the numbers didn't move.
+      if (u) setUsage(prev => (prev && prev.updatedAt === u.updatedAt) ? prev : u);
     }, 8000);
     return () => clearInterval(t);
   }, []);
@@ -1733,35 +1771,9 @@ export default function App({ fleet, auth: initialAuth }) {
   const pageAgents = visibleAgents.slice(pageStart, pageEnd);
   const visibleRows = chunkRows(pageAgents, effectiveCols);
 
-  // Feedback strip — always rendered above the status bar so the affordance
-  // is visible. Shows queued toasts (actions, errors, command output) or a
-  // short idle hint when empty. Multiple toasts stack vertically.
-  const FeedbackStrip = () => (
-    <Box flexDirection="column" paddingX={1}>
-      <Box>
-        <Text color={theme.accent}>▸ FEEDBACK</Text>
-        <Text color={theme.dim}> · </Text>
-        <Text color={theme.faint}>{toasts.length === 0 ? 'idle' : `${toasts.length} message${toasts.length === 1 ? '' : 's'}`}</Text>
-      </Box>
-      {toasts.length === 0 ? (
-        <Box>
-          <Text color={theme.faint}>  ready · </Text>
-          <Text color={theme.dim}>press </Text>
-          <Text color={theme.accent}>?</Text>
-          <Text color={theme.dim}> for help · </Text>
-          <Text color={theme.accent}>n</Text>
-          <Text color={theme.dim}> new session · </Text>
-          <Text color={theme.accent}>:</Text>
-          <Text color={theme.dim}> command bar</Text>
-        </Box>
-      ) : toasts.map(t => (
-        <Box key={t.id}>
-          <Text color={theme[TOAST_COLORS[t.kind] || 'accent']}>  ● </Text>
-          <Text color={theme.fg} wrap="truncate">{t.text}</Text>
-        </Box>
-      ))}
-    </Box>
-  );
+  // One element instance shared by every render branch below.
+  const feedbackStrip = <FeedbackStrip toasts={toasts} theme={theme} />;
+
 
   // Status-bar wrapper — passes command-bar state through so the bar can
   // render the live buffer when the user is typing `/` or `:`.
@@ -1795,7 +1807,7 @@ export default function App({ fleet, auth: initialAuth }) {
       <Box flexDirection="column" width={termCols} height={termRows}>
         <Box paddingX={2} paddingY={1}><Help onClose={() => setModal(null)} theme={theme} width={modalWidth(64, 110)} view={helpView} /></Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('normal')}
       </Box>
     );
@@ -1808,7 +1820,7 @@ export default function App({ fleet, auth: initialAuth }) {
           <QuitConfirm onCancel={() => setModal(null)} onQuit={(mode) => setQuitMode(mode)} theme={theme} agentCount={liveCount} />
         </Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('normal')}
       </Box>
     );
@@ -1818,7 +1830,7 @@ export default function App({ fleet, auth: initialAuth }) {
       <Box flexDirection="column" width={termCols} height={termRows}>
         <Box paddingX={2} paddingY={1}><Broadcast agents={agents} onSend={sendBroadcast} onClose={() => setModal(null)} theme={theme} width={modalWidth(84, 160)} /></Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('broadcast')}
       </Box>
     );
@@ -1842,7 +1854,7 @@ export default function App({ fleet, auth: initialAuth }) {
           />
         </Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('normal')}
       </Box>
     );
@@ -1862,7 +1874,7 @@ export default function App({ fleet, auth: initialAuth }) {
           />
         </Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('command')}
       </Box>
     );
@@ -1872,7 +1884,7 @@ export default function App({ fleet, auth: initialAuth }) {
       <Box flexDirection="column" width={termCols} height={termRows}>
         <Box paddingX={2} paddingY={1}><Settings settings={settings} setSettings={setSettingsState} onClose={() => setModal(null)} theme={theme} width={modalWidth(92, 140)} /></Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('command')}
       </Box>
     );
@@ -1894,7 +1906,7 @@ export default function App({ fleet, auth: initialAuth }) {
           />
         </Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('command')}
       </Box>
     );
@@ -1932,7 +1944,7 @@ export default function App({ fleet, auth: initialAuth }) {
           />
         </Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('focused', zoomedAgent)}
       </Box>
     );
@@ -1955,7 +1967,7 @@ export default function App({ fleet, auth: initialAuth }) {
           />
         </Box>
         <Box flexGrow={1} />
-        <FeedbackStrip />
+        {feedbackStrip}
         {renderStatusBar('normal')}
       </Box>
     );
@@ -2029,7 +2041,7 @@ export default function App({ fleet, auth: initialAuth }) {
       )}
 
       {/* Toasts above the status bar */}
-      <FeedbackStrip />
+      {feedbackStrip}
 
       {/* Status bar */}
       {renderStatusBar('normal')}

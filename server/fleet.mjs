@@ -15,6 +15,16 @@ import { PtyAgent } from './ptyAgent.mjs';
 
 const DEFAULT_SLOTS = 10;
 
+// 0381: one shared backstop wakeup for every live agent's tailers. Each
+// PtyAgent used to own three phase-scattered 1500ms intervals (session JSONL,
+// status hooks, subagent usage) — 30 timers at 10 slots kept the event loop
+// waking ~20×/s at idle (energy review 2026-08, finding 3). A single
+// fleet-level timer drives them all in ONE wakeup, and stretches to 3s when
+// the whole fleet is idle (any working/waiting agent restores full cadence on
+// the next tick). Unref'd so a dangling Fleet never blocks process exit.
+const TAILER_POLL_MS = 1500;
+const TAILER_POLL_IDLE_MS = 3000;
+
 // When MC_MOCK is set, every launch instantiates a MockAgent that replays
 // the named fixture instead of spawning a real `claude` subprocess. The
 // value is the fixture name (`MC_MOCK=approval-request`), resolved under
@@ -41,6 +51,8 @@ function emptySlot(slot) {
 }
 
 export class Fleet extends EventEmitter {
+  #tailerTimer = null;
+
   constructor({ slots = DEFAULT_SLOTS } = {}) {
     super();
     // Clamp to a sensible band — anything outside this hints at a bad
@@ -52,6 +64,24 @@ export class Fleet extends EventEmitter {
     // Default per-slot cost cap, propagated to every Agent on launch
     // and on settings changes via setCostCap(). 0 = disabled.
     this.defaultCostCapUSD = 0;
+    this.#scheduleTailerPoll(TAILER_POLL_MS);
+  }
+
+  // 0381: shared tailer driver — see TAILER_POLL_MS above. setTimeout chain
+  // (not setInterval) so the cadence self-adjusts to fleet activity.
+  #scheduleTailerPoll(ms) {
+    this.#tailerTimer = setTimeout(() => this.#tailerPollTick(), ms);
+    this.#tailerTimer.unref?.();
+  }
+
+  #tailerPollTick() {
+    let active = false;
+    for (const a of this.agents) {
+      if (!a) continue;
+      try { a.tailerTick?.(); } catch {}
+      if (a.status === 'working' || a.status === 'waiting') active = true;
+    }
+    this.#scheduleTailerPoll(active ? TAILER_POLL_MS : TAILER_POLL_IDLE_MS);
   }
 
   snapshot() {
