@@ -33,7 +33,7 @@ import ShellOverlay from './modals/ShellOverlay.jsx';
 import { cdToCwd } from '../server/shellSession.mjs';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
-import { MODELS } from './lib/models.js';
+import { MODELS, resolveModelId } from './lib/models.js';
 import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
@@ -644,8 +644,10 @@ export default function App({ fleet, auth: initialAuth }) {
         }
         const isDefault = maybeDefault === 'default';
         const newId = isDefault ? modelRest[0] : maybeDefault;
-        if (!modelIds.includes(newId)) {
-          pushToast(`unknown model · use one of: ${modelIds.join(' · ')}`, 'warn');
+        // 'auto' is valid for the DEFAULT only (follows discovery: newest
+        // Opus at launch time). A live agent needs a concrete id.
+        if (!modelIds.includes(newId) && !(isDefault && newId === 'auto')) {
+          pushToast(`unknown model · use one of: ${isDefault ? 'auto · ' : ''}${modelIds.join(' · ')}`, 'warn');
           return null;
         }
         if (isDefault) {
@@ -1197,7 +1199,7 @@ export default function App({ fleet, auth: initialAuth }) {
             slot: empties[i],
             repoPath: cwd,
             branch: 'main',
-            model: s.model || settings.defaultModel || 'sonnet-4.6',
+            model: s.model || resolveModelId(settings.defaultModel),
             permissionMode: s.permissionMode || settings.defaultPermission || 'acceptEdits',
             prompt: s.prompt || null,
           });

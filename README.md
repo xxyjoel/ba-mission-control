@@ -457,6 +457,20 @@ background:
    credential-less installs needs a one-string addition to `KNOWN_ALIASES`
    in `tui/lib/modelProbe.js` — the API path needs nothing.
 
+The **default model is `auto`**: new sessions launch on the newest Opus in
+the live catalog, so a freshly discovered release becomes the default the
+moment it lands — no pinned id anywhere. Pin an explicit model in Settings
+(or `:model default <id>`) if you'd rather stay put.
+
+**Sandboxed runs** (`MC_CONFIG_DIR` set — dev sandboxes, tests) skip boot
+discovery so throwaway configs never trigger billed probes. To make a
+sandbox behave like a real first-run install — e.g. when trying the
+published package as a user would — set `MC_SYNC_MODELS=1`:
+
+```sh
+MC_SYNC_MODELS=1 MC_CONFIG_DIR=$(mktemp -d) mc
+```
+
 ### Manual refresh (`:model refresh`)
 
 The `claude` CLI has no "list models" command, so mc learns what an alias
