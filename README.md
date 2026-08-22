@@ -681,6 +681,13 @@ another terminal.
 
 These guard against the failure modes that hit hardest at fleet scale.
 
+- **Quiet at idle (battery-friendly).** An idle fleet coalesces all of its
+  background polling into a single shared wakeup (stretching to 3s when
+  nothing is working), gates the invisible command-bar caret, and detects
+  transcript rotation with one directory stat instead of a per-file sweep.
+  Measured: idle CPU cut ~3× (1.07% → 0.35% of one core, zero agents);
+  reproduce with `node scripts/measure-idle.mjs`. Renders, statuses, and
+  keystroke latency are unchanged — active sessions keep full cadence.
 - **Press-K-twice to kill.** A first press arms the kill action for 3
   seconds and shows a warning toast; the second `K` confirms and SIGTERMs
   the subprocess. Eliminates the most painful misfire (accidental loss of
