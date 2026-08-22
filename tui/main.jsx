@@ -98,10 +98,13 @@ try {
 //      so it fires only when `claude --version` changed since the stamp.
 // Skipped in sandbox mode (dev:sandbox + pty recipe tests): a throwaway
 // MC_CONFIG_DIR never has a stamped cache, so every sandbox boot would
-// trigger real billed probes. Also user-gated by the `syncModelsOnBoot`
-// setting (boot-time network egress must be declinable — security review
-// 2026-08-10); `:model refresh` stays available either way.
-if (!isSandboxed() && bootSettings.syncModelsOnBoot !== false) {
+// trigger real billed probes. MC_SYNC_MODELS=1 overrides the sandbox skip
+// for human-run user-experience tests (a real fresh install DOES probe on
+// first boot — a sandbox without the flag misrepresents that; 2026-08-22).
+// Also user-gated by the `syncModelsOnBoot` setting (boot-time network
+// egress must be declinable — security review 2026-08-10); `:model refresh`
+// stays available either way.
+if ((!isSandboxed() || process.env.MC_SYNC_MODELS === '1') && bootSettings.syncModelsOnBoot !== false) {
   syncModelsFromApi(MODELS)
     .then((r) => { if (r?.ok) dlog('models', 'models-API sync', r); })
     .catch(() => { /* discovery must never block or crash boot */ });

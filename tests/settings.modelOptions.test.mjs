@@ -19,11 +19,11 @@ function defaultModelItem() {
   return null;
 }
 
-test('Default-model options are the live modelIds() view, not a frozen list', () => {
+test('Default-model options are auto + the live modelIds() view, not a frozen list', () => {
   const item = defaultModelItem();
   assert.ok(item, 'defaultModel item exists in SETTINGS_SCHEMA');
   assert.equal(typeof item.options, 'function', 'options must be a live function');
-  assert.deepEqual(item.options(), modelIds());
+  assert.deepEqual(item.options(), ['auto', ...modelIds()]);
 });
 
 test('options() reflects a model discovered after module load', () => {
@@ -43,9 +43,6 @@ test('boot-time model discovery has a user opt-out, default on', () => {
   assert.equal(item.kind, 'toggle');
 });
 
-test('the shipped defaultModel is a valid catalog id', () => {
-  assert.ok(
-    MODELS[SETTINGS_DEFAULTS.defaultModel],
-    `defaultModel '${SETTINGS_DEFAULTS.defaultModel}' must exist in MODELS`,
-  );
+test('the shipped defaultModel is auto — follows discovery, no pinned id', () => {
+  assert.equal(SETTINGS_DEFAULTS.defaultModel, 'auto');
 });
