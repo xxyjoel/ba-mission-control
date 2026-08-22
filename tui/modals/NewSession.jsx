@@ -27,7 +27,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, basename, join } from 'node:path';
 import TextField from '../lib/TextField.jsx';
-import { modelIds, MODELS } from '../lib/models.js';
+import { modelIds, MODELS, resolveModelId } from '../lib/models.js';
 import RepoPicker from './RepoPicker.jsx';
 
 const SUGGEST_VIEW = 8;          // visible suggestion rows
@@ -94,7 +94,9 @@ export default function NewSession({
   const [view, setView] = useState('main');  // 'main' | 'browse'
   const [query, setQuery] = useState('');
   const [idx, setIdx] = useState(0);
-  const [model, setModel] = useState(defaultModel || 'sonnet-4.6');
+  // 'auto' resolves to the newest discovered Opus at open time; ←/→ then
+  // cycles concrete catalog ids from there.
+  const [model, setModel] = useState(resolveModelId(defaultModel));
   const [fsChildren, setFsChildren] = useState([]);
   const [error, setError] = useState(null);
   // Which field owns arrow keys. 'path' (default) → TextField gets ←/→

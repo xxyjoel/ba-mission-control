@@ -69,6 +69,28 @@ export const MODELS = {
 // silently excluded anything discovered after import.
 export function modelIds() { return Object.keys(MODELS); }
 
+// newestModelId — newest non-retired model of a kind, by the numeric version
+// in its friendly id ('opus-5' → 5, 'opus-4.8' → 4.8). A LIVE computation over
+// the catalog, so a model added by discovery (Models API sync / alias probe)
+// wins the moment it lands — no hardcoded "current best" id anywhere.
+export function newestModelId(kind = 'opus') {
+  let best = null, bestV = -1;
+  for (const [id, m] of Object.entries(MODELS)) {
+    if (m.kind !== kind || m.retired) continue;
+    const v = parseFloat(String(id).slice(String(id).lastIndexOf('-') + 1));
+    if (Number.isFinite(v) && v > bestV) { bestV = v; best = id; }
+  }
+  return best;
+}
+
+// resolveModelId — turn the defaultModel setting into a concrete catalog id.
+// 'auto' (the shipped default) follows discovery: newest opus at resolve time.
+// Any explicit id passes through untouched (user pinned a model on purpose).
+export function resolveModelId(id, kind = 'opus') {
+  if (id && id !== 'auto') return id;
+  return newestModelId(kind) || modelIds()[0];
+}
+
 // modelByCli — reverse-lookup a catalog entry by its CLI model name. claude
 // reports the resolved cli model in every assistant event (→ agent.resolvedModel),
 // and a mid-session `/model` switch lands there too — so this is how the UI
