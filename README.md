@@ -153,13 +153,16 @@ threshold, etc) persist to `~/.config/claude-mc/settings.json` — open with
 `Esc` in the TUI.
 
 **Card anatomy.** Each grid tile is a pure-stats dashboard (fixed height, no
-wrapping): title + status, model + branch + git, ctx bar, tok/min sparkline, a
+wrapping): title + status, model + branch + git, ctx bar, tok/min sparkline
+(empty at zero throughput) with the claude subprocess's live **CPU% + memory**
+right-aligned (`4% 182M`, one shared `ps` sample per fleet tick), a
 **triage row** (`▸ 5/7 ██████░░ <next action>` — todo burndown from the
-session's live `TodoWrite` list plus a status-driven next-action verb), the
-**current item** (`↳ <in-progress todo>`), session vitals (small `●<score>`
-health dot + turns / messages / uptime / time-in-state), and a cost + tokens
-foot. It intentionally shows **no session text** — read the running
-conversation by zooming (`↵`) or in the fleet log.
+session's live `TodoWrite` list plus a status-driven next-action verb; blank
+when there's nothing actionable — status and its duration already live in the
+card's corners), the **current item** (`↳ <in-progress todo>`), session vitals
+(small `●<score>` health dot + turns / messages / uptime / time-in-state), and
+a cost + tokens foot. It intentionally shows **no session text** — read the
+running conversation by zooming (`↵`) or in the fleet log.
 
 The triage row answers the scan-10-cards question "does this need me, when, and
 what next": `check back` (working), `ready to review →` (idle, plan complete),
