@@ -702,6 +702,14 @@ These guard against the failure modes that hit hardest at fleet scale.
   Measured: idle CPU cut ~3× (1.07% → 0.35% of one core, zero agents);
   reproduce with `node scripts/measure-idle.mjs`. Renders, statuses, and
   keystroke latency are unchanged — active sessions keep full cadence.
+- **Status truth, regression-proofed.** A card blocked on a question
+  (`AskUserQuestion` / plan approval) reads **INPUT** for the entire wait —
+  the hook channel goes silent while an ask is pending, and the pending
+  prompt now outranks the last "tool running" signal however stale it gets.
+  Every real status incident is checked in as a recording under
+  `tests/fixtures/status-corpus/` and replayed through the live pipeline
+  (`tests/status.replay.test.mjs`) with virtualized time, so a fixed lie
+  stays fixed.
 - **Press-K-twice to kill.** A first press arms the kill action for 3
   seconds and shows a warning toast; the second `K` confirms and SIGTERMs
   the subprocess. Eliminates the most painful misfire (accidental loss of
