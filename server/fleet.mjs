@@ -12,6 +12,7 @@ import { EventEmitter } from 'node:events';
 import { Agent } from './agent.mjs';
 import { MockAgent } from './mockAgent.mjs';
 import { PtyAgent } from './ptyAgent.mjs';
+import { samplePids } from './procStats.mjs';
 
 const DEFAULT_SLOTS = 10;
 
@@ -24,6 +25,9 @@ const DEFAULT_SLOTS = 10;
 // the next tick). Unref'd so a dangling Fleet never blocks process exit.
 const TAILER_POLL_MS = 1500;
 const TAILER_POLL_IDLE_MS = 3000;
+// 0387: per-agent CPU/RSS sampling rides the same tick, divided — one `ps`
+// fork per PROC_SAMPLE_EVERY ticks (→ 3s active / 6s idle) covering all pids.
+const PROC_SAMPLE_EVERY = 2;
 
 // When MC_MOCK is set, every launch instantiates a MockAgent that replays
 // the named fixture instead of spawning a real `claude` subprocess. The
@@ -81,7 +85,38 @@ export class Fleet extends EventEmitter {
       try { a.tailerTick?.(); } catch {}
       if (a.status === 'working' || a.status === 'waiting') active = true;
     }
+    if ((this.#tailerTickCount++ % PROC_SAMPLE_EVERY) === 0) this.#sampleProcStats();
     this.#scheduleTailerPoll(active ? TAILER_POLL_MS : TAILER_POLL_IDLE_MS);
+  }
+
+  #tailerTickCount = 0;
+  #procSampleInflight = false;
+
+  // 0387: one `ps` covering every live agent pid → agent.procCpu (% of one
+  // core) / agent.procMemKb (RSS KiB), surfaced on the card. emit('change')
+  // only when the ROUNDED display values move so a steady process doesn't
+  // trigger a render per sample.
+  #sampleProcStats() {
+    if (this.#procSampleInflight) return;
+    const byPid = new Map();
+    for (const a of this.agents) {
+      const pid = a?.pty?.pid ?? a?.child?.pid;
+      if (Number.isInteger(pid) && pid > 0) byPid.set(pid, a);
+    }
+    if (!byPid.size) return;
+    this.#procSampleInflight = true;
+    samplePids([...byPid.keys()]).then((stats) => {
+      this.#procSampleInflight = false;
+      for (const [pid, a] of byPid) {
+        const s = stats.get(pid);
+        if (!s) continue; // pid gone mid-sample — leave last known values
+        const changed = Math.round(a.procCpu || 0) !== Math.round(s.cpu)
+          || Math.round((a.procMemKb || 0) / 1024) !== Math.round(s.rssKb / 1024);
+        a.procCpu = s.cpu;
+        a.procMemKb = s.rssKb;
+        if (changed) a.emit?.('change');
+      }
+    }).catch(() => { this.#procSampleInflight = false; });
   }
 
   snapshot() {
