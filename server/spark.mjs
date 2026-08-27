@@ -28,8 +28,12 @@ export function updateSpark(agent, deltaTokens, now = Date.now()) {
   const last = agent.lastTokSampleTs ?? now;
   const dt = Math.max(0.05, (now - last) / 1000);
   const ratePerMin = (deltaTokens / dt) * 60;
-  const arr = Array.isArray(agent.spark) ? agent.spark : Array(SPARK_LEN).fill(1);
-  agent.spark = [...arr.slice(1), Math.max(0.5, ratePerMin / SPARK_SCALE)];
+  const arr = Array.isArray(agent.spark) ? agent.spark : Array(SPARK_LEN).fill(0);
+  // Zero preserves zero (0385): a 0-rate sample must render EMPTY, not the
+  // old 0.5 display floor — a run of equal floors max-normalizes to FULL
+  // blocks, so an idle card showed a solid bar at 0 tok/min. The floor now
+  // applies only to genuine activity (keeps small-but-real rates visible).
+  agent.spark = [...arr.slice(1), ratePerMin > 0 ? Math.max(0.5, ratePerMin / SPARK_SCALE) : 0];
   agent.lastTokSampleTs = now;
   agent.lastTokRate = ratePerMin;
 }

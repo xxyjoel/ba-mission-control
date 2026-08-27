@@ -21,9 +21,18 @@ test('updateSpark: double the throughput → double the normalized sample', () =
   assert.ok(Math.abs(a.spark.at(-1) - 2) < 1e-9);
 });
 
-test('updateSpark: zero throughput floors at 0.5 (so idle still draws a glyph)', () => {
+test('updateSpark: zero throughput pushes 0 (empty glyph — 0385, was a 0.5 floor)', () => {
+  // The old floor made a run of idle samples max-normalize to FULL blocks:
+  // the card showed a solid tok/min bar at 0. Zero must stay zero so
+  // sparkLine's all-zero guard renders an empty bar.
   const a = { spark: Array(SPARK_LEN).fill(1), lastTokSampleTs: 0 };
   updateSpark(a, 0, 60_000);
+  assert.equal(a.spark.at(-1), 0);
+});
+
+test('updateSpark: tiny-but-real throughput keeps the 0.5 visibility floor', () => {
+  const a = { spark: Array(SPARK_LEN).fill(0), lastTokSampleTs: 0 };
+  updateSpark(a, 10, 60_000); // 10 tok/min — real activity, sub-floor scale
   assert.equal(a.spark.at(-1), 0.5);
 });
 

@@ -82,7 +82,7 @@ export class MockAgent extends EventEmitter {
     this.dirty = 0;
     this.ahead = 0;
     this.behind = 0;
-    this.spark = Array(SPARK_LEN).fill(1);
+    this.spark = Array(SPARK_LEN).fill(0); // 0385: blank cold-start — fill(1) rendered a FULL bar at 0 tok/min
     this.activity = 'Awaiting first instruction';
     this.tail = [];
 
@@ -330,6 +330,8 @@ export class MockAgent extends EventEmitter {
       costSession: this.costSession,
       costWeek: 0,
       spark: this.spark,
+      procCpu: this.procCpu || 0,      // 0387: %-of-one-core (ps pcpu)
+      procMemKb: this.procMemKb || 0, // 0387: RSS KiB
       activity: this.activity,
       cwd: this.cwd,
       sessionId: this.sessionId,
