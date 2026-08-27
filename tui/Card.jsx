@@ -27,7 +27,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { MODELS, modelColor, modelByCli } from './lib/models.js';
-import { barCells, sparkLine, fmtK, fmtMoney, trunc, humanize, fmtDurShort } from './lib/format.js';
+import { barCells, sparkLine, fmtK, fmtMoney, fmtMem, trunc, humanize, fmtDurShort } from './lib/format.js';
 import { readProjectHealth, healthColor } from './lib/projectHealth.js';
 
 const STATUS_GLYPH = { working: '●', waiting: '◉', idle: '○', paused: '⏸', error: '✕', empty: '+' };
@@ -222,10 +222,13 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
     action = approval ? 'needs approval · answer to proceed' : 'needs input · answer to continue';
     actionColor = approval ? theme.red : theme.yellow;
   } else if (agent.status === 'idle') {
-    action = allDone ? 'ready to review →' : todoTotal > 0 ? 'needs a nudge →' : `idle · ${stateAge} in state`;
+    // 0386: no `idle · Xm in state` fallback — status already sits top-right
+    // and the duration bottom-right, so the midbox restatement was noise.
+    // The row only speaks when it has something actionable to say.
+    action = allDone ? 'ready to review →' : todoTotal > 0 ? 'needs a nudge →' : '';
     actionColor = allDone ? theme.green : todoTotal > 0 ? theme.yellow : theme.dim;
   } else { // working
-    action = todoTotal > 0 ? 'check back' : `working · ${stateAge} in state`;
+    action = todoTotal > 0 ? 'check back' : ''; // 0386: ditto for `working · Xm`
     actionColor = theme.dim;
   }
 
@@ -309,11 +312,17 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={ctxStatColor}> {fmtK(agent.context || 0)} {(ctxPct * 100).toFixed(0)}%</Text>
       </Box>
 
-      {/* Tok/min + sparkline */}
+      {/* Tok/min + sparkline · right side: subprocess CPU/RSS (0387).
+          procCpu is ps's %-of-one-core; procMemKb the claude process RSS.
+          Hidden until the first fleet sample lands (both 0). */}
       <Box>
         <Text color={theme.dim}>tok/min </Text>
         <Text color={theme.fg}>{fmtK(lastTpm)}  </Text>
         <Text color={theme.accent}>{sparkStr}</Text>
+        <Box flexGrow={1} />
+        {(agent.procMemKb || 0) > 0 && (
+          <Text color={theme.dim}>{Math.round(agent.procCpu || 0)}% {fmtMem(agent.procMemKb)}</Text>
+        )}
       </Box>
 
       {/* Flex spacer — absorbs the one leftover line so the card stays a
@@ -327,7 +336,9 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           paused take the whole row as a colored imperative. The verb sits in a
           shrink+truncate box so it can never reflow the fixed-height card. */}
       <Box>
-        <Text color={theme.accent}>▸ </Text>
+        {/* 0386: the ▸ marker only draws when the row has content — an empty
+            row keeps its line (fixed card height) but goes fully blank. */}
+        {(showBurndown || action !== '') && <Text color={theme.accent}>▸ </Text>}
         {showBurndown && (
           <>
             <Text color={allDone ? theme.green : theme.fg}>{todoDone}/{todoTotal} </Text>

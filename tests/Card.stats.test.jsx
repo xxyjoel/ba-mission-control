@@ -65,9 +65,14 @@ test('card stats: TODO progress shows done/total + in-progress item', () => {
   assert.match(frame, /wiring the retry handler/, 'shows the in-progress activeForm');
 });
 
-test('card stats: empty TODO list keeps the triage + item rows present (no reflow)', () => {
+test('card stats: empty TODO list blanks the triage row (0386) but keeps the item row', () => {
+  // 0386: with nothing actionable to say, the triage row goes fully blank —
+  // no ▸ marker and no `working · Xm in state` restatement (status lives
+  // top-right, duration bottom-right). The card height is pinned by
+  // height={11}, so the blank row cannot reflow anything.
   const frame = frameOf(makeAgent({ todos: [] }));
-  assert.match(frame, /▸ /, 'triage row marker present');
+  assert.doesNotMatch(frame, /▸ /, 'triage marker absent when the row is empty');
+  assert.doesNotMatch(frame, /in state/, 'no redundant status/duration restatement');
   assert.match(frame, /↳ —/, 'current-item placeholder keeps the row present');
 });
 

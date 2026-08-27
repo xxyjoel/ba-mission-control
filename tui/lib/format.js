@@ -72,6 +72,15 @@ export const fmtK = (n) => {
 
 export const fmtMoney = (n) => '$' + (n || 0).toFixed(2);
 
+// fmtMem — RSS KiB → compact "182M" / "1.4G" for the per-card proc stats
+// (0387). Sub-MiB rounds to "0M"; the card hides the readout until the
+// first sample lands so that never shows for a live process.
+export function fmtMem(kb) {
+  const mb = (kb || 0) / 1024;
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + 'G';
+  return Math.round(mb) + 'M';
+}
+
 export function trunc(s, w) {
   s = s == null ? '' : String(s);
   // Fast path: code-unit length ≤ w ⇒ grapheme count ≤ w (graphemes never
