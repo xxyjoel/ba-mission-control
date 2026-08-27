@@ -962,6 +962,20 @@ export class PtyAgent extends EventEmitter {
     if (this.hookStatus != null) {
       if (this.hookStatus === 'waiting') {
         status = 'waiting';                       // permission_prompt confirmed
+      } else if (this.hookStatus === 'working' && this.awaitingPrompt?.tool) {
+        // 0384: a human-blocking TOOL prompt (AskUserQuestion / ExitPlanMode)
+        // outranks sticky-working. The ask fires PreToolUse on launch and then
+        // NO hook fires for the entire human-wait — no Stop (the turn isn't
+        // over), no notification (it's not a permission prompt) — so the hook
+        // channel reads 'working' indefinitely (13h in the 2026-08-27
+        // auto-job-applier incident). The connector sets awaitingPrompt from
+        // the tool_use and clears it on the answering tool_result, and the
+        // turn CANNOT run other tools while the ask is pending, so a set
+        // tool-sourced prompt means claude is blocked on the user no matter
+        // how fresh the last PreToolUse is. Gated on `.tool` — text-heuristic
+        // prompts (detectPrompt end_turn questions) stay out of this override
+        // because they're guesses, not protocol.
+        status = 'waiting';
       } else if (this.hookStatus === 'working') {
         // A tool is outstanding (PreToolUse, no Stop yet). Sticky 'working' until
         // Stop — covers the intra-turn end_turn flash (0198) with NO #scanWorking.

@@ -395,6 +395,11 @@ function handleAssistant(ev, agent) {
     if (prompt) agent.awaitingPromptTs = Date.now();
     agent.status = prompt ? 'waiting' : 'idle';
   } else {
+    // Mid-turn continuation (tool_use / streaming segment) — claude is
+    // demonstrably not blocked on a prompt, so drop any stale one. Belt-and-
+    // suspenders for the 0384 waiting-override in ptyAgent.toJSON(): a prompt
+    // that somehow missed its tool_result clear must not pin 'waiting'.
+    agent.awaitingPrompt = null;
     agent.status = 'working';
   }
   return changed;

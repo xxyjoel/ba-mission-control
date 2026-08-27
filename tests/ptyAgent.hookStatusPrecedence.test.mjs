@@ -178,3 +178,63 @@ test('0250/0253: hookStatus=working is STICKY over a fresh connector=idle (intra
 // NOTE: the existing working/approval overlay tests in approvalPrompt.test.mjs
 // and workingOverlay.test.mjs remain unchanged — the overlay applies AFTER
 // hook/connector base is chosen and those tests do not set hookStatus.
+
+// ── 0384: pending human-blocking TOOL prompt outranks sticky hook-working ─────
+//
+// Incident (2026-08-27, auto-job-applier): AskUserQuestion fired PreToolUse
+// (hook → 'working'), then NO hook fired for the 13.5h the question sat
+// unanswered — no Stop (turn not over), no notification (not a permission
+// prompt). Sticky-working outvoted the connector's 'waiting' the whole time.
+// The connector's tool-sourced awaitingPrompt (set on the blocking tool_use,
+// cleared on its tool_result) is protocol truth: no other tool can run while
+// the ask is pending, so while it holds, the card must read 'waiting' — even
+// when later PreToolUse events make the hook signal look fresher.
+
+test('0384: tool-sourced awaitingPrompt forces waiting over fresher hookStatus=working', () => {
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'waiting';                 // connector saw AskUserQuestion
+  agent.awaitingPrompt = {
+    kind: 'single-select', tool: 'AskUserQuestion',
+    question: 'Which freshness cutoff?', options: [{ num: 1, text: '24h' }], total: 1,
+  };
+  agent.awaitingPromptTs = now - 60000;           // ask launched a minute ago…
+  agent.lastConnectorTs = agent.lastEventTs = now - 60000;
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = now - 500;                 // …but a PreToolUse looks fresher
+
+  assert.equal(agent.toJSON().status, 'waiting',
+    '0384-AC1: pending AskUserQuestion must read waiting regardless of hook freshness');
+  agent.kill?.();
+});
+
+test('0384: text-heuristic awaitingPrompt (no .tool) does NOT override sticky-working', () => {
+  // detectPrompt guesses from prose ("1. … 2. … ?") — a guess must not beat
+  // the protocol-level PreToolUse/Stop channel while a real tool is running.
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'working';
+  agent.awaitingPrompt = { kind: 'binary' };      // end_turn text guess, no tool
+  agent.awaitingPromptTs = now - 5000;
+  agent.lastConnectorTs = agent.lastEventTs = now - 5000;
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = now - 500;
+
+  assert.equal(agent.toJSON().status, 'working',
+    '0384-AC2: text-guess prompts stay subordinate to the hook channel');
+  agent.kill?.();
+});
+
+test('0384: cleared awaitingPrompt restores sticky-working behavior', () => {
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'working';
+  agent.awaitingPrompt = null;                    // answer landed → connector cleared it
+  agent.lastConnectorTs = agent.lastEventTs = now - 1000;
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = now - 8000;
+
+  assert.equal(agent.toJSON().status, 'working',
+    '0384-AC3: with no pending prompt the 0250 sticky-working model is unchanged');
+  agent.kill?.();
+});
