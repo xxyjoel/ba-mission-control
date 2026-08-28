@@ -74,6 +74,13 @@ npm install -g @bluearch/mission-control
 mc
 ```
 
+> **npm ≥ 11.19 (allow-scripts):** newer npm blocks packages' install scripts
+> until you allowlist them. mc self-heals at boot if its postinstall was
+> skipped, but for a fully clean install allow the three that matter once:
+> `npm config set allow-scripts=@bluearch/mission-control,node-pty,esbuild --location=user`
+> (mc fixes node-pty's spawn-helper permissions; node-pty builds its native
+> PTY binding; esbuild fetches the binary `tsx` runs on.)
+
 > Installing from the repo also works (`npx github:xxyjoel/ba-mission-control`)
 > and tracks `main` instead of the released version. A Homebrew tap is planned.
 
