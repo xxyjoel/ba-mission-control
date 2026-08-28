@@ -253,7 +253,7 @@
     <div class="gate pass">
       <span class="gate-name">Provenance / OIDC publish</span>
       <span class="gate-detail">Tokenless publish with <code>--provenance</code> wired; tag-vs-<code>package.json</code> drift guard + <code>prepublish-guard</code> in place.
-        <span class="gate-next">1.1.2 published manually (bootstrap). Remaining: register the trusted publisher on npmjs.com → package settings so CI can publish future tags.</span></span>
+        <span class="gate-next">Trusted publisher registered 2026-08-28 — v1.1.4/v1.1.5 published hands-free from CI with provenance in the Sigstore transparency log.</span></span>
       <span class="pill pass">Ready</span>
     </div>
     <div class="gate pass">
@@ -312,8 +312,8 @@
   <div class="gates">
     <div class="gate pass">
       <span class="gate-name">0351 · npm publish</span>
-      <span class="gate-detail"><b>Live: <code>@bluearch/mission-control@1.1.2</code></b> (2026-08-17). Manual bootstrap publish from the clean <code>v1.1.2</code> tag; clean-shell <code>npx</code> smoke test green (<code>MC_SMOKE_OK 1.1.2</code>).
-        <span class="gate-next">Register the OIDC trusted publisher on npmjs.com so future tags publish from CI.</span></span>
+      <span class="gate-detail"><b>Live: <code>@bluearch/mission-control@1.1.5</code></b> (2026-08-28). Trusted publisher registered — tags now publish from CI, tokenless, with provenance.
+        <span class="gate-next">Release flow is hands-free: <code>npm version patch</code> + push tag → CI verifies 4 cells → publishes.</span></span>
       <span class="pill pass">Done</span>
     </div>
     <div class="gate block">
@@ -337,11 +337,11 @@
       <span class="gate-detail">Registry one-liner promoted in README + landing page (commit <code>7b2c27d</code>). Done with the 1.1.2 release.</span>
       <span class="pill pass">Done</span>
     </div>
-    <div class="gate warn">
+    <div class="gate pass">
       <span class="gate-name">0361 · first CI matrix run</span>
-      <span class="gate-detail">v1.1.2 matrix blocked on the darwin-only negative-control bug (fixed, 0374). Linux node-pty compile + install + boot all green on the cell that ran.
-        <span class="gate-next">Next tag: expect 4/4 verify cells + CI publish green (needs trusted publisher registered).</span></span>
-      <span class="pill warn">Pending next tag</span>
+      <span class="gate-detail">v1.1.5 (2026-08-28): 4/4 verify cells green (macOS/Linux × Node 20/22) AND CI publish green — full tag→registry pipeline proven end to end.
+        <span class="gate-next">Done.</span></span>
+      <span class="pill pass">Done</span>
     </div>
   </div>
 

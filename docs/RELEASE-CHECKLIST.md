@@ -57,9 +57,12 @@ commits). Pick one:
       flow needs a live interactive terminal; approving after the CLI exits
       uploads nothing.
 - [x] Smoke test: clean-shell `npx` → `MC_SMOKE_OK 1.1.2`.
-- [ ] Register the OIDC trusted publisher (npmjs.com → package → Settings →
+- [x] Register the OIDC trusted publisher (npmjs.com → package → Settings →
       Trusted publisher: repo `xxyjoel/ba-mission-control`, workflow
-      `release.yml`) so future tags publish from CI.
+      `release.yml`, environment EMPTY, permission "npm publish").
+      Done 2026-08-28 — v1.1.4 and v1.1.5 published hands-free from CI with
+      provenance. Field gotchas that caused the earlier masked-403 `404 PUT`:
+      workflow must be the bare filename, environment must be blank.
 
 ## 6. Tag the release
 
