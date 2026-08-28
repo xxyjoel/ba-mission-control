@@ -43,6 +43,16 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     try {
       const events = await core.readNew();
       for (const ev of events) {
+        // 0390: PostToolUse for a human-blocking tool = the ask was ANSWERED —
+        // protocol truth from claude itself, the only channel that reports it
+        // explicitly. Clear the pending prompt so a resolved ask can never pin
+        // the card on INPUT? (stale-prompt inverse of 0384).
+        if (ev?.event === 'PostToolUse'
+          && (ev.tool_name === 'AskUserQuestion' || ev.tool_name === 'ExitPlanMode')
+          && agent.awaitingPrompt) {
+          agent.awaitingPrompt = null;
+          agent.emit?.('change');
+        }
         const s = mapEventToStatus(ev);
         if (s != null) {
           const changed = agent.hookStatus !== s;
@@ -211,6 +221,10 @@ export function mapEventToStatus(ev) {
   if (event === 'UserPromptSubmit') return 'working';
 
   if (event === 'PreToolUse') return 'working';
+
+  // PostToolUse stays NULL-mapping by contract (0223-AC3): hookStatus/Ts move
+  // only on status-BEARING events. Its 0390 role — clearing a pending ask the
+  // moment the answer lands — happens in doRead() before this mapping runs.
 
   if (event === 'Notification') {
     if (notification_type === 'permission_prompt') return 'waiting';

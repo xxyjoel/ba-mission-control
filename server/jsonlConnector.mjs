@@ -239,6 +239,7 @@ function handleUser(ev, agent) {
     agent.lastTokRate = 0;
     agent.activity = '';
     agent.status = 'idle';
+    agent.awaitingPrompt = null; // 0390: fresh conversation — no pending ask
     pushTail(agent, { kind: 'sys', text: 'context cleared (/clear)' });
     return true;
   }
@@ -246,6 +247,12 @@ function handleUser(ev, agent) {
   pushTail(agent, { kind: 'user', text: text.slice(0, 8000), preview: firstLine(text, 240) });
   agent.messageCount = (agent.messageCount || 0) + 1;
   agent.status = 'working';
+  // 0390: a plain user message IS the human acting — an ask answered by
+  // TYPING (or dictation committed on ⏎, or an Esc-then-type) lands here as
+  // a user event with NO tool_result, so the tool_result clear never fires
+  // and the stale prompt pinned INPUT? while claude worked (focus-duck
+  // repro, 2026-08-28). Any pending prompt is moot once the user speaks.
+  agent.awaitingPrompt = null;
   agent.activity = firstLine(text, 200);
   return true;
 }

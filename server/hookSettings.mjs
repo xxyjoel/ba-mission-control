@@ -37,6 +37,12 @@ export function buildHookSettings({ emitterPath }) {
       // event, so an actively-working session reads 'idle' for seconds.
       UserPromptSubmit: [defaultGroup],
       PreToolUse: [defaultGroup],
+      // PostToolUse is the protocol-truth "tool finished" signal (0390) —
+      // crucially it fires the moment an AskUserQuestion / ExitPlanMode is
+      // ANSWERED, which no other channel reports explicitly. The tailer uses
+      // it to clear a pending awaitingPrompt so a resolved ask can never pin
+      // the card on INPUT? while claude works.
+      PostToolUse: [defaultGroup],
       Stop: [defaultGroup],
     },
   };

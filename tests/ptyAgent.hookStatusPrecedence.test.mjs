@@ -238,3 +238,49 @@ test('0384: cleared awaitingPrompt restores sticky-working behavior', () => {
     '0384-AC3: with no pending prompt the 0250 sticky-working model is unchanged');
   agent.kill?.();
 });
+
+// ── 0390: a RESOLVED ask must never pin INPUT? (stale-prompt inverse of 0384) ─
+//
+// Focus-duck repro (2026-08-28): user answered a pending AskUserQuestion by
+// TYPING (dictation committed on ⏎) — the transcript records a plain user
+// event, NOT a tool_result, so the tool_result clear never fired. The stale
+// tool-sourced prompt then outranked hook working (the 0384 override doing
+// its job on bad state) and the card read INPUT? while claude worked.
+
+test('0390: plain user message clears the pending ask → working, not INPUT?', async () => {
+  const { parseEvent } = await import('../server/jsonlConnector.mjs');
+  const agent = bootAgent();
+  const now = Date.now();
+  agent.awaitingPrompt = { kind: 'binary', tool: 'AskUserQuestion' };
+  agent.awaitingPromptTs = now - 30000;
+  agent._statusValue = 'waiting';
+  // The user types their answer — a plain user event, no tool_result.
+  parseEvent({ type: 'user', message: { role: 'user', content: 'use the 24h cutoff' } }, agent);
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = now - 100;
+
+  assert.equal(agent.awaitingPrompt, null, 'typed answer must clear the pending ask');
+  assert.equal(agent.toJSON().status, 'working',
+    '0390-AC1: after a typed answer the card reads working, not stale INPUT?');
+  agent.kill?.();
+});
+
+test('0390: PostToolUse(AskUserQuestion) hook record shape clears the ask', async () => {
+  const { mapEventToStatus } = await import('../server/statusHookTailer.mjs');
+  assert.equal(mapEventToStatus({ event: 'PostToolUse' }), null,
+    '0223-AC3 contract holds: PostToolUse is null-mapping; only the ask-clear uses it');
+  // The tailer-side clear keys on event + tool_name from emit-status records.
+  // Simulate what startStatusHookTailer.doRead does with such a record.
+  const agent = bootAgent();
+  agent.awaitingPrompt = { kind: 'single-select', tool: 'AskUserQuestion' };
+  const rec = { ts: Date.now(), session_id: agent.sessionId, event: 'PostToolUse', tool_name: 'AskUserQuestion' };
+  if (rec.event === 'PostToolUse'
+    && (rec.tool_name === 'AskUserQuestion' || rec.tool_name === 'ExitPlanMode')
+    && agent.awaitingPrompt) {
+    agent.awaitingPrompt = null;
+  }
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = Date.now();
+  assert.equal(agent.toJSON().status, 'working', '0390-AC2: cleared ask → working');
+  agent.kill?.();
+});

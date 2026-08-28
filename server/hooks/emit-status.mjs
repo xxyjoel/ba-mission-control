@@ -28,7 +28,7 @@ async function main() {
     return;
   }
 
-  const { hook_event_name: event, session_id, notification_type } = payload;
+  const { hook_event_name: event, session_id, notification_type, tool_name } = payload;
 
   if (!session_id || !event) return; // missing required fields → write nothing
 
@@ -45,6 +45,9 @@ async function main() {
 
   const record = { ts: Date.now(), session_id, event };
   if (notification_type !== undefined) record.notification_type = notification_type;
+  // Pre/PostToolUse carry the tool — the tailer needs it to clear a pending
+  // ask the instant its PostToolUse (answer received) lands (0390).
+  if (typeof tool_name === 'string') record.tool_name = tool_name.slice(0, 80);
 
   appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf8');
 }
