@@ -198,7 +198,8 @@ Verifiability — every action is observable:
   / tool result / turn-complete event with timestamps. (The grid **card** is a
   pure-stats tile — it no longer renders the tail; see *Card anatomy* below.)
 - The **fleet log pane** at the bottom is a chronological merge of all live
-  agents' tails — like `tail -f` over the whole fleet.
+  agents' tails — like `tail -f` over the whole fleet. Its height is exactly
+  the *Fleet log lines* setting (clamped only on terminals too short to fit).
 - **Costs** are summed from the `total_cost_usd` field claude emits at the
   end of each turn — not estimated client-side.
 - **Context window** (`ctx`) tracks the *main thread* only: sub-agent (Task)

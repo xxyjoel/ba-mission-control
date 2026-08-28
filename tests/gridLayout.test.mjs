@@ -82,3 +82,22 @@ test('chunkRows: splits a flat list into rows of N', () => {
   assert.deepEqual(chunkRows([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]]);
   assert.deepEqual(chunkRows([], 3), []);
 });
+
+// ── 0388: fleetLogLines is EXACT, not a floor ────────────────────────────────
+// User report 2026-08-28: "fleet log is not outputting the correct number of
+// lines as per the settings page." The old Math.max(setting, remainingH) grew
+// the log to fill leftover terminal space; the setting must be authoritative.
+
+test('0388: tall terminal — fleet log renders exactly the settings value', () => {
+  // 200 rows, 1 card row (5 cards / 5 cols → 11 rows) → plenty of slack.
+  const l = computeGridLayout({ termCols: 180, termRows: 200, gridCols: 5, count: 5, fleetLogLines: 8, windowsPerPane: 10, focusedIndex: 0 });
+  assert.equal(l.dynamicFleetLogLines, 8, 'setting honored exactly — no fill-to-remaining');
+});
+
+test('0388: short terminal — fleet log clamps below the setting instead of overflowing', () => {
+  // 30 rows: chrome (7) + one card row (11) leaves ~12; a 40-line setting
+  // must clamp to what fits, never push the layout past the last row.
+  const l = computeGridLayout({ termCols: 180, termRows: 30, gridCols: 5, count: 5, fleetLogLines: 40, windowsPerPane: 10, focusedIndex: 0 });
+  assert.ok(l.dynamicFleetLogLines < 40, `clamped (got ${l.dynamicFleetLogLines})`);
+  assert.ok(l.dynamicFleetLogLines >= 4, 'never below the settings-page minimum of 4');
+});

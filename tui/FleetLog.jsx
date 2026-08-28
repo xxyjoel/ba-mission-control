@@ -76,7 +76,9 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
   const textBudget = fleetLogTextBudget(width);
 
   return (
-    <Box flexDirection="column" paddingX={1} flexGrow={1} minHeight={6}>
+    // 0388: no flexGrow/minHeight — the log takes exactly its rows so the
+    // Settings line count is authoritative; App.jsx's spacer absorbs slack.
+    <Box flexDirection="column" paddingX={1}>
       <Box>
         <Text color={theme.accent}>▸ FLEET LOG</Text>
         <Text color={theme.dim}> · {rows.length} events</Text>

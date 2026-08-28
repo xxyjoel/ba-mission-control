@@ -35,7 +35,7 @@ const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 //   pageIndex      — active pane (0-based), derived from focusedIndex
 //   pageStart/pageEnd — slice bounds into the visible-agent list for this pane
 //   rowsInPage     — grid rows rendered in the active pane
-//   dynamicFleetLogLines — fleet-log height that fills the leftover space
+//   dynamicFleetLogLines — the fleetLogLines setting, clamped to what fits
 export function computeGridLayout({
   termCols,
   termRows,
@@ -77,12 +77,18 @@ export function computeGridLayout({
   const pageEnd = Math.min(n, pageStart + perPage);
   const rowsInPage = Math.max(0, Math.ceil((pageEnd - pageStart) / effectiveCols));
 
-  // Fleet log fills whatever's left after the actually-rendered grid + chrome.
+  // Fleet log height = the user's setting, EXACTLY, clamped only when the
+  // terminal is too short to honor it (0388). The old Math.max(setting,
+  // remainingH) treated the setting as a floor and silently grew the log to
+  // fill leftover space — "I set 8 lines and get 23" — and on short terminals
+  // could push the layout past the last row. Leftover vertical space is now
+  // absorbed by a flex spacer in App.jsx (below the log, above the toasts) so
+  // the status bar stays pinned to the terminal's bottom edge.
   const pagerActual = pageCount > 1 ? PAGER_H : 0;
   const fixedH = HEADER_H + AGG_H + (rowsInPage * CARD_H) + pagerActual
     + FEEDBACK_H + STATUS_H + FLEETLOG_HEAD_H;
   const remainingH = Math.max(0, trows - fixedH);
-  const dynamicFleetLogLines = Math.max(fleetLogLines, remainingH);
+  const dynamicFleetLogLines = Math.min(fleetLogLines, Math.max(4, remainingH));
 
   return {
     effectiveCols,

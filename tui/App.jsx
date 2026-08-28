@@ -2037,10 +2037,14 @@ export default function App({ fleet, auth: initialAuth }) {
         </Box>
       )}
 
-      {/* Fleet log — sized to fill whatever vertical space is left. */}
+      {/* Fleet log — exactly the Settings line count (clamped by gridLayout
+          only when the terminal is too short). 0388: the log no longer grows
+          to fill leftover space; the spacer below absorbs it so the status
+          bar stays pinned to the bottom edge. */}
       {settings.showFleetLog && (
         <FleetLog log={fleetLog} focusedId={focusedAgent?.id} theme={theme} maxLines={dynamicFleetLogLines} mode={settings.fleetLogMode} width={termSize.cols} />
       )}
+      <Box flexGrow={1} />
 
       {/* Toasts above the status bar */}
       {feedbackStrip}
