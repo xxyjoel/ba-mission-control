@@ -34,10 +34,9 @@ import { resolve, dirname } from 'node:path';
 import { PtyAgent } from '../server/ptyAgent.mjs';
 import { buildHookSettings } from '../server/hookSettings.mjs';
 
-const EMITTER_PATH = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../server/hooks/emit-status.mjs',
-);
+// 0391: sessions reference the STABLE emitter copy — same source as PtyAgent.
+import { stableEmitterPath } from '../server/hookInstall.mjs';
+const EMITTER_PATH = stableEmitterPath();
 
 // Shell metacharacters that would be dangerous in a shell-interpolated command.
 const HOSTILE_CWD = '/tmp/evil; rm -rf ~ /a b/$(whoami)';

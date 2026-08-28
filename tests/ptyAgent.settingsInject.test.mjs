@@ -26,11 +26,10 @@ import { resolve, dirname } from 'node:path';
 import { PtyAgent } from '../server/ptyAgent.mjs';
 import { buildHookSettings } from '../server/hookSettings.mjs';
 
-// Absolute path to the hook emitter script (same path impl 0213 will use).
-const EMITTER_PATH = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../server/hooks/emit-status.mjs',
-);
+// 0391: the emitter path sessions reference is the STABLE copy under
+// ~/.local/state/claude-mc/hook-runtime/ — same source of truth as PtyAgent.
+import { stableEmitterPath } from '../server/hookInstall.mjs';
+const EMITTER_PATH = stableEmitterPath();
 
 // ─── shared spawn stub (mirrors tests/ptyAgent.test.mjs pattern) ───────────────
 

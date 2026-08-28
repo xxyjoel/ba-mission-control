@@ -24,8 +24,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
 import { spawn as ptySpawn } from 'node-pty';
 import xterm from '@xterm/headless';
 import { MODELS } from '../tui/lib/models.js';
@@ -33,13 +31,18 @@ import { fullStatus } from './git.mjs';
 import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
 import { startSubagentUsageTailer } from './subagentUsageTailer.mjs';
 import { startStatusHookTailer } from './statusHookTailer.mjs';
+import { stableEmitterPath } from './hookInstall.mjs';
 import { dlog } from '../tui/lib/debugLog.js';
 import { buildHookSettings } from './hookSettings.mjs';
 
-// Absolute path to the hook emitter script, resolved relative to this module.
-// Constant across the process lifetime — does not change per session or slot.
-const _moduleDir = dirname(fileURLToPath(import.meta.url));
-const EMITTER_PATH = resolve(_moduleDir, 'hooks/emit-status.mjs');
+// Absolute path to the hook emitter script. 0391: resolved through
+// hookInstall's STABLE copy (~/.local/state/claude-mc/hook-runtime/) instead
+// of the install dir — sessions bake this path at launch, and an install that
+// later moves or vanishes (npx cache eviction, deleted stray copy) would
+// otherwise break every hook in every still-running session (MODULE_NOT_FOUND
+// spam, observed live 2026-08-28). Falls back to the in-install path if the
+// stable copy can't be written.
+const EMITTER_PATH = stableEmitterPath();
 
 // xterm-headless ships as { Terminal } sometimes nested under default
 // depending on the bundler. Same pattern as PtyPane previously.
