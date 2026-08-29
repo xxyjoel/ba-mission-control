@@ -370,7 +370,7 @@ Settings → LAYOUT. Keys available there:
 | `↑` / `↓` | Recall prior submitted prompt (history nav in composer) |
 | `Ctrl+Y` | Enter **scroll mode** — view scrollback without forwarding keys to claude (the embedded session owns the screen, so mc brackets a dedicated mode rather than fighting it for arrow keys) |
 | `w` / `s` _(scroll mode)_ | Scroll one line back / forward through history |
-| `b` / `f` _(scroll mode)_ | Scroll half a page back / forward |
+| `f` / `b` _(scroll mode)_ | Scroll half a page up / down |
 | `g` / `G` _(scroll mode)_ | Jump to the oldest / newest (live) line |
 | `Esc` _(scroll mode)_ | Exit scroll mode (any other key also exits, returning input to claude) |
 | `Ctrl+U` | Expand / collapse the stats panel (defaults to a compact one-liner) |

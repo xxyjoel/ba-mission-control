@@ -35,7 +35,7 @@ const SECTIONS = [
   { title: 'ZOOM (focused session)', views: ['zoom'], rows: [
     ['Exit zoom', 'ctrl+q'],
     ['Newline (plain ↵ submits)', 'ctrl+j · shift+↵'],
-    ['Scroll mode (w/s/b/f/g/G)', 'ctrl+y'],
+    ['Scroll mode (w/s/f/b/g/G)', 'ctrl+y'],
     ['Expand / collapse stats panel', 'ctrl+u'],
     ['Show / hide tool events', 'ctrl+k'],
     ['→ forwarded to claude', 'esc · ctrl+t · ctrl+s · shift+tab'],

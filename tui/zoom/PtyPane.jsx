@@ -126,8 +126,8 @@ export default function PtyPane({
   const [exited, setExited] = useState(false);
 
   // Scroll mode. Activated by Ctrl+Y (0x19 — Ink-reliable, unused by claude).
-  // While active, `w` / `s` scroll up / down by one line, `b` / `f`
-  // by half a page, `g` / `G` jump to top / bottom. `Esc` or any
+  // While active, `w` / `s` scroll up / down by one line, `f` / `b`
+  // half a page up / down (0392), `g` / `G` jump to top / bottom. `Esc` or any
   // other key exits scroll mode and re-enables claude input. We
   // can't use plain w/s outside of scroll mode because they're
   // typed text letters — see docs/HOTKEYS.md §7.
@@ -353,8 +353,11 @@ export default function PtyPane({
       if (key.escape) { setScrollMode(false); setScrollOffset(0); return; }
       if (input === 'w') { setScrollOffset(o => Math.min(maxOffset, o + 1)); return; }
       if (input === 's') { setScrollOffset(o => Math.max(0, o - 1)); return; }
-      if (input === 'b') { setScrollOffset(o => Math.min(maxOffset, o + halfPage)); return; }
-      if (input === 'f') { setScrollOffset(o => Math.max(0, o - halfPage)); return; }
+      // 0392: f = half-page UP, b = half-page DOWN (toward bottom) — swapped
+      // from the less-style b-back/f-forward on user request so f pairs with
+      // w (up) and b pairs with s (down).
+      if (input === 'f') { setScrollOffset(o => Math.min(maxOffset, o + halfPage)); return; }
+      if (input === 'b') { setScrollOffset(o => Math.max(0, o - halfPage)); return; }
       if (input === 'g') { setScrollOffset(maxOffset); return; }
       if (input === 'G') { setScrollOffset(0); return; }
       // Anything else — exit scroll mode and drop the key. The user
@@ -531,7 +534,7 @@ export default function PtyPane({
         <Text>
           <Text color={theme?.accent || 'cyan'} bold>▲ SCROLL </Text>
           <Text color={theme?.fg || 'white'}>{scrollOffset} </Text>
-          <Text color={theme?.dim || 'gray'}>· w/s line · b/f half-page · g/G top/bottom · Esc resume claude</Text>
+          <Text color={theme?.dim || 'gray'}>· w/s line · f/b half-page up/down · g/G top/bottom · Esc resume claude</Text>
         </Text>
       )}
       {exited && (

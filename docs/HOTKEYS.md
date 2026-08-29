@@ -65,7 +65,7 @@ All chrome keys are in the `Ctrl+A..Z` range — the ONLY range Ink delivers as
 | Key | mc action | Claude key it shadows | Severity |
 |---|---|---|---|
 | `Ctrl+Q` | Exit zoom | none | **None** — Q=quit; replaces the old Esc-exit and the dead `Ctrl+]` |
-| `Ctrl+Y` | Enter scroll mode (`w`/`s` line · `b`/`f` half-page · `g`/`G` top/bottom · `Esc` exits) | `Ctrl+Y` paste-deleted-text | **Low** — claude editing-only key |
+| `Ctrl+Y` | Enter scroll mode (`w`/`s` line · `f`/`b` half-page up/down · `g`/`G` top/bottom · `Esc` exits) | `Ctrl+Y` paste-deleted-text | **Low** — claude editing-only key |
 | `Ctrl+K` | Toggle mc's tools panel | `Ctrl+K` delete-to-end-of-line | **Low** — claude editing-only key; moved here off `Ctrl+T` (claude todos) |
 | `Ctrl+U` | Toggle mc's stats panel | `Ctrl+U` delete-to-line-start | **Low** — claude editing-only key; moved here off `Ctrl+S` (claude stash) |
 | `Ctrl+J` / `Shift+Enter` | Newline without submitting | matches claude's own `chat:newline` | **None** — same action |
@@ -200,7 +200,7 @@ only matter while the user is typing in the composer:
 **Status:** the mode-prefix scheme shipped, bound to `Ctrl+Y` (not the
 originally-explored `Ctrl+\`, which is `0x1c` — outside Ink's ctrl-letter
 range and therefore unreachable). `Ctrl+Y` enters scroll mode; while active,
-`w`/`s` scroll one line, `b`/`f` half a page, `g`/`G` jump to top/bottom, and
+`w`/`s` scroll one line, `f`/`b` half a page up/down (0392), `g`/`G` jump to top/bottom, and
 `Esc` (or any other key) exits and returns input to claude. See `ZOOM_KEYS.SCROLL`
 in `tui/zoom/zoomKeys.js` and the scroll-mode handler in `PtyPane.jsx`. The
 candidate analysis below is kept as historical rationale.
