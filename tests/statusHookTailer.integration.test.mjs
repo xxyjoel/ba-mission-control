@@ -261,3 +261,40 @@ describe('0221: startStatusHookTailer — NDJSON append → agent.hookStatus', (
     }
   });
 });
+
+// ── 0395: subagent tool events must not drive hookStatus ──────────────────────
+//
+// focus-duck (2026-08-29): main thread at a permission box (Notification:
+// permission_prompt → waiting) while a background Agent hammered Bash/Edit —
+// each subagent PreToolUse (tagged sub:true by emit-status via agent_id)
+// overwrote waiting back to working. Sub-tagged Pre/PostToolUse must be
+// invisible to hookStatus; Notifications still flow.
+
+test('0395: sub-tagged PreToolUse burst does not overwrite waiting', async () => {
+  const agent = makeAgent();
+  const filePath = ensureStatusFile(agent);
+  const handle = startStatusHookTailer({ agent });
+  try {
+    await new Promise(r => setTimeout(r, 100));
+    appendEvent(filePath, { event: 'Notification', notification_type: 'permission_prompt', sessionId: agent.sessionId });
+    assert.equal(await pollUntil(agent, 'waiting'), 'waiting', 'permission prompt → waiting');
+
+    // Subagent keeps working — burst of tagged tool events.
+    for (let i = 0; i < 5; i++) {
+      appendFileSync(filePath, JSON.stringify({
+        ts: Date.now(), session_id: agent.sessionId,
+        event: i % 2 ? 'PostToolUse' : 'PreToolUse', tool_name: 'Bash', sub: true,
+      }) + '\n', 'utf8');
+    }
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(agent.hookStatus, 'waiting',
+      '0395: subagent activity must not mask the main thread\'s waiting');
+
+    // The user approves → MAIN-thread PreToolUse (untagged) → working again.
+    appendEvent(filePath, { event: 'PreToolUse', sessionId: agent.sessionId });
+    assert.equal(await pollUntil(agent, 'working'), 'working', 'main-thread tool resumes working');
+  } finally {
+    handle.stop();
+    try { rmSync(filePath); } catch {}
+  }
+});

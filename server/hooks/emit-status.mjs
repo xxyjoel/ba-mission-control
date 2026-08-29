@@ -28,7 +28,7 @@ async function main() {
     return;
   }
 
-  const { hook_event_name: event, session_id, notification_type, tool_name } = payload;
+  const { hook_event_name: event, session_id, notification_type, tool_name, agent_id, agent_type } = payload;
 
   if (!session_id || !event) return; // missing required fields → write nothing
 
@@ -48,6 +48,12 @@ async function main() {
   // Pre/PostToolUse carry the tool — the tailer needs it to clear a pending
   // ask the instant its PostToolUse (answer received) lands (0390).
   if (typeof tool_name === 'string') record.tool_name = tool_name.slice(0, 80);
+  // 0395: SUBAGENT tool events carry agent_id/agent_type; main-thread events
+  // don't (verified against live payloads 2026-08-29). Tag them so the tailer
+  // can keep a busy subagent from masking the main thread's status — a
+  // background agent's PreToolUse burst was overwriting 'waiting' back to
+  // 'working' while a permission box sat on screen (focus-duck).
+  if (agent_id !== undefined || agent_type !== undefined) record.sub = true;
 
   appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf8');
 }

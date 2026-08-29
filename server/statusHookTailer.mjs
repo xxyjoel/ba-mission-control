@@ -43,6 +43,13 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     try {
       const events = await core.readNew();
       for (const ev of events) {
+        // 0395: a SUBAGENT's tool events (record.sub, from agent_id in the
+        // hook payload) say nothing about the MAIN thread's state — a
+        // background agent hammering Bash/Edit must not overwrite 'waiting'
+        // while the main thread sits on a permission box (focus-duck,
+        // 2026-08-29). Notifications/Stop still flow: a subagent tool's
+        // permission prompt surfaces in the main UI and genuinely blocks.
+        if (ev?.sub && (ev.event === 'PreToolUse' || ev.event === 'PostToolUse')) continue;
         // 0390: PostToolUse for a human-blocking tool = the ask was ANSWERED —
         // protocol truth from claude itself, the only channel that reports it
         // explicitly. Clear the pending prompt so a resolved ask can never pin

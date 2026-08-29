@@ -52,3 +52,37 @@ test('the copied emitter EXECUTES from the stable dir (relative import resolves)
     try { rmSync(out); } catch {}
   }
 });
+
+test('0395: subagent payload (agent_id) gets tagged sub:true in the record', () => {
+  const p = stableEmitterPath();
+  const sid = randomUUID();
+  const payload = JSON.stringify({
+    hook_event_name: 'PreToolUse', session_id: sid, tool_name: 'Bash',
+    agent_id: 'agent-123', agent_type: 'general-purpose',
+  });
+  execFileSync(process.execPath, [p], { input: payload, timeout: 10_000 });
+  const out = statusFilePath({ sessionId: sid });
+  try {
+    const rec = JSON.parse(readFileSync(out, 'utf8').trim().split('\n').at(-1));
+    assert.equal(rec.sub, true, 'subagent events must be tagged');
+    assert.equal(rec.tool_name, 'Bash');
+  } finally {
+    try { rmSync(out); } catch {}
+  }
+});
+
+test('0395: main-thread payload (no agent_id) has no sub tag', () => {
+  const p = stableEmitterPath();
+  const sid = randomUUID();
+  execFileSync(process.execPath, [p], {
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: sid, tool_name: 'Edit' }),
+    timeout: 10_000,
+  });
+  const out = statusFilePath({ sessionId: sid });
+  try {
+    const rec = JSON.parse(readFileSync(out, 'utf8').trim().split('\n').at(-1));
+    assert.equal(rec.sub, undefined, 'main-thread events must not be tagged');
+  } finally {
+    try { rmSync(out); } catch {}
+  }
+});
