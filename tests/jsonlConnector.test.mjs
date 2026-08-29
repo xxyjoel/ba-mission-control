@@ -489,10 +489,18 @@ test('parseEvent: malformed event (no type) → false', () => {
 
 // ─── parseEvent: side-effects ─────────────────────────────────────
 
-test('parseEvent: every event bumps lastEventTs', () => {
-  const a = makeAgent({ lastEventTs: 0 });
-  parseEvent({ type: 'ai-title' }, a); // noise event still bumps
-  assert.ok(a.lastEventTs > 0);
+test('parseEvent: material events bump lastEventTs; noise does NOT (0394)', () => {
+  // 0394 contract flip: noise (ai-title, queue-operation, …) must leave BOTH
+  // clocks untouched — a metadata write hours after a turn ended made the
+  // connector look fresher than the Stop hook and pinned an idle card to
+  // WORKING (gtm-gov-miner, 2026-08-29).
+  const a = makeAgent({ lastEventTs: 0, lastConnectorTs: 0 });
+  parseEvent({ type: 'ai-title' }, a);
+  assert.equal(a.lastEventTs, 0, 'noise must not bump lastEventTs');
+  assert.equal(a.lastConnectorTs, 0, 'noise must not bump lastConnectorTs');
+  parseEvent({ type: 'user', message: { content: 'hi' } }, a);
+  assert.ok(a.lastEventTs > 0, 'material event bumps lastEventTs');
+  assert.ok(a.lastConnectorTs > 0, 'material event bumps lastConnectorTs');
 });
 
 test('parseEvent: tail respects TAIL_MAX (40 entries)', () => {

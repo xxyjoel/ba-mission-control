@@ -284,3 +284,33 @@ test('0390: PostToolUse(AskUserQuestion) hook record shape clears the ask', asyn
   assert.equal(agent.toJSON().status, 'working', '0390-AC2: cleared ask → working');
   agent.kill?.();
 });
+
+// ── 0394: noise transcript lines must not freshen the connector clock ─────────
+//
+// gtm-gov-miner (2026-08-29): session idle since 16:52 (Stop + idle_prompt
+// hooks both landed) yet the card showed WORKING. A metadata line (title /
+// bridge marker) written at 17:23 bumped lastConnectorTs, so the idle-branch
+// arbitration (hookStatusTs > lastConnectorTs ? idle : connector) handed the
+// card back to the connector's stale 'working'.
+
+test('0394: noise event does not bump connector clock — fresh Stop keeps idle', async () => {
+  const { parseEvent } = await import('../server/jsonlConnector.mjs');
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'working';               // connector never saw an end_turn
+  agent.lastConnectorTs = agent.lastEventTs = now - 3_600_000; // real events: 1h ago
+  agent.hookStatus = 'idle';
+  agent.hookStatusTs = now - 1_800_000;         // Stop landed 30min ago
+
+  const before = agent.lastConnectorTs;
+  // Metadata noise arrives NOW (title refresh, bridge marker, queue op).
+  parseEvent({ type: 'ai-title', title: 'x' }, agent);
+  parseEvent({ type: 'queue-operation' }, agent);
+  parseEvent({ type: 'file-history-snapshot' }, agent);
+
+  assert.equal(agent.lastConnectorTs, before,
+    '0394-AC1: noise must not advance the JSONL-only activity clock');
+  assert.equal(agent.toJSON().status, 'idle',
+    '0394-AC2: the fresh Stop keeps the card idle despite later metadata writes');
+  agent.kill?.();
+});

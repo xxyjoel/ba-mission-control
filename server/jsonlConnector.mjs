@@ -153,31 +153,33 @@ function lookupByCliModel(cliModel) {
 // behavior-preserving.
 export function parseEvent(ev, agent) {
   if (!ev || typeof ev !== 'object' || !ev.type) return false;
+
+  // Noise we intentionally drop: ai-title, last-prompt, attachment,
+  // file-history-snapshot, queue-operation, agent-name, and anything unknown.
+  // CRITICAL (0394): noise must return BEFORE the clock bumps below. The old
+  // order bumped lastConnectorTs on every line — so a metadata write (bridge
+  // marker, title refresh) HOURS after a turn ended made the connector look
+  // "fresher" than the Stop hook, and the idle-branch arbitration handed the
+  // card back to a stale connector 'working' (gtm-gov-miner, 2026-08-29:
+  // idle session showed WORKING after a 17:23 title touch vs a 16:52 Stop).
+  const handler = {
+    'user': handleUser,
+    'assistant': handleAssistant,
+    'system': handleSystem,
+    'permission-mode': handlePermissionMode,
+  }[ev.type];
+  if (!handler) return false;
+
   agent.lastEventTs = Date.now();
   // 0229-fix: JSONL-only activity clock. Unlike lastEventTs (also bumped by the
   // PTY onData handler on EVERY byte, incl. cosmetic repaints — the "update
-  // available" banner, health chip, spinner), this advances ONLY on a parsed
-  // JSONL event. toJSON()'s hook-vs-connector freshness merge compares against
-  // THIS, so terminal chatter can't keep the connector looking "fresher" than a
-  // real Stop hook and pin an idle card to 'working' (found in real-app verify).
+  // available" banner, health chip, spinner), this advances ONLY on a
+  // status-bearing JSONL event. toJSON()'s hook-vs-connector freshness merge
+  // compares against THIS, so terminal chatter can't keep the connector looking
+  // "fresher" than a real Stop hook and pin an idle card to 'working'.
   agent.lastConnectorTs = Date.now();
 
-  switch (ev.type) {
-    case 'user':              return handleUser(ev, agent);
-    case 'assistant':         return handleAssistant(ev, agent);
-    case 'system':            return handleSystem(ev, agent);
-    case 'permission-mode':   return handlePermissionMode(ev, agent);
-
-    // Noise we intentionally drop. Cataloged so future contributors
-    // know they were considered.
-    case 'ai-title':                return false;
-    case 'last-prompt':              return false;
-    case 'attachment':               return false;
-    case 'file-history-snapshot':    return false;
-    case 'queue-operation':          return false;
-    case 'agent-name':               return false;
-    default:                         return false;
-  }
+  return handler(ev, agent);
 }
 
 function handleUser(ev, agent) {
