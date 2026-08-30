@@ -32,6 +32,7 @@ import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
 import { startSubagentUsageTailer } from './subagentUsageTailer.mjs';
 import { startStatusHookTailer } from './statusHookTailer.mjs';
 import { stableEmitterPath } from './hookInstall.mjs';
+import { classifyEarlyExit, findLedgerOwner } from './ledgerOwner.mjs';
 import { dlog } from '../tui/lib/debugLog.js';
 import { buildHookSettings } from './hookSettings.mjs';
 
@@ -398,6 +399,7 @@ export class PtyAgent extends EventEmitter {
     //   2) liveness for stuck-detection in toJSON()
     try {
       this._spawnProbeBuf = ''; // first output after (re)spawn — read on early exit
+      this._spawnTs = Date.now(); // per-(re)spawn clock for the early-refusal window (0396)
       this._termDataSub = this.pty.onData((chunk) => {
         this.lastEventTs = Date.now();
         this.lastPtyTs = Date.now(); // PTY-only clock for the idle→working overlay
@@ -510,11 +512,23 @@ export class PtyAgent extends EventEmitter {
     // prose mentioning "background agent" must not suppress the restart
     // of a genuinely-crashing slot (security-review observation,
     // 2026-08-12).
-    if (code !== 0 && /currently running as a background agent/i.test(this._spawnProbeBuf || '')) {
+    // 0396 hardening of the 2026-08-12 guard: the old check required a
+    // NON-ZERO exit AND one exact phrase — a refusal that exits 0 or uses
+    // different wording fell through to the auto-restart loop (the slot-5
+    // error-toast storm, 2026-08-27). classifyEarlyExit accepts any exit
+    // code, tolerates wording drift (full-phrase anchors only), and gates on
+    // the exit landing within seconds of spawn so replayed conversation
+    // prose can never suppress a genuine crash-restart.
+    if (classifyEarlyExit(this._spawnProbeBuf, Date.now() - (this._spawnTs || 0)) === 'held-by-agent') {
+      const owner = findLedgerOwner(this.sessionId);
+      const ownerStr = owner
+        ? `background agent is ${owner.state}${owner.tempo ? ` (${owner.tempo})` : ''}${owner.detail ? ` — "${owner.detail}"` : ''}`
+        : 'likely started from claude.ai or orphaned by a force-close';
       this.appendTail({
         kind: 'err',
-        text: 'session is held by a claude background agent (orphan from a previous force-close?) — `claude agents` to attach/stop it, then :resume this slot',
+        text: `session is held by a claude background agent — ${ownerStr}. Wait for it to finish (or \`claude agents\` to attach/stop it), then :resume this slot`,
       });
+      this.activity = 'held by a background agent — not retrying';
       this.status = 'error';
       this.emit('change');
       return;
