@@ -134,6 +134,13 @@ const WORKING_RX = /esc to interrupt/i;
 // out a slow spinner refresh between tool calls.
 const WORKING_FRESH_MS = 2500;
 
+// 0398: how recently a SUB-tagged hook event (background/subagent tool call,
+// see statusHookTailer) must have landed for an idle main thread to still
+// read 'working'. Background builders fire tools every few seconds; 15s of
+// silence means they're done (or wedged — either way the main thread's idle
+// verdict stands again).
+const SUB_ACTIVE_MS = 15_000;
+
 // detectWorking — true when the rendered rows show claude's active-turn
 // interrupt hint. Pure (mirrors detectApprovalPrompt) so it's unit-testable.
 export function detectWorking(rows) {
@@ -276,6 +283,9 @@ export class PtyAgent extends EventEmitter {
     // lastEventTs (which onData also bumps on every PTY byte) so cosmetic
     // terminal repaints can't defeat a real Stop-hook idle transition.
     this.lastConnectorTs = 0;
+    // 0398: last SUB-tagged hook event (background/subagent tool activity).
+    // Fresh values keep an idle main thread reading 'working' in toJSON.
+    this.lastSubHookTs = 0;
     // JSONL blocking-prompt object or null (set by jsonlConnector on
     // AskUserQuestion / ExitPlanMode / end_turn question; cleared on tool_result).
     this.awaitingPrompt = null;
@@ -1033,6 +1043,16 @@ export class PtyAgent extends EventEmitter {
       const baseStatus = workingOverlay ? 'working' : connectorStatus;
       approvalWaiting = baseStatus === 'working' && this.#scanApprovalPrompt();
       status = approvalWaiting ? 'waiting' : baseStatus;
+    }
+    // 0398: BACKGROUND agents keep an idle card on 'working'. A background
+    // Agent launch returns its tool_result instantly and the main thread then
+    // Stops — so the sub-tagged hook events (0395: invisible to hookStatus)
+    // are the only remaining evidence of work. While that clock is fresh, an
+    // 'idle' verdict is a lie in the "safe to ignore" direction (focus-duck
+    // read IDLE with three builders running). Never overrides 'waiting' — a
+    // permission prompt while background agents run still needs the user.
+    if (status === 'idle' && Date.now() - (this.lastSubHookTs || 0) < SUB_ACTIVE_MS) {
+      status = 'working';
     }
     // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
     // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the

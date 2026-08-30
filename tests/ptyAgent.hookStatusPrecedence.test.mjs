@@ -314,3 +314,51 @@ test('0394: noise event does not bump connector clock — fresh Stop keeps idle'
     '0394-AC2: the fresh Stop keeps the card idle despite later metadata writes');
   agent.kill?.();
 });
+
+// ── 0398: fresh background-agent activity keeps an idle card on working ───────
+//
+// focus-duck (2026-08-30): three background builders running, main thread
+// Stopped → card read IDLE. Background Agent launches return their tool_result
+// instantly, so the sub-tagged hook events (invisible to hookStatus per 0395)
+// are the only evidence of ongoing work — their freshness must hold 'working'.
+
+test('0398: idle + fresh sub-hook clock → working', () => {
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'idle';
+  agent.lastConnectorTs = agent.lastEventTs = now - 30000;
+  agent.hookStatus = 'idle';
+  agent.hookStatusTs = now - 20000;      // Stop landed, main thread done
+  agent.lastSubHookTs = now - 3000;      // a builder ran a tool 3s ago
+
+  assert.equal(agent.toJSON().status, 'working',
+    '0398-AC1: background agents working → the card must not read idle');
+  agent.kill?.();
+});
+
+test('0398: stale sub-hook clock → idle verdict stands', () => {
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'idle';
+  agent.lastConnectorTs = agent.lastEventTs = now - 60000;
+  agent.hookStatus = 'idle';
+  agent.hookStatusTs = now - 40000;
+  agent.lastSubHookTs = now - 30000;     // builders quiet past SUB_ACTIVE_MS
+
+  assert.equal(agent.toJSON().status, 'idle',
+    '0398-AC2: finished background agents must not pin working forever');
+  agent.kill?.();
+});
+
+test('0398: waiting is NEVER overridden by background activity', () => {
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'waiting';
+  agent.hookStatus = 'waiting';          // permission prompt confirmed
+  agent.hookStatusTs = now - 1000;
+  agent.lastSubHookTs = now - 500;       // builders still hammering
+
+  assert.equal(agent.toJSON().status, 'waiting',
+    '0398-AC3: a permission prompt needs the user regardless of background work');
+  agent.kill?.();
+});

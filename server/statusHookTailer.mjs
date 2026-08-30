@@ -49,7 +49,16 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
         // while the main thread sits on a permission box (focus-duck,
         // 2026-08-29). Notifications/Stop still flow: a subagent tool's
         // permission prompt surfaces in the main UI and genuinely blocks.
-        if (ev?.sub && (ev.event === 'PreToolUse' || ev.event === 'PostToolUse')) continue;
+        if (ev?.sub && (ev.event === 'PreToolUse' || ev.event === 'PostToolUse')) {
+          // 0398: invisible to hookStatus, but NOT to liveness — background
+          // Agent launches return their tool_result instantly and the main
+          // thread then Stops, so these events are the ONLY evidence that
+          // background agents are still working. toJSON keeps an idle card
+          // on 'working' while this clock is fresh (focus-duck read IDLE
+          // with three builders running, 2026-08-30).
+          agent.lastSubHookTs = Date.now();
+          continue;
+        }
         // 0390: PostToolUse for a human-blocking tool = the ask was ANSWERED —
         // protocol truth from claude itself, the only channel that reports it
         // explicitly. Clear the pending prompt so a resolved ask can never pin
