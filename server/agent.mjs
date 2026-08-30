@@ -891,6 +891,7 @@ export class Agent extends EventEmitter {
       // absolute timestamps; the TUI derives elapsed time on render so
       // counters stay live without snapshot churn.
       spawnedAt: this.spawnedAt,
+      claudeVersion: this.claudeVersion || null, // 0333 parity
       stateSince: this.stateSince,
       turnCount: this.turnCount,
       messageCount: this.messageCount,

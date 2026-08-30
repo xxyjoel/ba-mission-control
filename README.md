@@ -425,6 +425,7 @@ The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the h
 | `:sessions` | Show saved sessions (toast) |
 | `:forget <slot>` | Drop the saved session for a slot |
 | `:repos` | Open the folder picker to choose where repos are scanned. The chosen folder **replaces** the built-in defaults. `:repos clear` resets to defaults. |
+| `:update` | Report **claude version drift**: the on-disk `claude --version` vs the version each live session actually launched on (running processes keep their old binary until restarted). Drifted slots get a fleet-log line; converge by quit+relaunch. |
 | `:whoami` (or `:auth`) | Re-probe `claude auth status` and surface email + subscription |
 | `:usage` | Re-read plan-side rate-limit telemetry (`5h` and `7d` quota %) |
 | `:note <text>` (or `:n`) | Inject a local annotation into the focused session's chat log (not sent to claude) |

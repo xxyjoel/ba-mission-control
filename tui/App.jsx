@@ -43,6 +43,7 @@ import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRec
 import { getTemplate, listTemplates } from './lib/templateStore.js';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
+import { probeClaudeVersion } from './lib/claudeVersion.js';
 import { readUsage, fmtReset } from './lib/usage.js';
 import { dlog } from './lib/debugLog.js';
 import { postSlack } from './lib/slack.js';
@@ -1055,6 +1056,32 @@ export default function App({ fleet, auth: initialAuth }) {
       case 'version':
       case 'ver': {
         pushToast(`mc ${versionLine()}`, 'info');
+        return null;
+      }
+      case 'update': {
+        // 0333 slice 1: VERSION DRIFT report. Live processes keep the inode
+        // they launched with, so an on-disk claude upgrade changes nothing
+        // for running sessions — this verb makes that drift visible. The
+        // staggered restart wave (converge without losing conversations) is
+        // the task's next slice, behind its human checkpoint.
+        const disk = probeClaudeVersion(true);
+        if (!disk) { pushToast('claude not found on PATH (CLAUDE_BIN?)', 'error'); return null; }
+        const live = agents.filter(a => a.status !== 'empty');
+        const drifted = live.filter(a => a.claudeVersion && a.claudeVersion !== disk);
+        if (drifted.length === 0) {
+          pushToast(`claude ${disk} — all ${live.length} session${live.length === 1 ? '' : 's'} current`, 'ok');
+          return null;
+        }
+        for (const a of drifted) {
+          fleet.agentById(a.id)?.appendTail?.({
+            kind: 'sys',
+            text: `claude drift: this session launched on ${a.claudeVersion}; disk now has ${disk} — restart the session to converge`,
+          });
+        }
+        pushToast(
+          `claude ${disk} on disk · ${drifted.length}/${live.length} session${live.length === 1 ? '' : 's'} on older builds (fleet log has details) — quit+relaunch mc to converge`,
+          'warn',
+        );
         return null;
       }
       // Where state lives — surface the on-disk paths for the focused

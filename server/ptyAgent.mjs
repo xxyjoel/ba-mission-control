@@ -33,6 +33,7 @@ import { startSubagentUsageTailer } from './subagentUsageTailer.mjs';
 import { startStatusHookTailer } from './statusHookTailer.mjs';
 import { stableEmitterPath } from './hookInstall.mjs';
 import { classifyEarlyExit, findLedgerOwner } from './ledgerOwner.mjs';
+import { probeClaudeVersion } from '../tui/lib/claudeVersion.js';
 import { dlog } from '../tui/lib/debugLog.js';
 import { buildHookSettings } from './hookSettings.mjs';
 
@@ -400,6 +401,10 @@ export class PtyAgent extends EventEmitter {
     try {
       this._spawnProbeBuf = ''; // first output after (re)spawn — read on early exit
       this._spawnTs = Date.now(); // per-(re)spawn clock for the early-refusal window (0396)
+      // 0333: the claude version this process launched on (cached probe —
+      // refreshed by `:update`). Live processes keep their inode across
+      // on-disk updates, so this is what drift is measured against.
+      this.claudeVersion = probeClaudeVersion();
       this._termDataSub = this.pty.onData((chunk) => {
         this.lastEventTs = Date.now();
         this.lastPtyTs = Date.now(); // PTY-only clock for the idle→working overlay
@@ -1083,6 +1088,7 @@ export class PtyAgent extends EventEmitter {
       permissionMode: this.permissionMode,
       workingStartTs: this.workingStartTs,
       spawnedAt: this.spawnedAt,
+      claudeVersion: this.claudeVersion || null, // 0333: version this process launched on
       stateSince: this.stateSince,
       turnCount: this.turnCount,
       messageCount: this.messageCount,
