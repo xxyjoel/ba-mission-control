@@ -57,6 +57,14 @@ const RESUME_RECENCY_MS = 120_000;
 // the mode at 'save' so closing the terminal never silently drops a session's
 // sessionId — that was the "mc did not save my sessions" data loss.
 let quitMode = 'save';
+
+// 0365: read-only mode — set at boot when another live mc instance owns this
+// config dir (instanceLock). This instance keeps full UI function but never
+// writes sessions.json, so concurrent instances can't clobber each other's
+// records (the drifted-store substrate behind the slot-identity crossover).
+let storeReadOnly = false;
+export function setStoreReadOnly(v) { storeReadOnly = !!v; }
+export function isStoreReadOnly() { return storeReadOnly; }
 export function setQuitMode(mode) {
   quitMode = mode === 'save' ? 'save' : 'clear';
 }
@@ -133,6 +141,7 @@ export function loadSessions() {
 }
 
 function persist(store) {
+  if (storeReadOnly) return; // 0365: second instance must not touch the store
   // Atomic write pattern with .bak rotation. Steps:
   //   1. Ensure config dir exists
   //   2. Copy current main → .bak (so we have a rollback target if a
@@ -266,6 +275,45 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
   }
   if (dirty) persist(store);
   return dirty;
+}
+
+// pruneSessions — boot-time store hygiene (0365). The crossover incident's
+// substrate was a drifted store: 15 slots on a 10-slot fleet, the same repo
+// saved under TWO different slot numbers, sids matching no live process —
+// the classic signature of two mc instances interleaving load→merge→persist
+// on one sessions.json (stray-install era). A restore over that substrate is
+// how a foreign record lands on a slot. Rules, applied once at boot:
+//   1. Drop records whose slot exceeds the fleet size (unreachable anyway —
+//      :resume validates the range and fleet.launch throws on bad slot).
+//   2. One record per cwd: prefer live===true, then newest lastSeen. The
+//      loser is deleted from bySlot (history keeps the breadcrumb).
+//      EXCEPTION: two records BOTH live===true are a legitimate dual-session
+//      repo (both open at last close) — never dedupe those.
+// Returns { dropped, deduped } for the boot log/toast.
+export function pruneSessions({ maxSlots = 10 } = {}) {
+  const store = loadSessions();
+  let dropped = 0, deduped = 0;
+  for (const slot of Object.keys(store.bySlot)) {
+    const n = parseInt(slot, 10);
+    if (!(n >= 1 && n <= maxSlots)) { delete store.bySlot[slot]; dropped++; }
+  }
+  const byCwd = new Map(); // cwd → winning slot key
+  const rank = (r) => (r?.live === true ? 2 : 1) * 1e15 + (r?.lastSeen || 0);
+  for (const slot of Object.keys(store.bySlot)) {
+    const r = store.bySlot[slot];
+    if (!r?.cwd) continue;
+    const prev = byCwd.get(r.cwd);
+    if (prev === undefined) { byCwd.set(r.cwd, slot); continue; }
+    if (r.live === true && store.bySlot[prev]?.live === true) continue; // dual-session repo
+    if (rank(r) > rank(store.bySlot[prev])) {
+      delete store.bySlot[prev]; byCwd.set(r.cwd, slot);
+    } else {
+      delete store.bySlot[slot];
+    }
+    deduped++;
+  }
+  if (dropped || deduped) persist(store);
+  return { dropped, deduped };
 }
 
 export function getResumeRecord(slot) {

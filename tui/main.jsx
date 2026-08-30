@@ -16,7 +16,8 @@ import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
 import { isSandboxed, getConfigDir } from './lib/configDir.js';
 import { loadSettings } from './lib/settings.js';
-import { syncFromSnapshot, setQuitMode } from './lib/sessionStore.js';
+import { syncFromSnapshot, setQuitMode, pruneSessions, setStoreReadOnly } from './lib/sessionStore.js';
+import { acquireInstanceLock, releaseInstanceLock } from './lib/instanceLock.js';
 import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange, syncModelsFromApi } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
@@ -118,6 +119,26 @@ if ((!isSandboxed() || process.env.MC_SYNC_MODELS === '1') && bootSettings.syncM
 // surfaces as "posix_spawnp failed" the first time a PTY is spawned. Best-effort.
 try { fixNodePty(); } catch { /* never block boot */ }
 
+// 0365: session-store hygiene + single-writer guard, in that order, BEFORE
+// anything can read a resume record. Prune the drifted-store substrate
+// (out-of-range slots, duplicate-repo records), then claim the config dir —
+// a second live instance boots store-read-only so concurrent writers can't
+// clobber sessions.json (the slot-identity-crossover substrate).
+try {
+  const { dropped, deduped } = pruneSessions({ maxSlots: bootSettings.maxSlots });
+  if (dropped || deduped) dlog('store', 'prune', { dropped, deduped });
+} catch { /* hygiene must never block boot */ }
+const lock = acquireInstanceLock();
+if (!lock.ok) {
+  setStoreReadOnly(true);
+  // eslint-disable-next-line no-console
+  console.error(
+    `mc: another instance (pid ${lock.holderPid}) owns this config dir — `
+    + `session saving is DISABLED in this one. Close the other mc, or use `
+    + `MC_CONFIG_DIR for an isolated sandbox / MC_ALLOW_MULTI=1 to override.`,
+  );
+}
+
 const fleet = new Fleet({ slots: bootSettings.maxSlots });
 
 // Opt-in memory instrumentation for the long-uptime OOM (#18). Inert in normal
@@ -168,6 +189,7 @@ const shutdown = () => {
   // 'clear' on every signal exit, so closing the terminal silently dropped every
   // session's sessionId — the "mc did not save my sessions" data loss.)
   persistOpenSet();          // capture live set BEFORE killing
+  try { releaseInstanceLock(); } catch {}
   try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
   try { fleet.killAll(); } catch {}

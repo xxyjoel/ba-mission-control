@@ -1651,6 +1651,13 @@ export default function App({ fleet, auth: initialAuth }) {
   //     (don't-save, terminal close, crash) leaves behind.
   // Returns 'resumed' | 'fresh'. Throws on launch failure.
   const launchFromRecord = (slot, rec) => {
+    // 0365: identity trail — every record→slot mapping is logged so a future
+    // crossover (wrong repo/sid landing on a slot) leaves evidence. The 2026-08-09
+    // incident was undiagnosable because MC_DEBUG was off and no path logged this.
+    dlog('store', 'launchFromRecord', {
+      slot, name: rec.name, cwd: rec.cwd,
+      sid: rec.sessionId ? String(rec.sessionId).slice(0, 8) : null, fresh: !!rec.fresh,
+    });
     const permissionMode = rec.permissionMode || settings.defaultPermission || 'acceptEdits';
     if (rec.fresh || !rec.sessionId) {
       fleet.launch({
