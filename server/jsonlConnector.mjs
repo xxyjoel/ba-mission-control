@@ -170,6 +170,29 @@ export function parseEvent(ev, agent) {
   }[ev.type];
   if (!handler) return false;
 
+  // 0399: client-side records never start a turn — no hooks fire, so no Stop
+  // will ever clear a status they fabricate. Local slash commands (/model,
+  // /compact, …) land as user events opening with <command-name> /
+  // <local-command-caveat> / <local-command-stdout>, and claude's paired
+  // synthetic echo is an assistant record with model:"<synthetic>" (its
+  // stop_reason "stop_sequence" hits the mid-turn else branch → 'working',
+  // pinned forever: bluearch-website 2026-09-01, auto-job-applier 2026-09-09;
+  // the echo would also clobber resolvedModel with "<synthetic>"). Same
+  // principle as the 0394 gate above — return BEFORE the clock bump so noise
+  // can't out-fresh a real Stop hook. /clear is the exception (reset semantics
+  // in handleUser). A skill command that DOES start a turn still shows working
+  // via its UserPromptSubmit hook (hooked) or the PTY scraper (legacy).
+  if (ev.type === 'assistant' && ev.message?.model === '<synthetic>') return false;
+  if (ev.type === 'user' && !Array.isArray(ev.message?.content)) {
+    const text = extractMessageText(ev.message?.content);
+    if (text && /^\s*<(?:command-name|local-command-caveat|local-command-stdout)\b/.test(text)
+        && !/<command-name>\s*\/clear\b/.test(text)) {
+      const cmd = text.match(/<command-name>\s*(\/[^\s<]+)/)?.[1];
+      if (cmd) pushTail(agent, { kind: 'sys', text: `local command: ${cmd}` });
+      return Boolean(cmd);
+    }
+  }
+
   agent.lastEventTs = Date.now();
   // 0229-fix: JSONL-only activity clock. Unlike lastEventTs (also bumped by the
   // PTY onData handler on EVERY byte, incl. cosmetic repaints — the "update
