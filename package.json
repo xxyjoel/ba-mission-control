@@ -57,7 +57,7 @@
     "tsx": "^4.19.2"
   },
   "devDependencies": {
-    "@bluearch/forge": "^1.12.0",
+    "@bluearch/forge": "^1.13.0",
     "ink-testing-library": "^4.0.0"
   },
   "engines": {
