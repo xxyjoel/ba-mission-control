@@ -899,6 +899,12 @@ export class Agent extends EventEmitter {
       // 0 when alive; minutes of silence when stuck (>= 5min while
       // working/waiting). Card.jsx renders a red STUCK chip on >0.
       stuckMin,
+      // 0403: background-agent chip. The legacy path has no sub-tagged hook
+      // clock (that arrives via statusHookTailer, PtyAgent only), so this
+      // counts outstanding Task/Workflow calls only. Present so both classes
+      // expose one snapshot shape — tests/ptyAgent.test.mjs pins that.
+      bgCount: this.pendingSubagents?.size || 0,
+      bgStatus: (this.pendingSubagents?.size || 0) > 0 ? 'working' : null,
       // Per-slot cost cap (USD) and whether it's currently capping.
       // 0 means disabled. capReached lets the UI render a card decoration
       // without recomputing thresholds on every render.

@@ -139,6 +139,15 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
                     : agent.status === 'waiting' ? 'INPUT?'
                     : (agent.status || '').toUpperCase();
   const statusGlyph = STATUS_GLYPH[agent.status] || '·';
+  // 0403: background agents are shown BESIDE the status, never merged into it.
+  // Reported twice from opposite directions: gtm-gov-miner read a flat WORKING
+  // on a conversation whose turn had ended 28 min earlier, and labor-market-app
+  // read IDLE while a fleet of background agents ran. Both are the same card
+  // telling one truth where there are two. Suppressed while an approval is
+  // pending — that needs the user now and must not share the row.
+  const bgTag = !approval && agent.bgCount > 0
+    ? ` · ${agent.bgCount}bg ${(agent.bgStatus || '').toUpperCase()}`
+    : '';
 
   // Branch row
   const branchClean = (agent.dirty || 0) === 0;
@@ -242,6 +251,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   const innerW = Math.max(16, (cardWidth || 56) - 4);
   const slotTagW = `[${agent.slot}] `.length;
   const statusTagW = `${statusGlyph} ${statusWord}`.length
+    + bgTag.length
     + (nearT ? ` · ${(ctxPct * 100).toFixed(0)}%`.length : 0)
     + (agent.stuckMin > 0 ? ` · STUCK ${agent.stuckMin}m`.length : 0);
   const nameStr = trunc(agent.name || '—', Math.max(3, innerW - slotTagW - statusTagW - 1));
@@ -274,6 +284,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={focused ? theme.accent : theme.fg}>{nameStr}</Text>
         <Box flexGrow={1} />
         <Text color={sCol}>{statusGlyph} {statusWord}</Text>
+        {bgTag && <Text color={theme.brBlue}>{bgTag}</Text>}
         {nearT && (
           <Text color={overT ? theme.red : theme.yellow}> · {(ctxPct * 100).toFixed(0)}%</Text>
         )}

@@ -140,6 +140,11 @@ const WORKING_FRESH_MS = 2500;
 // silence means they're done (or wedged — either way the main thread's idle
 // verdict stands again).
 const SUB_ACTIVE_MS = 15_000;
+// 0403: an outstanding Task/Workflow older than this is treated as abandoned and
+// stops counting toward bgCount. Mirrors SUBAGENT_STALE_MS in jsonlConnector,
+// which sweeps the same Map — kept as its own constant so ptyAgent does not
+// import a private value across the connector boundary.
+const BG_ABANDON_MS = 30 * 60 * 1000;
 
 // detectWorking — true when the rendered rows show claude's active-turn
 // interrupt hint. Pure (mirrors detectApprovalPrompt) so it's unit-testable.
@@ -1051,9 +1056,28 @@ export class PtyAgent extends EventEmitter {
     // 'idle' verdict is a lie in the "safe to ignore" direction (focus-duck
     // read IDLE with three builders running). Never overrides 'waiting' — a
     // permission prompt while background agents run still needs the user.
-    if (status === 'idle' && Date.now() - (this.lastSubHookTs || 0) < SUB_ACTIVE_MS) {
-      status = 'working';
+    // 0403 SUPERSEDES the 0398 override. Merging background work into `status`
+    // made the card lie in both directions, and the 15s clock was too tight for
+    // either: measured on gtm-gov-miner 2026-09-16, sub-agent tool events arrive
+    // 166s apart, so the card flickered WORKING/IDLE every gap. Worse, the main
+    // thread had ended its turn at 4:18 (end_turn, no transcript record since)
+    // while orphaned sub-agents kept firing — so the card read a flat WORKING on
+    // a conversation that was done. Report background work SEPARATELY instead:
+    // `status` stays the main thread's own truth, and bgCount/bgStatus let the
+    // card show "IDLE · 2bg WORKING". Count outstanding Task/Workflow calls
+    // rather than the clock — a sub-agent that thinks for three minutes between
+    // tools is still working, and an entry that never returned its tool_result
+    // is dropped by the same staleness cutoff the connector sweeps with.
+    let bgCount = 0;
+    const bgCutoff = Date.now() - BG_ABANDON_MS;
+    for (const s of this.pendingSubagents.values()) {
+      if ((s?.startTs ?? 0) >= bgCutoff) bgCount++;
     }
+    // Fall back to the hook clock when the transcript never showed the Task
+    // (a background fork's sub events land in the status file with no matching
+    // parent-transcript record — the gtm-gov-miner shape above).
+    if (bgCount === 0 && Date.now() - (this.lastSubHookTs || 0) < SUB_ACTIVE_MS) bgCount = 1;
+    const bgStatus = bgCount > 0 ? 'working' : null;
     // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
     // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
     // user (waiting) or done (idle). Hooked: only a stuck outstanding tool
@@ -1114,6 +1138,8 @@ export class PtyAgent extends EventEmitter {
       messageCount: this.messageCount,
       lastEventTs: this.lastEventTs,
       stuckMin,
+      bgCount,       // 0403: outstanding background agents (Task/Workflow or sub hooks)
+      bgStatus,      // 0403: 'working' while any are live, else null
       costCapUSD: this.costCapUSD,
       capReached: this.costCapUSD > 0 && this.costSession >= this.costCapUSD,
       apiErrorCount: this.apiErrorCount || 0,

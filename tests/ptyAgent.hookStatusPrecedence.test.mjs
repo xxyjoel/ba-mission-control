@@ -322,7 +322,11 @@ test('0394: noise event does not bump connector clock — fresh Stop keeps idle'
 // instantly, so the sub-tagged hook events (invisible to hookStatus per 0395)
 // are the only evidence of ongoing work — their freshness must hold 'working'.
 
-test('0398: idle + fresh sub-hook clock → working', () => {
+test('0403: idle + fresh sub-hook clock → status stays idle, chip reports the work', () => {
+  // SUPERSEDES 0398-AC1, which asserted status flipped to 'working'. Merging
+  // background work into `status` made the card lie in both directions —
+  // gtm-gov-miner read a flat WORKING 28 min after its turn ended (2026-09-16).
+  // The card now carries both truths: the main thread is idle AND agents run.
   const agent = bootAgent();
   const now = Date.now();
   agent._statusValue = 'idle';
@@ -331,8 +335,43 @@ test('0398: idle + fresh sub-hook clock → working', () => {
   agent.hookStatusTs = now - 20000;      // Stop landed, main thread done
   agent.lastSubHookTs = now - 3000;      // a builder ran a tool 3s ago
 
-  assert.equal(agent.toJSON().status, 'working',
-    '0398-AC1: background agents working → the card must not read idle');
+  const snap = agent.toJSON();
+  assert.equal(snap.status, 'idle', '0403-AC1: the main thread really is idle');
+  assert.equal(snap.bgCount, 1, '0403-AC2: the work is still reported');
+  assert.equal(snap.bgStatus, 'working');
+  agent.kill?.();
+});
+
+test('0403: an outstanding Task counts even when the sub clock has gone quiet', () => {
+  // Measured on gtm-gov-miner: sub-agent tool events arrive up to 166s apart,
+  // far past SUB_ACTIVE_MS (15s). Counting outstanding Task/Workflow calls
+  // instead of the clock stops the chip flickering across those gaps.
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'idle';
+  agent.hookStatus = 'idle';
+  agent.hookStatusTs = now - 20000;
+  agent.lastSubHookTs = now - 200000;    // 200s quiet — clock alone says nothing
+  agent.pendingSubagents.set('toolu_1', { label: 'build', type: 'agent', startTs: now - 200000 });
+
+  const snap = agent.toJSON();
+  assert.equal(snap.status, 'idle');
+  assert.equal(snap.bgCount, 1, 'an unreturned Task is still work');
+  agent.kill?.();
+});
+
+test('0403: a Task abandoned past the cutoff stops counting', () => {
+  const agent = bootAgent();
+  const now = Date.now();
+  agent._statusValue = 'idle';
+  agent.hookStatus = 'idle';
+  agent.hookStatusTs = now - 20000;
+  agent.lastSubHookTs = 0;
+  agent.pendingSubagents.set('toolu_old', { label: 'ghost', type: 'agent', startTs: now - (31 * 60 * 1000) });
+
+  const snap = agent.toJSON();
+  assert.equal(snap.bgCount, 0, 'a tool_result that never landed must not pin the chip');
+  assert.equal(snap.bgStatus, null);
   agent.kill?.();
 });
 
