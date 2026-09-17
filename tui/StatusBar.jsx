@@ -56,29 +56,55 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
   const debugKeys = useDebugKeys();
 
   return (
-    <Box paddingX={1}>
+    // 0389: pinned to ONE row and clipped. This bar is the last thing on
+    // screen, so any child that wraps grows it and pushes the whole Ink frame
+    // past the terminal's height — the "UI jumped upward" report. Typing crept
+    // up on that threshold; a dictated phrase arrives all at once and crosses
+    // it immediately. height + overflow makes it structural rather than
+    // relying on every child remembering to truncate.
+    <Box paddingX={1} height={1} overflow="hidden">
+      {/* 0389: the warning chips and the mode/slot label do not shrink. Pinning
+          the bar to one row means SOMETHING has to give when the content
+          exceeds the width, and Ink's default is to shrink every child a
+          little — which truncated the sandbox banner to "DEV ·" and the slot
+          label to "[]". The trailing hints (truncated, and hidden entirely
+          while a command is being typed) are what should absorb it. */}
       {SANDBOXED && (
-        <Text backgroundColor={theme.red || 'red'} color={theme.bg || 'black'} bold>
-          {' DEV · SANDBOXED '}
-        </Text>
+        <Box flexShrink={0}>
+          <Text backgroundColor={theme.red || 'red'} color={theme.bg || 'black'} bold>
+            {' DEV · SANDBOXED '}
+          </Text>
+        </Box>
       )}
       {debugKeys && (
-        <Text backgroundColor={theme.yellow || 'yellow'} color={theme.bg || 'black'} bold>
-          {' ● REC keys '}
-        </Text>
+        <Box flexShrink={0}>
+          <Text backgroundColor={theme.yellow || 'yellow'} color={theme.bg || 'black'} bold>
+            {' ● REC keys '}
+          </Text>
+        </Box>
       )}
-      <Text backgroundColor={theme[m.bg]} color={theme[m.fg]}> {m.label} </Text>
-      <Text color={theme.dim}>  [</Text>
-      <Text color={theme.fg}>{focused ? focused.slot : '-'}</Text>
-      <Text color={theme.dim}>] {focused?.name || 'empty'}</Text>
+      <Box flexShrink={0}>
+        <Text backgroundColor={theme[m.bg]} color={theme[m.fg]}> {m.label} </Text>
+        <Text color={theme.dim}>  [</Text>
+        <Text color={theme.fg}>{focused ? focused.slot : '-'}</Text>
+        <Text color={theme.dim}>] {focused?.name || 'empty'}</Text>
+      </Box>
 
       {/* Command-bar buffer takes over the middle when active */}
       {cmdMode !== 'normal' ? (
         <>
           <Text color={cmdMode === 'filter' ? theme.cyan : theme.magenta}>  {cmdMode === 'filter' ? '/' : ':'}</Text>
-          <Text color={theme.fg}>{cmdBuffer}</Text>
+          {/* 0389: truncate-start, never wrap. The status bar is ONE row and it
+              is the last thing on screen, so a buffer long enough to wrap grew
+              the bar to two or three rows and pushed the whole frame past the
+              terminal's height — the "UI jumped upward while I dictated"
+              report. Dictation reaches this bar as a whole phrase in one write,
+              so it hits the wrap threshold immediately where typing crept up on
+              it. truncate-start keeps the END of the buffer visible, next to
+              the caret, matching TextField's caret row. */}
+          <Text color={theme.fg} wrap="truncate-start">{cmdBuffer}</Text>
           <Text color={theme.accent}>{caret ? '█' : ' '}</Text>
-          <Text color={theme.dim}>  ↵ run · esc cancel</Text>
+          <Text color={theme.dim} wrap="truncate">  ↵ run · esc cancel</Text>
         </>
       ) : (
         <>
@@ -95,9 +121,16 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
       )}
 
       <Box flexGrow={1} />
-      <Text color={theme.dim}>
-        <Text color={theme.accent}>← ↑ ↓ →</Text> move  <Text color={theme.accent}>↵</Text> open  <Text color={theme.accent}>n</Text> new  <Text color={theme.accent}>b</Text> bcast  <Text color={theme.accent}>esc</Text> settings
-      </Text>
+      {/* 0389: the nav hints are dead weight while the user is typing a
+          command — and they were taking the width the buffer needs, so a
+          dictated phrase showed as a few characters between two ellipses.
+          Hidden while the bar is active; the bar's own "↵ run · esc cancel"
+          stays. */}
+      {cmdMode === 'normal' && (
+        <Text color={theme.dim} wrap="truncate">
+          <Text color={theme.accent}>← ↑ ↓ →</Text> move  <Text color={theme.accent}>↵</Text> open  <Text color={theme.accent}>n</Text> new  <Text color={theme.accent}>b</Text> bcast  <Text color={theme.accent}>esc</Text> settings
+        </Text>
+      )}
     </Box>
   );
 }

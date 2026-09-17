@@ -30,6 +30,7 @@ import { Text, Box, useInput } from 'ink';
 // time. Initial state honored from MC_DEBUG_KEYS=1 env so existing
 // launches keep working.
 import { logKey } from './debugKeys.js';
+import { normalizeTypedText } from './typedText.js';
 
 const ESC_MERGE_WINDOW_MS = 80;
 
@@ -107,12 +108,34 @@ export default function TextField({
   // effect below resets us to the new end-of-value.
   const [cursorPos, setCursorPos] = useState(value.length);
   const lastValueRef = useRef(value);
+
+  // 0389: the live edit state, carried between input events in the SAME tick.
+  //
+  // Ink splits one terminal write into several useInput events (a text run,
+  // then one event per control byte, then the next text run), and it delivers
+  // all of them before React re-renders. Reading the `value` prop or the
+  // `cursorPos` state inside the handler therefore returns the state from
+  // BEFORE the burst on every event after the first, so all but the last edit
+  // are silently discarded. Human typing never noticed — one event per tick —
+  // but dictation does exactly this: macOS speech-to-text revises its guess by
+  // sending a run of DEL bytes followed by replacement words. Measured before
+  // the fix: "dictate the thing" then 5xDEL + "word" produced
+  // "dictate the thingword" — the deletions dropped and the revision glued on.
+  //
+  // These refs are the authoritative value/cursor during a burst. The prop
+  // stays the render source; the effect below resynchronises if the parent
+  // hands back something other than what we committed.
+  const liveRef = useRef(value);
+  const cursorRef = useRef(value.length);
+
   useEffect(() => {
     if (value !== lastValueRef.current) {
       // The parent changed value out from under us (history recall,
       // submit-clear, etc.). Park the cursor at the new end.
       setCursorPos(value.length);
       lastValueRef.current = value;
+      liveRef.current = value;
+      cursorRef.current = value.length;
     }
   }, [value]);
 
@@ -122,9 +145,20 @@ export default function TextField({
   // Commit a new value+cursor in a single step. Record what we just sent
   // so the external-change detector above doesn't fire on our own edit.
   const commit = (next, nextCursor) => {
+    const clamped = Math.min(Math.max(0, nextCursor), next.length);
     lastValueRef.current = next;
+    liveRef.current = next;
+    cursorRef.current = clamped;
     onChange(next);
-    setCursorPos(Math.min(Math.max(0, nextCursor), next.length));
+    setCursorPos(clamped);
+  };
+
+  // Cursor-only motion. Writes the ref as well as the state so a motion and an
+  // edit inside the same burst compose instead of fighting.
+  const setCursor = (next) => {
+    const clamped = Math.min(Math.max(0, next), liveRef.current.length);
+    cursorRef.current = clamped;
+    setCursorPos(clamped);
   };
 
   const escTimerRef = useRef(null);
@@ -135,13 +169,17 @@ export default function TextField({
   useInput((input, key) => {
     if (!focus) return;
     logKey(input, key, 'received');
+    // Live value/cursor for THIS event — see liveRef above. Never read the
+    // `value` prop or `cursorPos` state here: during a burst they are stale.
+    const cur = liveRef.current;
+    const pos = Math.min(Math.max(0, cursorRef.current), cur.length);
 
     // Return arriving while an escape is pending → reinterpret as ⌥↵.
     if (key.return && escTimerRef.current) {
       clearTimeout(escTimerRef.current);
       escTimerRef.current = null;
       logKey(input, key, 'newline (esc-then-return merge)');
-      commit(value.slice(0, safeCursor) + '\n' + value.slice(safeCursor), safeCursor + 1);
+      commit(cur.slice(0, pos) + '\n' + cur.slice(pos), pos + 1);
       return;
     }
 
@@ -168,46 +206,46 @@ export default function TextField({
     // (Emacs convention) which Ink surfaces as `key.meta + input='b'/'f'`.
     // We accept all four shapes so the binding is reliable.
     if (key.leftArrow && (key.meta || key.ctrl)) {
-      setCursorPos(prevWordBoundary(value, safeCursor));
+      setCursor(prevWordBoundary(cur, pos));
       return;
     }
     if (key.rightArrow && (key.meta || key.ctrl)) {
-      setCursorPos(nextWordBoundary(value, safeCursor));
+      setCursor(nextWordBoundary(cur, pos));
       return;
     }
     if (key.meta && (input === 'b' || input === 'B')) {
-      setCursorPos(prevWordBoundary(value, safeCursor));
+      setCursor(prevWordBoundary(cur, pos));
       return;
     }
     if (key.meta && (input === 'f' || input === 'F')) {
-      setCursorPos(nextWordBoundary(value, safeCursor));
+      setCursor(nextWordBoundary(cur, pos));
       return;
     }
     if (key.leftArrow) {
-      setCursorPos(Math.max(0, safeCursor - 1));
+      setCursor(Math.max(0, pos - 1));
       return;
     }
     if (key.rightArrow) {
-      setCursorPos(Math.min(value.length, safeCursor + 1));
+      setCursor(Math.min(cur.length, pos + 1));
       return;
     }
     // Home → Ctrl+A (readline). The raw Home-key escape sequence
     // (\x1b[H / \x1b[1~ / \x1bOH) is NOT delivered to useInput by Ink
     // 5; it's filtered upstream. Document and rely on Ctrl+A.
     if (key.ctrl && input === 'a') {
-      setCursorPos(moveHome(value, safeCursor));
+      setCursor(moveHome(cur, pos));
       return;
     }
     // End → Ctrl+E (readline). Same note re: raw \x1b[F.
     if (key.ctrl && input === 'e') {
-      setCursorPos(moveEnd(value, safeCursor));
+      setCursor(moveEnd(cur, pos));
       return;
     }
 
     // ── Newline inserts (at cursor) ──────────────────────────
     if (key.return && (key.meta || key.shift)) {
       logKey(input, key, 'newline (meta/shift+return)');
-      commit(value.slice(0, safeCursor) + '\n' + value.slice(safeCursor), safeCursor + 1);
+      commit(cur.slice(0, pos) + '\n' + cur.slice(pos), pos + 1);
       return;
     }
     if (
@@ -215,12 +253,12 @@ export default function TextField({
       (input === '\n' && !key.meta && !key.shift)
     ) {
       logKey(input, key, 'newline (ctrl+j / raw LF)');
-      commit(value.slice(0, safeCursor) + '\n' + value.slice(safeCursor), safeCursor + 1);
+      commit(cur.slice(0, pos) + '\n' + cur.slice(pos), pos + 1);
       return;
     }
     if (key.return) {
       logKey(input, key, 'submit (return)');
-      onSubmit && onSubmit(value);
+      onSubmit && onSubmit(cur);
       return;
     }
 
@@ -233,8 +271,8 @@ export default function TextField({
     // contract was already "either flag = delete". Real forward-delete
     // is tracked in audit/IMPROVEMENTS.md (terminal-specific follow-up).
     if (key.backspace || key.delete) {
-      if (safeCursor === 0) return;
-      commit(value.slice(0, safeCursor - 1) + value.slice(safeCursor), safeCursor - 1);
+      if (pos === 0) return;
+      commit(cur.slice(0, pos - 1) + cur.slice(pos), pos - 1);
       return;
     }
 
@@ -245,22 +283,26 @@ export default function TextField({
     // boundary, fall through (return without consuming) so the parent
     // (e.g. Zoom's composer history recall) handles the keystroke.
     if (key.upArrow) {
-      const next = moveUp(value, safeCursor);
-      if (next != null) { setCursorPos(next); return; }
+      const next = moveUp(cur, pos);
+      if (next != null) { setCursor(next); return; }
       return; // at top of field — let parent see ↑ via its own useInput
     }
     if (key.downArrow) {
-      const next = moveDown(value, safeCursor);
-      if (next != null) { setCursorPos(next); return; }
+      const next = moveDown(cur, pos);
+      if (next != null) { setCursor(next); return; }
       return; // at bottom of field — parent sees ↓
     }
     // Tab also delegated.
     if (key.tab) return;
 
-    // Insert character(s) at cursor. `input` may be multi-byte for
-    // pasted text — we treat it as opaque and insert atomically.
+    // Insert character(s) at cursor. `input` is a whole text run for a
+    // paste or a dictated phrase — inserted atomically, but normalized first:
+    // a run can carry an embedded CR or C0 control byte that would otherwise
+    // land in the value (0389). Newlines are kept; this field is multi-line.
     if (input && input.length > 0) {
-      commit(value.slice(0, safeCursor) + input + value.slice(safeCursor), safeCursor + input.length);
+      const text = normalizeTypedText(input, { allowNewlines: true });
+      if (!text) return;
+      commit(cur.slice(0, pos) + text + cur.slice(pos), pos + text.length);
     }
   }, { isActive: focus });
 

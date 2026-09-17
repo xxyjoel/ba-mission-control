@@ -39,6 +39,7 @@ import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
 import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
+import { normalizeTypedText } from './lib/typedText.js';
 import { CostStore } from './lib/costStore.js';
 import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
 import { getTemplate, listTemplates } from './lib/templateStore.js';
@@ -115,6 +116,12 @@ const RENDER_COALESCE_MS = 100;
 // clock backs off to this cadence instead of the active tickRate — no
 // per-second CPU wakeups when nothing is happening.
 const IDLE_TICK_MS = 3000;
+// How long a terminal resize must be quiet before the fleet's PTY geometry
+// follows it. A window drag emits a stream of intermediate sizes and each one
+// applied would make every session's claude reprint its whole frame, leaving
+// the pre-resize copy in the scrollback. 250ms is below the threshold where a
+// deliberate resize feels unresponsive and well above a drag's event spacing.
+const VIEWPORT_SETTLE_MS = 250;
 
 export default function App({ fleet, auth: initialAuth }) {
   const { exit } = useApp();
@@ -271,9 +278,18 @@ export default function App({ fleet, auth: initialAuth }) {
   // never trigger one. A genuine terminal resize does — the user expects a
   // repaint then. Runs on mount too, which is a no-op when main.jsx already
   // seeded the same geometry at boot.
+  // Dragging a terminal window emits a BURST of intermediate sizes, and the
+  // handler above mirrors every one into state. Applying each of them would
+  // resize all 10 agents, and every resize costs claude a full frame reprint
+  // whose predecessor stays in the scrollback. Let the drag settle, then apply
+  // once. main.jsx already seeded the boot geometry, so the delay costs
+  // nothing at startup.
   useEffect(() => {
     if (typeof fleet?.setViewport !== 'function') return;
-    try { fleet.setViewport(zoomBodyDims(termSize.cols, termSize.rows)); } catch {}
+    const t = setTimeout(() => {
+      try { fleet.setViewport(zoomBodyDims(termSize.cols, termSize.rows)); } catch {}
+    }, VIEWPORT_SETTLE_MS);
+    return () => clearTimeout(t);
   }, [fleet, termSize.cols, termSize.rows]);
 
   // ── One-shot auth-status banner ────────────────────────
@@ -1390,8 +1406,15 @@ export default function App({ fleet, auth: initialAuth }) {
         setCmdBuffer(b => b.slice(0, -1));
         return;
       }
-      if (input && !key.ctrl && !key.meta && input.length === 1) {
-        setCmdBuffer(b => b + input);
+      // 0389: accept a whole text RUN, not just one character. Dictation and
+      // paste hand Ink a multi-character chunk, and the old
+      // `input.length === 1` gate dropped it outright — a dictated phrase
+      // never appeared in the command or filter bar at all. Normalized to a
+      // single line (this bar is one row) and appended functionally, so
+      // several runs inside one terminal write compose in order.
+      if (input && !key.ctrl && !key.meta) {
+        const text = normalizeTypedText(input);
+        if (text) setCmdBuffer(b => b + text);
       }
       return;
     }
