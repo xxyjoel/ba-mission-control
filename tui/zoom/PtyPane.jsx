@@ -114,6 +114,10 @@ export default function PtyPane({
   // unsubscribe or every re-zoom adds another stale listener.
   const dataDisposeRef = useRef(null);
   const exitDisposeRef = useRef(null);
+  // Rows of the emulator's viewport the render window is currently skipping
+  // (see the view memo). Read by the scroll-mode key handler so its maximum
+  // offset matches the window the user is actually looking at.
+  const skipRef = useRef(0);
   // Render-trigger subscriptions on the term. Disposed on unmount.
   const writeSubRef  = useRef(null);
   const scrollSubRef = useRef(null);
@@ -368,7 +372,9 @@ export default function PtyPane({
     // less / vim convention).
     if (scrollMode) {
       const term = termRef.current;
-      const maxOffset = term ? Math.max(0, term.buffer.active.length - viewRows) : 0;
+      // Matches the view memo's clamp exactly: baseY + the rows the window is
+      // currently skipping is the offset at which startY reaches buffer row 0.
+      const maxOffset = term ? Math.max(0, term.buffer.active.baseY + (skipRef.current || 0)) : 0;
       const halfPage = Math.max(1, Math.floor(viewRows / 2));
       if (key.escape) { setScrollMode(false); setScrollOffset(0); return; }
       if (input === 'w') { setScrollOffset(o => Math.min(maxOffset, o + 1)); return; }
@@ -472,21 +478,40 @@ export default function PtyPane({
     const cursorX = buf.cursorX;
     // 0404: the emulator can be TALLER than our Ink box — its geometry is
     // fixed for the agent's life (see the resize effect), while this box loses
-    // rows to toasts and the optional stats/todos panels. Render the BOTTOM
-    // slice of claude's viewport so its composer and status line stay visible;
-    // the rows we skip are still reachable with Ctrl+Y scroll. `skip` is 0 in
-    // the common case (no panels, no toasts) and on the legacy path, where the
-    // emulator is sized to this box exactly.
-    const skip = Math.max(0, (term.rows || viewRows) - viewRows);
+    // rows to toasts and the optional stats/todos panels. So we render a
+    // window into claude's viewport and skip some of its rows.
+    //
+    // Anchor that window on claude's LAST WRITTEN row, not on the emulator's
+    // last row. claude renders inline: below its composer sit however many
+    // blank rows the transcript hasn't reached yet. Measured on a real session
+    // at 40 rows: 9 trailing blanks. Skipping from the bottom would have
+    // rendered those blanks and dropped 9 rows of real content off the TOP —
+    // worst on a short or just-cleared transcript. The anchor is whichever sits
+    // FURTHER DOWN: the last non-blank row, or the cursor row (an empty
+    // composer line holds the cursor and no glyphs). skip stays 0 whenever
+    // claude's content already fits in the window.
+    const maxSkip = Math.max(0, (term.rows || viewRows) - viewRows);
+    let skip = 0;
+    if (maxSkip > 0) {
+      let lastContent = 0;
+      for (let y = (term.rows || viewRows) - 1; y >= 0; y--) {
+        const l = buf.getLine(buf.viewportY + y);
+        if (l && l.translateToString(true).trim() !== '') { lastContent = y; break; }
+      }
+      const anchor = Math.max(lastContent, Number.isInteger(cursorY) ? cursorY : 0);
+      skip = Math.min(maxSkip, Math.max(0, anchor - viewRows + 1));
+    }
+    skipRef.current = skip;
     // Same guard horizontally: never read past the emulator's last column.
     const readCols = Math.min(cols, term.cols || cols);
     // When scrolled back in history, read from above the live viewport.
-    // Clamp so we never go below row 0 of xterm's buffer (which includes
-    // scrollback). buf.length - viewRows is baseY + skip, i.e. the offset at
-    // which startY reaches 0 — correct with or without a skip. The cursor only
-    // paints when the live viewport is on screen — scrolled-back history
+    // baseY + skip is exactly the offset at which startY reaches row 0 of
+    // xterm's buffer (which includes scrollback), so it is the real maximum —
+    // clamping on buf.length - viewRows instead would allow offsets that just
+    // sit at the top and make the last few scroll steps do nothing. The cursor
+    // only paints when the live viewport is on screen — scrolled-back history
     // shows no cursor.
-    const offset = Math.max(0, Math.min(scrollOffset, buf.length - viewRows));
+    const offset = Math.max(0, Math.min(scrollOffset, buf.baseY + skip));
     const startY = Math.max(0, buf.viewportY + skip - offset);
     // Cursor row in OUR coordinates: claude's row minus the rows we skipped.
     const cursorRow = cursorY - skip;

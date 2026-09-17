@@ -116,6 +116,34 @@ test('0404: shrinking the pane does not resize the agent-owned PTY or emulator',
   unmount();
 });
 
+// The window is anchored on claude's LAST WRITTEN row, not on the emulator's
+// last row. claude renders inline, so a short or just-cleared transcript
+// leaves blank rows below its composer — measured at 9 blanks on a real
+// 40-row session. Anchoring at the bottom would render those blanks and drop
+// the same number of real rows off the TOP.
+test('0404: a short transcript is not pushed off the top by trailing blank rows', async () => {
+  const stub = makeStubAgent({ cols: 40, rows: 20 });
+  fillRows(stub.term, 8);        // 8 written rows, 12 blank rows below them
+  const { lastFrame, unmount } = renderPane(stub, { width: 40, height: 12 });
+  await tick();
+  const frame = lastFrame();
+  for (const row of ['L01', 'L02', 'L03', 'L04', 'L05', 'L06', 'L07', 'L08']) {
+    assert.ok(frame.includes(row), `${row} was written and must be visible — got:\n${frame}`);
+  }
+  unmount();
+});
+
+test('0404: a transcript that exactly fills the window loses nothing', async () => {
+  const stub = makeStubAgent({ cols: 40, rows: 20 });
+  fillRows(stub.term, 12);       // exactly the pane's 12 rows
+  const { lastFrame, unmount } = renderPane(stub, { width: 40, height: 12 });
+  await tick();
+  const frame = lastFrame();
+  assert.ok(frame.includes('L01'), `the first row must still be visible — got:\n${frame}`);
+  assert.ok(frame.includes('L12'));
+  unmount();
+});
+
 test('0404: Ctrl+Y scroll can still reach the rows the window skipped', async () => {
   const stub = makeStubAgent({ cols: 40, rows: 20 });
   fillRows(stub.term, 20);

@@ -156,6 +156,42 @@ export function detectWorking(rows) {
   return false;
 }
 
+// bottomContentRows — the last `want` rows of the terminal that actually hold
+// something, oldest-first, ready for the detectors above.
+//
+// 0404: this used to read `buffer.length - 12 … buffer.length`, i.e. the bottom
+// 12 rows of the BUFFER. That only worked because the PTY was 24 rows: claude
+// renders inline, so below its composer sit however many rows the transcript
+// has not reached yet. Measured on a real session at 40 rows, 9 of the bottom
+// 10 buffer rows were blank — a fixed bottom-12 window saw 2 rows of content
+// and the permission-prompt anchors fell outside it, so the card would have
+// silently stopped showing NEEDS INPUT. Skipping the trailing blanks makes the
+// window independent of the PTY's height.
+//
+// Bounded work: it stops at the first non-blank row and never examines more
+// than one screen plus `want` rows, so this stays the same order of cost as
+// the old fixed window (it runs per painted frame, per agent — see 0364).
+export function bottomContentRows(term, want = 12) {
+  const buf = term?.buffer?.active;
+  if (!buf) return [];
+  const screen = Math.max(1, term.rows || want);
+  const rows = [];
+  let seenContent = false;
+  const floor = Math.max(0, buf.length - screen - want);
+  for (let y = buf.length - 1; y >= floor && rows.length < want; y--) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (!seenContent) {
+      // Trailing blanks below claude's last written row carry no signal.
+      if (text.trim() === '') continue;
+      seenContent = true;
+    }
+    rows.push(text);
+  }
+  return rows.reverse();
+}
+
 export function detectApprovalPrompt(rows) {
   if (!Array.isArray(rows)) return false;
   let q = false, yes = false, no = false;
@@ -927,19 +963,11 @@ export class PtyAgent extends EventEmitter {
   }
 
   // 0180: read the bottom rows of the live terminal and test the human-approved
-  // triple-anchor for claude's permission prompt. Cheap (≤12 rows translated);
+  // triple-anchor for claude's permission prompt. Cheap (≤12 rows kept);
   // wrapped so a term-API hiccup can never crash toJSON — the UI read model.
   #scanApprovalPrompt() {
     try {
-      const buf = this.term?.buffer?.active;
-      if (!buf) return false;
-      const total = buf.length;
-      const rows = [];
-      for (let y = Math.max(0, total - APPROVE_SCAN_ROWS); y < total; y++) {
-        const line = buf.getLine(y);
-        if (line) rows.push(line.translateToString(true));
-      }
-      return detectApprovalPrompt(rows);
+      return detectApprovalPrompt(bottomContentRows(this.term, APPROVE_SCAN_ROWS));
     } catch {
       return false;
     }
@@ -947,15 +975,7 @@ export class PtyAgent extends EventEmitter {
 
   #scanWorking() {
     try {
-      const buf = this.term?.buffer?.active;
-      if (!buf) return false;
-      const total = buf.length;
-      const rows = [];
-      for (let y = Math.max(0, total - APPROVE_SCAN_ROWS); y < total; y++) {
-        const line = buf.getLine(y);
-        if (line) rows.push(line.translateToString(true));
-      }
-      return detectWorking(rows);
+      return detectWorking(bottomContentRows(this.term, APPROVE_SCAN_ROWS));
     } catch {
       return false;
     }
