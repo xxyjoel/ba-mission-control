@@ -206,6 +206,13 @@ export class PtyAgent extends EventEmitter {
     // Fleet. Forwarded to the tailer so a rotation hunt never re-points onto a
     // sibling slot's transcript. Defaults to claiming nothing.
     siblingSids = () => [],
+    // 0404: the PTY geometry for this agent's whole life, supplied by Fleet
+    // from the real terminal (tui/lib/zoomGeometry.js). Fixed on purpose —
+    // every resize makes claude reprint its frame and leaves the pre-resize
+    // copy in the emulator's scrollback. Falls back to the 80x24 default when
+    // no viewport is known (tests, non-TTY).
+    cols,
+    rows,
   } = {}) {
     super();
     this.slot = slot;
@@ -305,8 +312,8 @@ export class PtyAgent extends EventEmitter {
     // into pendingSends until ready flips true, then drains.
     this.ready = false;
     this.readyTimer = null;
-    this.cols = DEFAULT_COLS;
-    this.rows = DEFAULT_ROWS;
+    this.cols = Math.max(20, (cols | 0) || DEFAULT_COLS);
+    this.rows = Math.max(5, (rows | 0) || DEFAULT_ROWS);
   }
 
   // status accessor anchors workingStartTs on transition into 'working'
@@ -831,26 +838,34 @@ export class PtyAgent extends EventEmitter {
     }
   }
 
-  // Resize the PTY (and the persistent emulator) for zoom in/out.
-  // PtyPane calls this on mount with the zoom dimensions and on
-  // unmount with the defaults. No-op when pty is null.
+  // Resize the PTY (and the persistent emulator). No-op when pty is null.
+  //
+  // 0404: called ONLY by Fleet.setViewport — i.e. when the user resizes their
+  // real terminal. Zoom enter/exit no longer resizes: claude reprints its
+  // entire frame on SIGWINCH and the pre-resize copy stays in the scrollback,
+  // so every resize appended a duplicate (narrow) copy of the conversation.
+  // Returns true when the dimensions actually changed.
   resize(cols, rows) {
-    this.cols = Math.max(20, (cols | 0) || DEFAULT_COLS);
-    this.rows = Math.max(5, (rows | 0) || DEFAULT_ROWS);
+    const nextCols = Math.max(20, (cols | 0) || DEFAULT_COLS);
+    const nextRows = Math.max(5, (rows | 0) || DEFAULT_ROWS);
+    if (nextCols === this.cols && nextRows === this.rows) return false;
+    this.cols = nextCols;
+    this.rows = nextRows;
     if (this.pty) {
       try { this.pty.resize(this.cols, this.rows); } catch {}
     }
     if (this.term) {
       try { this.term.resize(this.cols, this.rows); } catch {}
     }
+    return true;
   }
 
   // attachZoomView — bind the zoom modal to our running PTY without
   // spawning anything new. Returns the same { pty, dispose, sessionId }
   // shape as legacy startZoomSession() so PtyPane can treat both paths
-  // uniformly. dispose() restores default dims and unsubscribes any
-  // listeners the caller attached — it does NOT kill the PTY (the
-  // agent owns the PTY's lifecycle, not the zoom view).
+  // uniformly. dispose() unsubscribes any listeners the caller attached — it
+  // does NOT kill the PTY (the agent owns the PTY's lifecycle, not the zoom
+  // view) and it does NOT resize (see below).
   //
   // This is the Phase D centerpiece: the dual-pipeline approach is
   // gone — there's no second claude to spawn, no SIGSTOP dance, no
@@ -872,9 +887,15 @@ export class PtyAgent extends EventEmitter {
       this.resuming = true;
       this.start();
     }
-    const prevCols = this.cols;
-    const prevRows = this.rows;
-    this.resize(cols, rows);
+    // 0404: NO resize here. The agent's PTY already runs at the fleet
+    // viewport's geometry (Fleet.setViewport ← tui/lib/zoomGeometry.js), which
+    // IS the zoom body size. Resizing on attach made claude reprint its whole
+    // frame at the new width and left the pre-resize copy in the emulator's
+    // scrollback — the reported "text prints twice, one narrow one full width".
+    // The { cols, rows } argument is kept for the call-site's shape and for the
+    // legacy startZoomSession path; a mismatch just means PtyPane renders the
+    // bottom slice of a taller emulator (see PtyPane's view memo).
+    void cols; void rows;
     // Mark this agent as the currently-viewed one so the bell forwards to the
     // real terminal (see #onBell gate in start()). Cleared in dispose().
     this.zoomAttached = true;
@@ -898,10 +919,9 @@ export class PtyAgent extends EventEmitter {
         // No longer the viewed agent — stop forwarding the bell to the real
         // terminal (back to background: silent).
         this.zoomAttached = false;
-        // Restore the non-zoomed default dimensions so a subsequent
-        // claude UI re-flow uses sane width. Skip if the PTY died
-        // while zoomed.
-        try { this.resize(prevCols, prevRows); } catch {}
+        // 0404: no resize-back either. Shrinking to 80x24 on zoom exit was the
+        // other half of the double-print: the next zoom widened again, and each
+        // widening appended a fresh copy of claude's frame.
       },
     };
   }

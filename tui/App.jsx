@@ -38,6 +38,7 @@ import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from 
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
+import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
 import { CostStore } from './lib/costStore.js';
 import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
 import { getTemplate, listTemplates } from './lib/templateStore.js';
@@ -262,6 +263,18 @@ export default function App({ fleet, auth: initialAuth }) {
     stdout.on('resize', onResize);
     return () => stdout.off?.('resize', onResize);
   }, [stdout]);
+
+  // 0404: the fleet's PTY geometry follows the REAL terminal, and nothing else.
+  // Every resize makes claude reprint its whole frame and leaves the
+  // pre-resize copy in the emulator's scrollback (measured: one extra copy per
+  // widening), so zoom enter/exit, toasts, and the optional zoom panels must
+  // never trigger one. A genuine terminal resize does — the user expects a
+  // repaint then. Runs on mount too, which is a no-op when main.jsx already
+  // seeded the same geometry at boot.
+  useEffect(() => {
+    if (typeof fleet?.setViewport !== 'function') return;
+    try { fleet.setViewport(zoomBodyDims(termSize.cols, termSize.rows)); } catch {}
+  }, [fleet, termSize.cols, termSize.rows]);
 
   // ── One-shot auth-status banner ────────────────────────
   // Convert the preflight result into a toast on first render so the user
@@ -1962,6 +1975,10 @@ export default function App({ fleet, auth: initialAuth }) {
     // the selector "disappeared from view" whenever feedback was showing.)
     const feedbackRows = 1 + Math.max(1, toasts.length);
     const zoomHeight = Math.max(10, termRows - (3 + feedbackRows));
+    // 0404: zoomHeight shrinks when toasts arrive, but the PTY does NOT follow
+    // it — a resize duplicates claude's frame in the emulator. PtyPane renders
+    // the bottom slice of the (taller) emulator instead. The width comes from
+    // the same helper as the fleet viewport so the two cannot drift.
     return (
       <Box flexDirection="column" width={termCols} height={termRows}>
         <Box paddingX={2} paddingY={1}>
@@ -1971,7 +1988,7 @@ export default function App({ fleet, auth: initialAuth }) {
             onClose={() => { setModal(null); setZoomedId(null); }}
             onCyclePerm={() => cyclePerm(zoomedAgent)}
             theme={theme}
-            width={modalWidth(104, 220)}
+            width={zoomModalWidth(termCols)}
             height={zoomHeight}
             usage={usage}
             fmtReset={fmtReset}

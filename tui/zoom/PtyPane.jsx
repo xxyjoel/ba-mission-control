@@ -142,6 +142,16 @@ export default function PtyPane({
   const cols = Math.max(20, Math.floor(width  || 80));
   const rows = Math.max(5,  Math.floor(height || 24));
 
+  // 0404: the scroll-mode hint and the "(claude exited)" notice are children of
+  // the SAME fixed-height box as the terminal rows. Rendering `rows` rows plus
+  // a footer gives Ink rows+1 children for a height=rows box, and Ink resolves
+  // the overflow by dropping lines from the MIDDLE of the view — text goes
+  // missing mid-screen the moment you press Ctrl+Y (the "misshapen rows while
+  // scrolling" half of the duplicated/misshapen-zoom-text report). Reserve the
+  // footer's row instead, and keep the hint to exactly one row (truncated).
+  const footerRows = (scrollMode ? 1 : 0) + (exited ? 1 : 0);
+  const viewRows = Math.max(1, rows - footerRows);
+
   // ── PTY lifecycle ─────────────────────────────────────────────
   // Spawn on mount; tear down on unmount. We do NOT re-spawn on
   // size changes — just resize the existing PTY.
@@ -306,20 +316,30 @@ export default function PtyPane({
   // server/zoomSession.mjs (it owns the tailer's lifecycle so it can
   // outlive PtyPane during the quiet-wait at zoom exit).
 
-  // ── Resize: forward to PTY + emulator when our viewport changes ─
-  // tui/App.jsx already subscribes to process.stdout 'resize' and
-  // mirrors new dimensions into state — that re-renders Zoom, which
-  // recomputes bodyCols/bodyRows, which lands here as new cols/rows
-  // props. We forward to both xterm-headless (visible buffer reflow)
-  // and node-pty (kernel ioctl → claude sees SIGWINCH and repaints).
-  // scrollToBottom is a defensive nudge: on a mid-stream resize the
-  // viewport can drift above the live cursor row; snapping back to
-  // bottom keeps the cursor visible without prodding claude.
+  // ── Resize ──────────────────────────────────────────────────────
+  // 0404: an AGENT-OWNED emulator's geometry belongs to the fleet viewport
+  // (Fleet.setViewport ← tui/lib/zoomGeometry.js), NOT to this pane's Ink box.
+  // Resizing a live claude is never free: it reprints its whole frame at the
+  // new width and the pre-resize copy stays in the scrollback, so the
+  // conversation appeared twice — once narrow, once full width (measured: one
+  // extra copy per widening resize, claude 2.1.220). Our Ink box shrinks every
+  // time a toast lands or the stats/todos panel opens, which used to forward
+  // straight into pty.resize. It no longer does; the view memo renders the
+  // bottom slice of a taller emulator instead.
+  //
+  // The LEGACY (startZoomSession / MockAgent) path still owns its own local
+  // Terminal for the life of the zoom, so it resizes here as before.
+  //
+  // scrollToBottom is a defensive nudge: on a mid-stream size change the
+  // viewport can drift above the live cursor row; snapping back to bottom
+  // keeps the cursor visible without prodding claude.
   useEffect(() => {
     const pty = ptyRef.current, term = termRef.current;
     if (!pty || !term) return;
-    try { term.resize(cols, rows); } catch {}
-    try { pty.resize(cols, rows); } catch {}
+    if (!termOwnedByAgentRef.current) {
+      try { term.resize(cols, rows); } catch {}
+      try { pty.resize(cols, rows); } catch {}
+    }
     try { term.scrollToBottom(); } catch {}
     setTick(n => (n + 1) | 0);
   }, [cols, rows]);
@@ -348,8 +368,8 @@ export default function PtyPane({
     // less / vim convention).
     if (scrollMode) {
       const term = termRef.current;
-      const maxOffset = term ? Math.max(0, term.buffer.active.length - rows) : 0;
-      const halfPage = Math.max(1, Math.floor(rows / 2));
+      const maxOffset = term ? Math.max(0, term.buffer.active.length - viewRows) : 0;
+      const halfPage = Math.max(1, Math.floor(viewRows / 2));
       if (key.escape) { setScrollMode(false); setScrollOffset(0); return; }
       if (input === 'w') { setScrollOffset(o => Math.min(maxOffset, o + 1)); return; }
       if (input === 's') { setScrollOffset(o => Math.max(0, o - 1)); return; }
@@ -450,22 +470,36 @@ export default function PtyPane({
     const buf = term.buffer.active;
     const cursorY = buf.cursorY;
     const cursorX = buf.cursorX;
+    // 0404: the emulator can be TALLER than our Ink box — its geometry is
+    // fixed for the agent's life (see the resize effect), while this box loses
+    // rows to toasts and the optional stats/todos panels. Render the BOTTOM
+    // slice of claude's viewport so its composer and status line stay visible;
+    // the rows we skip are still reachable with Ctrl+Y scroll. `skip` is 0 in
+    // the common case (no panels, no toasts) and on the legacy path, where the
+    // emulator is sized to this box exactly.
+    const skip = Math.max(0, (term.rows || viewRows) - viewRows);
+    // Same guard horizontally: never read past the emulator's last column.
+    const readCols = Math.min(cols, term.cols || cols);
     // When scrolled back in history, read from above the live viewport.
     // Clamp so we never go below row 0 of xterm's buffer (which includes
-    // scrollback). The cursor only paints when the live viewport is on
-    // screen — scrolled-back history shows no cursor.
-    const offset = Math.max(0, Math.min(scrollOffset, buf.length - rows));
-    const startY = buf.viewportY - offset;
+    // scrollback). buf.length - viewRows is baseY + skip, i.e. the offset at
+    // which startY reaches 0 — correct with or without a skip. The cursor only
+    // paints when the live viewport is on screen — scrolled-back history
+    // shows no cursor.
+    const offset = Math.max(0, Math.min(scrollOffset, buf.length - viewRows));
+    const startY = Math.max(0, buf.viewportY + skip - offset);
+    // Cursor row in OUR coordinates: claude's row minus the rows we skipped.
+    const cursorRow = cursorY - skip;
     const cursorInView = offset === 0 && (
-      Number.isInteger(cursorY) && cursorY >= 0 && cursorY < rows &&
-      Number.isInteger(cursorX) && cursorX >= 0 && cursorX < cols
+      Number.isInteger(cursorRow) && cursorRow >= 0 && cursorRow < viewRows &&
+      Number.isInteger(cursorX) && cursorX >= 0 && cursorX < readCols
     );
     const out = [];
     let banner = null;
-    for (let y = 0; y < rows; y++) {
+    for (let y = 0; y < viewRows; y++) {
       const line = buf.getLine(startY + y);
-      const cxForRow = (cursorInView && y === cursorY) ? cursorX : -1;
-      const runs = rowToRuns(line, cell, cols, cxForRow, cursorStyle);
+      const cxForRow = (cursorInView && y === cursorRow) ? cursorX : -1;
+      const runs = rowToRuns(line, cell, readCols, cxForRow, cursorStyle);
       // Claude prints its own "update available" notice into this body region.
       // When suppression is on, recognise that row (never the cursor/input
       // row), blank it here, and surface it as `banner` so the parent can show
@@ -478,8 +512,9 @@ export default function PtyPane({
     }
     return { rows: out, banner };
     // tick drives re-renders; cols/rows already trigger via resize effect.
+    // viewRows is in the deps because entering scroll mode reserves a row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, cols, rows, cursorStyle, scrollOffset, hideUpdateBanner]);
+  }, [tick, cols, rows, viewRows, cursorStyle, scrollOffset, hideUpdateBanner]);
 
   // Report claude's update banner upward (outside render) so Zoom can show a
   // discrete chip. Keyed on the banner text so it only fires when it changes.
@@ -531,14 +566,17 @@ export default function PtyPane({
         </Text>
       ))}
       {scrollMode && (
-        <Text>
+        // wrap="truncate" keeps this to the ONE row reserved by footerRows. Let
+        // it wrap and the box overflows, which makes Ink drop terminal rows
+        // from the middle of the view.
+        <Text wrap="truncate">
           <Text color={theme?.accent || 'cyan'} bold>▲ SCROLL </Text>
           <Text color={theme?.fg || 'white'}>{scrollOffset} </Text>
           <Text color={theme?.dim || 'gray'}>· w/s line · f/b half-page up/down · g/G top/bottom · Esc resume claude</Text>
         </Text>
       )}
       {exited && (
-        <Text color={theme?.dim || 'gray'}>(claude exited)</Text>
+        <Text color={theme?.dim || 'gray'} wrap="truncate">(claude exited)</Text>
       )}
     </Box>
   );

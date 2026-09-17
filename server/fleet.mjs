@@ -57,13 +57,20 @@ function emptySlot(slot) {
 export class Fleet extends EventEmitter {
   #tailerTimer = null;
 
-  constructor({ slots = DEFAULT_SLOTS } = {}) {
+  constructor({ slots = DEFAULT_SLOTS, viewport = null } = {}) {
     super();
+    // 0404: the PTY geometry every agent spawns at and keeps. One size for the
+    // whole fleet, computed from the real terminal by tui/lib/zoomGeometry.js.
+    // null = unknown (tests / non-TTY) → agents fall back to their 80x24
+    // default. See setViewport for why this is deliberately sticky.
+    this.viewport = null;
     // Clamp to a sensible band — anything outside this hints at a bad
     // settings file rather than a real preference.
     this.slots = Math.max(1, Math.min(64, slots | 0 || DEFAULT_SLOTS));
     // agents[slot-1] is either an Agent instance or null (empty slot)
     this.agents = new Array(this.slots).fill(null);
+    // After agents[] exists — setViewport walks it.
+    if (viewport) this.setViewport(viewport);
     this.sessionStart = Date.now();
     // Default per-slot cost cap, propagated to every Agent on launch
     // and on settings changes via setCostCap(). 0 = disabled.
@@ -128,6 +135,31 @@ export class Fleet extends EventEmitter {
     };
   }
 
+  // 0404: set the PTY geometry for the whole fleet. Applied to new agents at
+  // spawn and to every live agent immediately.
+  //
+  // This is the ONLY thing that resizes a live claude: claude reprints its
+  // entire frame on SIGWINCH and the pre-resize copy stays in the emulator's
+  // scrollback, so a resize is never free — one extra (wrongly-wrapped) copy
+  // of the conversation per widening. Zoom enter/exit, toasts and the optional
+  // zoom panels therefore no longer resize anything; only a real terminal
+  // resize does, where the user expects a repaint. Returns the number of live
+  // agents that actually changed size (0 when the geometry is unchanged).
+  setViewport({ cols, rows } = {}) {
+    // Garbage in (a non-TTY reporting 0, an undefined dimension) must leave the
+    // fleet on whatever geometry it already had — never shrink it to a floor.
+    if (!(cols > 0 && rows > 0)) return 0;
+    const next = { cols: Math.max(20, cols | 0), rows: Math.max(6, rows | 0) };
+    if (this.viewport && this.viewport.cols === next.cols && this.viewport.rows === next.rows) return 0;
+    this.viewport = next;
+    let resized = 0;
+    for (const a of this.agents || []) {
+      if (!a || typeof a.resize !== 'function') continue;
+      try { if (a.resize(next.cols, next.rows) !== false) resized++; } catch {}
+    }
+    return resized;
+  }
+
   agentBySlot(slot) {
     return this.agents[slot - 1] || null;
   }
@@ -152,7 +184,13 @@ export class Fleet extends EventEmitter {
     const agent = MOCK_FIXTURE
       ? new MockAgent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, fixture: MOCK_FIXTURE })
       : USE_PTY
-        ? new PtyAgent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids })
+        ? new PtyAgent({
+          slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids,
+          // 0404: spawn straight into the zoom body geometry so zooming never
+          // has to resize (a resize duplicates claude's frame in the buffer).
+          cols: this.viewport?.cols,
+          rows: this.viewport?.rows,
+        })
         : new Agent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, resume });
     agent.costCapUSD = this.defaultCostCapUSD;
     // Forward each agent's high-frequency 'change' as a PAYLOAD-LESS fleet

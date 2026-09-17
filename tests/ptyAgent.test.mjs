@@ -370,7 +370,13 @@ test('PtyAgent.approve: sends the canned confirmation message', () => {
 
 // ─── attachZoomView (Phase D) ─────────────────────────────────────
 
-test('PtyAgent.attachZoomView: returns existing PTY, resizes to zoom dims', () => {
+// 0404 replaces the two resize-on-zoom tests below. Measured against claude
+// 2.1.220: spawn at 80x24, send /help, then resize — the welcome frame appears
+// in the emulator ONCE at 80 cols, TWICE after resizing to 214 (one narrow,
+// one wide), and THREE times after a second widening. claude reprints its
+// whole frame on SIGWINCH and the pre-resize copy stays in the scrollback, so
+// zoom must attach to the geometry the agent already has, never resize into it.
+test('PtyAgent.attachZoomView: returns existing PTY and does NOT resize it (0404)', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
@@ -379,31 +385,48 @@ test('PtyAgent.attachZoomView: returns existing PTY, resizes to zoom dims', () =
   const view = p.attachZoomView({ cols: 200, rows: 60 });
   assert.equal(view.pty, fake.spawned[0], 'zoom uses the same PTY, not a new spawn');
   assert.equal(view.sessionId, p.sessionId);
-  assert.equal(p.cols, 200);
-  assert.equal(p.rows, 60);
-  assert.deepEqual(fake.spawned[0]._resizes, [[200, 60]]);
+  assert.equal(p.cols, 80, 'attach must not change the PTY geometry');
+  assert.equal(p.rows, 24);
+  assert.deepEqual(fake.spawned[0]._resizes, [], 'no resize → no duplicated frame');
   // Only ONE spawn happened total — zoom did NOT spawn a sibling
   assert.equal(fake.spawned.length, 1);
   p.kill();
 });
 
-test('PtyAgent.attachZoomView: dispose restores prior dimensions, does NOT kill PTY', () => {
+test('PtyAgent.attachZoomView: dispose resizes nothing and does NOT kill the PTY (0404)', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
   const view = p.attachZoomView({ cols: 200, rows: 60 });
   view.dispose();
-  // Restored to defaults
   assert.equal(p.cols, 80);
   assert.equal(p.rows, 24);
-  assert.deepEqual(fake.spawned[0]._resizes, [[200, 60], [80, 24]]);
+  assert.deepEqual(fake.spawned[0]._resizes, [], 'exiting zoom must not resize back either');
   // The PTY was NOT killed (no SIGTERM, no SIGKILL)
   assert.ok(!fake.spawned[0]._kills.includes('SIGTERM'));
   assert.ok(!fake.spawned[0]._kills.includes('SIGKILL'));
   // dispose is idempotent
   view.dispose();
   view.dispose();
-  assert.equal(fake.spawned[0]._resizes.length, 2);
+  assert.equal(fake.spawned[0]._resizes.length, 0);
+  p.kill();
+});
+
+// 0404: the fleet viewport is the only thing that resizes a live claude, and a
+// repeat of the same geometry must be a no-op (a same-dims resize is the one
+// resize claude does NOT reprint on, but the ioctl is still pointless).
+test('PtyAgent: spawns at the supplied viewport geometry; resize is a no-op when unchanged (0404)', () => {
+  const fake = makeFakeSpawn();
+  const p = makeAgent(fake, { cols: 214, rows: 36 });
+  p.start();
+  assert.equal(p.cols, 214);
+  assert.equal(p.rows, 36);
+  assert.equal(fake.spawned[0]._opts.cols, 214, 'PTY spawned at the viewport width');
+  assert.equal(fake.spawned[0]._opts.rows, 36);
+  assert.equal(p.resize(214, 36), false, 'same geometry → no resize');
+  assert.deepEqual(fake.spawned[0]._resizes, []);
+  assert.equal(p.resize(180, 30), true, 'real terminal resize → forwarded once');
+  assert.deepEqual(fake.spawned[0]._resizes, [[180, 30]]);
   p.kill();
 });
 

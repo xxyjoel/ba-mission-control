@@ -235,8 +235,17 @@ test('zoom recipe O3: Ctrl+T forwards to claude (its toggleTodos), not intercept
   unmount();
 });
 
-// ─── Recipe Q — Resize forwards to both PTY and term ────────────────
-test('zoom recipe Q: rerender with new dims calls pty.resize AND term.resize', async () => {
+// ─── Recipe Q — Ink-box size changes must NOT resize an agent-owned PTY ──
+//
+// 0404 inverts this recipe. It used to pin "a new width/height prop forwards to
+// pty.resize + term.resize". Measured against claude 2.1.220: every resize
+// makes claude reprint its whole frame and the pre-resize copy stays in the
+// emulator's scrollback — one extra, wrongly-wrapped copy of the conversation
+// per widening. The Ink box shrinks whenever a toast lands or the stats/todos
+// panel opens, so forwarding that was printing the session twice (once narrow,
+// once full width). Geometry now belongs to Fleet.setViewport; PtyPane renders
+// the bottom slice of the emulator instead.
+test('zoom recipe Q: a new height prop does NOT resize an agent-owned PTY (0404)', async () => {
   const stub = makeStubAgent({ cols: 60, rows: 20 });
   const { rerender, unmount } = render(
     <PtyPane
@@ -266,15 +275,14 @@ test('zoom recipe Q: rerender with new dims calls pty.resize AND term.resize', a
     />
   );
   await tick(60);
-  // The attach call resized once to (60,20), then the resize effect
-  // fires again with the new dims. We just need to see (100,30) end up
-  // in both resize logs.
+  // The stub's attachZoomView returns { term, cell }, i.e. the agent owns the
+  // emulator — so neither the attach nor the new props may resize anything.
   const ptyResizes = stub.getResizes();
   const termResizes = stub.getTermResizes();
-  assert.ok(ptyResizes.some(([c, r]) => c === 100 && r === 30),
-    `pty.resize never called with (100,30) — got ${JSON.stringify(ptyResizes)}`);
-  assert.ok(termResizes.some(([c, r]) => c === 100 && r === 30),
-    `term.resize never called with (100,30) — got ${JSON.stringify(termResizes)}`);
+  assert.deepEqual(ptyResizes, [],
+    `pty.resize must not be called for an agent-owned term — got ${JSON.stringify(ptyResizes)}`);
+  assert.deepEqual(termResizes, [],
+    `term.resize must not be called for an agent-owned term — got ${JSON.stringify(termResizes)}`);
   unmount();
 });
 

@@ -60,9 +60,12 @@ export function makeStubAgent({ cols = 80, rows = 24 } = {}) {
     tail: [],
     todos: [],
     markUserSubmitted() { markUserSubmittedCalls++; },
-    attachZoomView({ cols: c, rows: r } = {}) {
+    // Mirrors PtyAgent.attachZoomView after 0404: attaching does NOT resize.
+    // The agent's PTY already runs at the fleet viewport's geometry, and every
+    // resize makes claude reprint its whole frame — leaving the pre-resize copy
+    // in the emulator's scrollback (the double-print bug).
+    attachZoomView({ cols: _c, rows: _r } = {}) {
       attached++;
-      if (c && r) { try { term.resize(c, r); } catch {} }
       return {
         pty,
         term,

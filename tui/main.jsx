@@ -16,6 +16,7 @@ import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
 import { isSandboxed, getConfigDir } from './lib/configDir.js';
 import { loadSettings } from './lib/settings.js';
+import { zoomBodyDims } from './lib/zoomGeometry.js';
 import { syncFromSnapshot, setQuitMode, pruneSessions, setStoreReadOnly } from './lib/sessionStore.js';
 import { acquireInstanceLock, releaseInstanceLock } from './lib/instanceLock.js';
 import { MODELS } from './lib/models.js';
@@ -139,7 +140,14 @@ if (!lock.ok) {
   );
 }
 
-const fleet = new Fleet({ slots: bootSettings.maxSlots });
+// 0404: fix every agent's PTY geometry to the zoom body size BEFORE the first
+// spawn. A claude that is resized later reprints its whole frame and leaves the
+// pre-resize copy in the emulator's scrollback, which is what made zoom text
+// print twice (once narrow, once full width). See tui/lib/zoomGeometry.js.
+const fleet = new Fleet({
+  slots: bootSettings.maxSlots,
+  viewport: zoomBodyDims(process.stdout.columns || 180, process.stdout.rows || 50),
+});
 
 // Opt-in memory instrumentation for the long-uptime OOM (#18). Inert in normal
 // use: only arms an on-demand SIGUSR2 heap snapshot unless MC_HEAP_LOG is set,

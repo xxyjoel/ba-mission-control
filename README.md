@@ -378,6 +378,16 @@ Settings → LAYOUT. Keys available there:
 | `Ctrl+Q` | **Close the zoom view** |
 | `Esc`, `Ctrl+T`, `Ctrl+S`, `Shift+Tab` | **Forwarded to claude** — its own cancel/back-out, todos, stash, and permission-mode cycle. mc no longer shadows these (chrome keys are `Ctrl+Q/Y/K/U`, all unused by claude). |
 
+**Session geometry is fixed, on purpose.** Every session's `claude` runs at the
+zoom body size — computed once from your terminal (`tui/lib/zoomGeometry.js`)
+and applied at spawn — and only a real terminal resize changes it. Claude
+reprints its entire frame on every resize and the pre-resize copy stays in mc's
+scrollback, so a resize costs you one extra, differently-wrapped copy of the
+conversation (measured: 1 copy → 2 after widening → 3 after widening again).
+Zooming in, zooming out, a toast landing, and opening the stats or tasks panel
+therefore resize nothing; the zoom pane renders the bottom slice of the
+emulator instead, and `Ctrl+Y` scroll reaches whatever the window skipped.
+
 #### Slash commands (in zoom composer)
 
 These are handled **client-side** — they don't round-trip to the `claude` subprocess (stream-json non-interactive mode doesn't parse slash commands). Everything except `/quit` routes through the same dispatcher that powers the `:cmd` command bar, so the two surfaces share their handler table.
