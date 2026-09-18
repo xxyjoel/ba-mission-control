@@ -458,8 +458,8 @@ GENERAL or with `:model default <id>`.
 
 ### Automatic discovery
 
-Models are never hand-added — mc syncs from two live sources on boot, in the
-background:
+mc syncs from two live sources on boot, in the background, so you rarely add
+a model by hand:
 
 1. **Models API inventory** (`GET /v1/models` — the endpoint the Anthropic
    SDK's `client.models.list()` wraps). Free, complete, and diffed against
@@ -478,6 +478,20 @@ background:
    next boot. A brand-new model *family* (its own alias) reaching
    credential-less installs needs a one-string addition to `KNOWN_ALIASES`
    in `tui/lib/modelProbe.js` — the API path needs nothing.
+
+**The known gap.** A new model *family* is invisible to both sources when you
+sign in through the claude CLI subscription rather than an API key. Source 1
+finds nothing without an env credential, and source 2 has no alias for the new
+family. Claude Fable 5.1 hit exactly this, so `fable-5.1` is hand-added to
+`tui/lib/models.js` with limits from a live `/v1/models` call. Its pricing is
+inherited from Fable 5 and flagged `estimatedPricing` — treat the cost column
+for that model as an estimate. Remove the entry once discovery finds it.
+
+**Minimum claude version.** A model can require a newer CLI than you have.
+claude 2.1.220 rejects Fable 5.1 with `400 … version 2.1.251 or newer is
+required`, and mc surfaces that as a failed session, not as a refusal before
+launch. Upgrade the CLI the way you installed it — Homebrew users run
+`brew upgrade --cask claude-code`, not `claude update`.
 
 The **default model is `auto`**: new sessions launch on the newest Opus in
 the live catalog, so a freshly discovered release becomes the default the
