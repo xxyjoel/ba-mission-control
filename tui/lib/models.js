@@ -42,10 +42,30 @@
 // merges them into this object at boot / on `:model refresh` / on a claude
 // version change, with pricing inherited from the newest same-kind sibling
 // and flagged estimatedPricing until a verified row is added here.
+//
+// fable-5.1 is the ONE hand-added exception, and it documents why the rule
+// above needs the discovery gap closed (2026-09-18). Neither automatic source
+// can reach it: the Models API sync reads ANTHROPIC_API_KEY /
+// ANTHROPIC_AUTH_TOKEN from the environment and silently returns "no API
+// credential" when (as here) the user is logged in through the claude CLI
+// instead, and the alias probe only walks KNOWN_ALIASES = opus/sonnet/haiku,
+// which has no entry for a fable-family model. Its limits below (1M ctx /
+// 128k out) come from a live GET /v1/models; its PRICING is NOT published-
+// verified — it is inherited from fable-5 and flagged estimatedPricing, same
+// contract a discovered model gets. Replace the flag with real rates when
+// they're confirmed. Delete this entry once the keychain credential source
+// lands and discovery adds it on its own.
+//
+// TODO(model-min-cli): a model can also require a MINIMUM claude version, and
+// the catalog has nowhere to say so. claude 2.1.220 answers a fable-5-1 launch
+// with "API Error: 400 … does not support this model; version 2.1.251 or newer
+// is required", which reaches the card as a generic session failure. Carry a
+// minCli field per entry and refuse/flag the selection before we spawn.
 export const MODELS = {
   'opus-4.8':   { label: 'OPUS 4.8',   cliModel: 'claude-opus-4-8',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.7':   { label: 'OPUS 4.7',   cliModel: 'claude-opus-4-7',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.6':   { label: 'OPUS 4.6',   cliModel: 'claude-opus-4-6',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
+  'fable-5.1':  { label: 'FABLE 5.1',  cliModel: 'claude-fable-5-1',          kind: 'fable',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 10, costPerMTokOut: 50, costPerMTokCacheCreation: 12.5,  costPerMTokCacheRead: 1.0, estimatedPricing: true },
   'fable-5':    { label: 'FABLE 5',    cliModel: 'claude-fable-5',            kind: 'fable',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 10, costPerMTokOut: 50, costPerMTokCacheCreation: 12.5,  costPerMTokCacheRead: 1.0 },
   'sonnet-5':   { label: 'SONNET 5',   cliModel: 'claude-sonnet-5',           kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
   'sonnet-4.6': { label: 'SONNET 4.6', cliModel: 'claude-sonnet-4-6',         kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
