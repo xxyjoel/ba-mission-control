@@ -37,7 +37,7 @@ import { MODELS, resolveModelId } from './lib/models.js';
 import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
 import { loadSettings, saveSettings } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
-import { computeGridLayout, chunkRows } from './lib/gridLayout.js';
+import { computeGridLayout, chunkRows, MAX_TOAST_ROWS } from './lib/gridLayout.js';
 import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
 import { normalizeTypedText } from './lib/typedText.js';
 import { CostStore } from './lib/costStore.js';
@@ -363,7 +363,11 @@ export default function App({ fleet, auth: initialAuth }) {
   const pushToast = (text, kind = 'info') => {
     const id = toastIdRef.current++;
     const expiresAt = Date.now() + (settings.toastDurationMs || 4000);
-    setToasts(prev => [...prev.slice(-3), { id, kind, text, expiresAt }]);
+    // Keep at most MAX_TOAST_ROWS alive — that number IS the height the grid
+    // layout reserves for the strip (gridLayout.FEEDBACK_H). Letting more
+    // through would render rows nothing budgeted for, which pushes the frame
+    // past the last screen row and tears the view.
+    setToasts(prev => [...prev.slice(-(MAX_TOAST_ROWS - 1)), { id, kind, text, expiresAt }]);
   };
 
   // ── Cost store wiring ───────────────────────────────────
@@ -1876,7 +1880,7 @@ export default function App({ fleet, auth: initialAuth }) {
   // the user keeps the breadcrumbs.
   if (modal === 'help') {
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}><Help onClose={() => setModal(null)} theme={theme} width={modalWidth(64, 110)} view={helpView} /></Box>
         <Box flexGrow={1} />
         {feedbackStrip}
@@ -1887,7 +1891,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'quit') {
     const liveCount = agents.filter(a => a.status !== 'empty').length;
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}>
           <QuitConfirm onCancel={() => setModal(null)} onQuit={(mode) => setQuitMode(mode)} theme={theme} agentCount={liveCount} />
         </Box>
@@ -1899,7 +1903,7 @@ export default function App({ fleet, auth: initialAuth }) {
   }
   if (modal === 'bcast') {
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}><Broadcast agents={agents} onSend={sendBroadcast} onClose={() => setModal(null)} theme={theme} width={modalWidth(84, 160)} /></Box>
         <Box flexGrow={1} />
         {feedbackStrip}
@@ -1909,7 +1913,7 @@ export default function App({ fleet, auth: initialAuth }) {
   }
   if (modal === 'dash') {
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}>
           <Dashboard
             agents={agents}
@@ -1933,7 +1937,7 @@ export default function App({ fleet, auth: initialAuth }) {
   }
   if (modal === 'new' && newSlot) {
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}>
           <NewSession
             slot={newSlot}
@@ -1953,7 +1957,7 @@ export default function App({ fleet, auth: initialAuth }) {
   }
   if (modal === 'settings') {
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}><Settings settings={settings} setSettings={setSettingsState} onClose={() => setModal(null)} theme={theme} width={modalWidth(92, 140)} /></Box>
         <Box flexGrow={1} />
         {feedbackStrip}
@@ -1963,7 +1967,7 @@ export default function App({ fleet, auth: initialAuth }) {
   }
   if (modal === 'repoPicker') {
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}>
           <RepoPicker
             current={settings.repoParents}
@@ -2003,7 +2007,7 @@ export default function App({ fleet, auth: initialAuth }) {
     // the bottom slice of the (taller) emulator instead. The width comes from
     // the same helper as the fleet viewport so the two cannot drift.
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}>
           <Zoom
             agent={zoomedAgent}
@@ -2028,12 +2032,15 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'shell') {
     // Shell overlay height: wrapper consumes paddingY=2 + FeedbackStrip (1) +
     // StatusBar (1) = 4 rows. Mirror the zoom pattern exactly.
-    // TODO(shell-height): FeedbackStrip is really 1 header + max(1,toasts) rows,
-    // not 1 — same undercount the zoom path had (task 0362). Subtract the real
-    // `1 + Math.max(1, toasts.length) + 3` so a toast burst can't clip the shell.
-    const shellHeight = Math.max(10, termRows - 4);
+    // FeedbackStrip is 1 header + max(1, toasts) rows, not 1 — this was
+    // `termRows - 4`, so a full strip made the overlay render 4 rows past the
+    // last screen row. Same undercount the zoom path had (0362), same
+    // consequence as the fleet view's: Ink cannot erase a frame taller than the
+    // terminal, so the screen tears and scrolls. Mirror zoom's math exactly.
+    const feedbackRows = 1 + Math.max(1, toasts.length);
+    const shellHeight = Math.max(10, termRows - (3 + feedbackRows));
     return (
-      <Box flexDirection="column" width={termCols} height={termRows}>
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
         <Box paddingX={2} paddingY={1}>
           <ShellOverlay
             onClose={() => setModal(null)}
@@ -2050,7 +2057,7 @@ export default function App({ fleet, auth: initialAuth }) {
   }
 
   return (
-    <Box flexDirection="column" width={termCols} height={termRows}>
+    <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
       <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} />
       <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} />
 
@@ -2115,8 +2122,12 @@ export default function App({ fleet, auth: initialAuth }) {
           only when the terminal is too short). 0388: the log no longer grows
           to fill leftover space; the spacer below absorbs it so the status
           bar stays pinned to the bottom edge. */}
-      {settings.showFleetLog && (
-        <FleetLog log={fleetLog} focusedId={focusedAgent?.id} theme={theme} maxLines={dynamicFleetLogLines} mode={settings.fleetLogMode} width={termSize.cols} />
+      {/* Drop the log entirely — header included — when the layout has no rows
+          left for it. A "▸ FLEET LOG · 0 events" header above nothing is one
+          wasted row, and on a terminal short enough to reach zero that row is
+          the difference between fitting the screen and tearing it. */}
+      {settings.showFleetLog && dynamicFleetLogLines > 0 && (
+        <FleetLog log={fleetLog} focusedId={focusedAgent?.id} theme={theme} maxLines={dynamicFleetLogLines} requestedLines={settings.fleetLogLines} mode={settings.fleetLogMode} width={termSize.cols} />
       )}
       <Box flexGrow={1} />
 

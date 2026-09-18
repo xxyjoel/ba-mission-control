@@ -71,8 +71,15 @@ export function fleetLogTextBudget(width = 0) {
   return width > 0 ? Math.max(20, width - 40) : 90;
 }
 
-export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 'all', width = 0 }) {
-  const rows = log.slice(-Math.max(4, maxLines));
+export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 'all', width = 0, requestedLines = 0 }) {
+  // Render EXACTLY the budget the caller allocated. This was
+  // Math.max(4, maxLines), which rendered four rows even when the layout had
+  // computed room for fewer (or none) — so on a short terminal the log pushed
+  // the whole frame past the last screen row, Ink could no longer erase its
+  // previous frame, and the view tore and scrolled. The caller owns the budget
+  // (computeGridLayout.dynamicFleetLogLines); this component must not override
+  // it upward.
+  const rows = maxLines > 0 ? log.slice(-maxLines) : [];
   const textBudget = fleetLogTextBudget(width);
 
   return (
@@ -82,6 +89,13 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
       <Box>
         <Text color={theme.accent}>▸ FLEET LOG</Text>
         <Text color={theme.dim}> · {rows.length} events</Text>
+        {/* Say so when the terminal cannot honour the Settings line count.
+            The clamp was silent, which read as "I set 30 lines and get 8" —
+            the number in Settings is a ceiling, and the terminal's height is
+            what actually decides. */}
+        {requestedLines > maxLines && (
+          <Text color={theme.faint}> · {maxLines}/{requestedLines} lines (terminal height)</Text>
+        )}
         {mode === 'narrative' && <Text color={theme.yellow}> · narrative</Text>}
         <Box flexGrow={1} />
         <Text color={theme.faint}>[ tail -f mc://fleet ]</Text>

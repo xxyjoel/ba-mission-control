@@ -16,7 +16,23 @@ export const CARD_H = 11;         // must match Card.jsx height={11}
 export const MIN_CARD_W = 20;
 const HEADER_H = 1;
 const AGG_H = 1;
-const FEEDBACK_H = 2;
+// Most toasts App.jsx will keep alive at once — pushToast drops all but the
+// newest MAX_TOAST_ROWS, and FeedbackStrip renders one row each. Exported so
+// the two cannot drift: this number IS the strip's height budget.
+export const MAX_TOAST_ROWS = 4;
+// FeedbackStrip = its own " ▸ FEEDBACK · N messages" header + one row per live
+// toast (or one idle hint row when there are none).
+//
+// Budgeted at the WORST CASE, not the common one. This was 2 — the idle height
+// — while the strip renders up to 1 + 4 = 5, so a full strip made the fleet
+// view render up to 3 rows MORE than the terminal has. Ink cannot erase a
+// frame taller than the screen, so the terminal scrolls instead: the whole UI
+// shifts down, card borders tear, and every repaint jumps. Measured over 440
+// layout combinations per terminal height: 224/440 overflowed at 24 rows,
+// 67/440 at 40, 19/440 at 50 — and EVERY overflowing case had a full strip,
+// none had 0 or 1 toast. Reserving the worst case also keeps the layout still
+// when toasts come and go, which is the other half of "it bops around".
+const FEEDBACK_H = 1 + MAX_TOAST_ROWS;
 const STATUS_H = 1;
 const FLEETLOG_HEAD_H = 1;        // " ▸ FLEET LOG · N events" row
 const PAGER_H = 1;                // "pane 2/3 · [ ] to switch" strip
@@ -88,7 +104,11 @@ export function computeGridLayout({
   const fixedH = HEADER_H + AGG_H + (rowsInPage * CARD_H) + pagerActual
     + FEEDBACK_H + STATUS_H + FLEETLOG_HEAD_H;
   const remainingH = Math.max(0, trows - fixedH);
-  const dynamicFleetLogLines = Math.min(fleetLogLines, Math.max(4, remainingH));
+  // No floor. This was Math.max(4, remainingH), which kept four log lines even
+  // when the terminal had room for none — the last row of overflow on a short
+  // terminal (56/440 combinations at 24 rows survived the FEEDBACK_H fix purely
+  // because of this floor). A log that tears the layout is worse than no log.
+  const dynamicFleetLogLines = Math.min(fleetLogLines, remainingH);
 
   return {
     effectiveCols,
