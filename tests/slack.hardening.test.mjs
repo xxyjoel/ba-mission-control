@@ -53,13 +53,32 @@ test('S6: a valid webhook posts with redirect:"error" and an abort signal', asyn
   assert.match(body.text, /hello fleet/);
 });
 
-test('S6: a hung POST times out instead of wedging forever', async () => {
-  // A fetch that resolves only when its signal aborts — like a stalled server.
-  const hung = (url, opts) => new Promise((_, reject) => {
-    opts.signal.addEventListener('abort', () => reject(opts.signal.reason));
-  });
+// A hung POST must surface as an error, never wedge the caller. Split into two
+// deterministic halves: (1) we DO arm a deadline, checked synchronously, and
+// (2) a timeout rejection is reported as an error. The original single test
+// awaited a real AbortSignal.timeout firing and then read signal.reason, whose
+// shape and timing differ between Node majors — it passed on 26 and was
+// cancelled on 20 in CI, blocking the release. Never make a unit test wait on
+// a runtime timer it does not own.
+test('S6: postSlack arms an abort deadline on every POST', async () => {
+  let seen = null;
+  const capture = (url, opts) => { seen = opts; return Promise.resolve({ ok: true, status: 200 }); };
+  const r = await postSlack({ webhook: OK_HOOK, text: 'hi', fetchImpl: capture, timeoutMs: 50 });
+  assert.equal(r.ok, true);
+  assert.ok(seen.signal, 'a signal is passed');
+  assert.equal(typeof seen.signal.aborted, 'boolean', 'it is an AbortSignal');
+  assert.equal(seen.redirect, 'error', 'and redirects are refused');
+});
+
+test('S6: a timed-out POST is reported as an error, not a wedge', async () => {
+  // Reject exactly the way fetch does on an abort, without waiting for a timer.
+  const timedOut = () => {
+    const e = new Error('The operation was aborted due to timeout');
+    e.name = 'TimeoutError';
+    return Promise.reject(e);
+  };
   const t0 = Date.now();
-  const r = await postSlack({ webhook: OK_HOOK, text: 'hi', fetchImpl: hung, timeoutMs: 60 });
+  const r = await postSlack({ webhook: OK_HOOK, text: 'hi', fetchImpl: timedOut, timeoutMs: 50 });
   assert.equal(r.ok, false);
   assert.ok(Date.now() - t0 < 5000, 'returned promptly');
   assert.match(String(r.error), /timeout|timed out|abort/i);
