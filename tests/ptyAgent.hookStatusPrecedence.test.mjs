@@ -337,8 +337,13 @@ test('0403: idle + fresh sub-hook clock → status stays idle, chip reports the 
 
   const snap = agent.toJSON();
   assert.equal(snap.status, 'idle', '0403-AC1: the main thread really is idle');
-  assert.equal(snap.bgCount, 1, '0403-AC2: the work is still reported');
-  assert.equal(snap.bgStatus, 'working');
+  // 0411: this used to assert bgCount === 1. That 1 was a literal placeholder,
+  // not a count — five running agents rendered as "1bg". The hook clock can
+  // only prove that SOMETHING is working, so it now reports null (live but
+  // uncounted) and the card draws '?bg'. A real number comes from the
+  // per-agent files; see tests/subagentCount.test.mjs.
+  assert.equal(snap.bgCount, null, '0403-AC2: work reported, honestly uncounted');
+  assert.equal(snap.bgStatus, 'working', 'still surfaced as background work');
   agent.kill?.();
 });
 

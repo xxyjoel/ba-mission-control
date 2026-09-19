@@ -1224,6 +1224,20 @@ export class PtyAgent extends EventEmitter {
     // rather than the clock — a sub-agent that thinks for three minutes between
     // tools is still working, and an entry that never returned its tool_result
     // is dropped by the same staleness cutoff the connector sweeps with.
+    // 0411 CONNECTOR → SUMMARY. The pairing map below tracks a FOREGROUND
+    // fan-out correctly, but is always empty for BACKGROUND agents: their
+    // tool_result is the launch receipt (claude prints "Backgrounded agent"),
+    // not the finish, so each entry is added and deleted in the same turn.
+    // The countable source is the one the usage tailer already reads — every
+    // sub-agent writes its own agent-<id>.jsonl, and a file still being written
+    // is an agent still working.
+    const bgNow = Date.now();
+    let liveSubFiles = [];
+    if (this.pendingSubagents.size === 0) {
+      try {
+        liveSubFiles = this.usageTailer?.liveAgents?.({ withinMs: BG_SUB_ACTIVE_MS, now: bgNow }) || [];
+      } catch { liveSubFiles = []; }
+    }
     let bgCount = 0;
     const bgCutoff = Date.now() - BG_ABANDON_MS;
     for (const s of this.pendingSubagents.values()) {
@@ -1236,8 +1250,14 @@ export class PtyAgent extends EventEmitter {
     // fan-out time (sub-agent tool events arrive up to 166s apart, measured
     // gtm-gov-miner 2026-09-16). Use bgSessions' 60s window for the chip;
     // SUB_ACTIVE_MS still serves its other, tighter callers.
-    if (bgCount === 0 && Date.now() - (this.lastSubHookTs || 0) < BG_SUB_ACTIVE_MS) bgCount = 1;
-    const bgStatus = bgCount > 0 ? 'working' : null;
+    // Real count first: one per live agent file.
+    if (bgCount === 0 && liveSubFiles.length > 0) bgCount = liveSubFiles.length;
+    // Last resort — a background fork whose sub events reach the status file
+    // with no transcript record and no per-agent file. Work IS happening but is
+    // not countable, so report it as uncounted instead of inventing a number.
+    // The card renders an uncounted-but-live chip as '?bg', never as '1bg'.
+    if (bgCount === 0 && bgNow - (this.lastSubHookTs || 0) < BG_SUB_ACTIVE_MS) bgCount = null;
+    const bgStatus = (bgCount === null || bgCount > 0) ? 'working' : null;
     // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
     // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
     // user (waiting) or done (idle). Hooked: only a stuck outstanding tool
@@ -1258,9 +1278,17 @@ export class PtyAgent extends EventEmitter {
     }
     // Snapshot in-flight fan-out for the card / Zoom. Elapsed derived at read.
     const now = Date.now();
-    const activeSubagents = [...this.pendingSubagents.values()]
-      .sort((a, b) => a.startTs - b.startTs)
-      .map((s) => ({ label: s.label, type: s.type, elapsedMs: now - s.startTs }));
+    const activeSubagents = this.pendingSubagents.size > 0
+      ? [...this.pendingSubagents.values()]
+          .sort((a, b) => a.startTs - b.startTs)
+          .map((s) => ({ label: s.label, type: s.type, elapsedMs: now - s.startTs }))
+      // 0411: name the background fan-out from its files so the zoom list and
+      // the card chip agree instead of the list sitting empty beside a count.
+      : liveSubFiles.map((a) => ({
+          label: `agent ${String(a.id).slice(0, 8)}`,
+          type: 'agent',
+          elapsedMs: now - a.lastGrowTs,
+        }));
     // 0254: the temporary MC_DEBUG status probe was removed — the hook-based
     // source-of-truth (verified live 2026-07-01) replaced the regex guesswork it
     // was diagnosing.

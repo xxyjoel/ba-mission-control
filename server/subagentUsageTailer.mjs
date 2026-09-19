@@ -229,5 +229,22 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
     // an in-session hard cap is deferred (task 0350). Surfacing its size lets the
     // OOM watchdog NDJSON confirm whether it ever grows large in practice.
     settledCount: () => settled.size,
+    // 0411 CONNECTOR — the live fan-out, read from the files this tailer is
+    // ALREADY watching. Every sub-agent writes its own agent-<id>.jsonl; a file
+    // that grew inside `withinMs` has an agent actively producing output. This
+    // is the only source that can COUNT them: the transcript's tool_use/
+    // tool_result pairing cannot, because a BACKGROUND launch's tool_result is
+    // the launch receipt (claude prints "Backgrounded agent"), not the finish,
+    // so the pairing map empties the instant the agents start. That is why the
+    // card hardcoded "1bg" for any fan-out of any size.
+    liveAgents({ withinMs = 60_000, now = Date.now() } = {}) {
+      const out = [];
+      for (const [name, ts] of lastGrowTs) {
+        if (now - ts > withinMs) continue;
+        const id = name.replace(/^agent-/, '').replace(/\.jsonl$/, '');
+        out.push({ id, lastGrowTs: ts });
+      }
+      return out.sort((a, b) => a.lastGrowTs - b.lastGrowTs);
+    },
   };
 }
