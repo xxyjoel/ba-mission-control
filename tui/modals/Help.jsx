@@ -62,6 +62,7 @@ const SECTIONS = [
     [':perm <mode>', "change focused session's mode (live)"],
     [':perm default <mode>', 'change fleet default for new launches'],
     [':kill [slot] · :pause · :resume', 'agent actions (bare :resume = SIGCONT focused)'],
+    [':bg', 'sessions claude runs outside the fleet · X twice deletes one'],
     [':resume <slot ...>', 'restore one or many saved (e.g. :resume 1 3 5)'],
     [':resume-all', 'restart the sessions open at last close'],
     [':history [n]', 'VIEW-ONLY last N sessions (reference; not restorable)'],

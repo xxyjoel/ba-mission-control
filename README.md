@@ -418,6 +418,7 @@ The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the h
 | `:model default <id>` | Set the fleet default model for new launches |
 | `:model refresh` | Programmatically probe the live model catalog — see [Model catalog](#model-catalog) |
 | `:kill [slot]` | Kill focused (or specified) session |
+| `:bg` (alias `:background`) | List the sessions claude is running that are **not** in your fleet — id, age, state, project. These are created by claude when a conversation moves to the background, not by Mission Control, and they keep running until removed. `X` twice on a row deletes that conversation. The fleet row shows the count as `bg N`, flagging the oldest idle more than a day. |
 | `:pause` / `:resume` | SIGSTOP / SIGCONT the focused **live** session |
 | `:approve` (or `:a`) | Same as the `A` hotkey — only accepted while the session is **waiting** for input |
 | `:resume <slot ...>` | Rehydrate saved session(s) from disk via `claude --resume` (bare `:resume` with an empty focused slot restores that slot) |
