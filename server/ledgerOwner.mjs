@@ -29,6 +29,17 @@ const REFUSAL_RX = new RegExp(
     'held by a background agent',
     'in use by (a|another) (background agent|agent|process)',
     'session is (already )?(running|in use|active) (elsewhere|in another)',
+    // claude 2.1.267's ACTUAL wording, read out of the shipped binary on
+    // 2026-09-19: " belongs to another running Claude Code session (locked: ".
+    // None of the four patterns above match it, so the guard never fired and
+    // the slot fell through to auto-restart. Measured on crm-helper the same
+    // day: three restarts against a session claude held in the background,
+    // then "auto-restart exhausted — leaving slot errored", while the
+    // conversation was alive the whole time.
+    'belongs to another running claude code session',
+    // The generic lock wording the same binary uses for a worktree or file
+    // lock, kept narrow so it cannot match ordinary prose.
+    'locked by another process',
   ].join('|'), 'i',
 );
 export function classifyEarlyExit(probeBuf, msSinceSpawn, windowMs = 20_000) {

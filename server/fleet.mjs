@@ -9,6 +9,7 @@
 // never a live agent (so the floor is the highest occupied slot).
 
 import { EventEmitter } from 'node:events';
+import { listClaudeSessions, backgroundSessionCount } from './claudeSessions.mjs';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { Agent } from './agent.mjs';
 import { MockAgent } from './mockAgent.mjs';
@@ -25,6 +26,10 @@ const DEFAULT_SLOTS = 10;
 // the whole fleet is idle (any working/waiting agent restores full cadence on
 // the next tick). Unref'd so a dangling Fleet never blocks process exit.
 const TAILER_POLL_MS = 1500;
+// Reading claude's session list spawns a process, so it runs far slower than
+// the tailer poll. Background sessions change on the order of minutes, not
+// frames; 20 s is well inside that and costs one short-lived process.
+const SESSION_POLL_MS = 20_000;
 const TAILER_POLL_IDLE_MS = 3000;
 // 0387: per-agent CPU/RSS sampling rides the same tick, divided — one `ps`
 // fork per PROC_SAMPLE_EVERY ticks (→ 3s active / 6s idle) covering all pids.
@@ -57,6 +62,7 @@ function emptySlot(slot) {
 
 export class Fleet extends EventEmitter {
   #tailerTimer = null;
+  #sessionTimer = null;
 
   constructor({ slots = DEFAULT_SLOTS, viewport = null } = {}) {
     super();
@@ -76,11 +82,35 @@ export class Fleet extends EventEmitter {
     // Default per-slot cost cap, propagated to every Agent on launch
     // and on settings changes via setCostCap(). 0 = disabled.
     this.defaultCostCapUSD = 0;
+    // 0412: claude's own session list. Mission Control does not create
+    // background sessions, but it is the only place the user looks, so a
+    // session running outside the fleet must not be invisible here.
+    // null = we have not been able to read the list, which is NOT the same as
+    // "there are none" and must never render as a zero.
+    this.claudeSessions = null;
+    this.#scheduleSessionPoll(0);
     this.#scheduleTailerPoll(TAILER_POLL_MS);
   }
 
   // 0381: shared tailer driver — see TAILER_POLL_MS above. setTimeout chain
   // (not setInterval) so the cadence self-adjusts to fleet activity.
+  // Refresh claude's session list. Spawning a process is not free, so this
+  // runs on its own slow timer and never on a render.
+  #scheduleSessionPoll(ms) {
+    this.#sessionTimer = setTimeout(async () => {
+      try {
+        const next = await listClaudeSessions();
+        if (next) {
+          const before = backgroundSessionCount(this.claudeSessions);
+          this.claudeSessions = next;
+          if (before !== backgroundSessionCount(next)) this.emit('change');
+        }
+      } catch { /* a listing failure leaves the previous answer in place */ }
+      this.#scheduleSessionPoll(SESSION_POLL_MS);
+    }, ms);
+    this.#sessionTimer.unref?.();
+  }
+
   #scheduleTailerPoll(ms) {
     this.#tailerTimer = setTimeout(() => this.#tailerPollTick(), ms);
     this.#tailerTimer.unref?.();
@@ -133,6 +163,9 @@ export class Fleet extends EventEmitter {
       now: Date.now(),
       slots: this.slots,
       agents: this.agents.map((a, i) => a ? a.toJSON() : emptySlot(i + 1)),
+      // claude's own view of what is running. `background` is null when the
+      // list could not be read — unknown, not none.
+      background: this.claudeSessions ? this.claudeSessions.background : null,
     };
   }
 
@@ -264,6 +297,13 @@ export class Fleet extends EventEmitter {
       }
     });
     return { sent: live.length, skipped };
+  }
+
+  // Stop the background pollers. Called on shutdown so a pending listing can
+  // never fire against a torn-down fleet.
+  stopPolling() {
+    if (this.#tailerTimer) { clearTimeout(this.#tailerTimer); this.#tailerTimer = null; }
+    if (this.#sessionTimer) { clearTimeout(this.#sessionTimer); this.#sessionTimer = null; }
   }
 
   killAll() {

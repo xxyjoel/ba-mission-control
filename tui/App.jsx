@@ -24,6 +24,7 @@ import Help        from './modals/Help.jsx';
 import QuitConfirm from './modals/QuitConfirm.jsx';
 import Broadcast   from './modals/Broadcast.jsx';
 import Dashboard   from './modals/Dashboard.jsx';
+import BackgroundSessions from './modals/BackgroundSessions.jsx';
 import NewSession  from './modals/NewSession.jsx';
 import Settings    from './modals/Settings.jsx';
 import Zoom        from './modals/Zoom.jsx';
@@ -45,6 +46,7 @@ import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRec
 import { getTemplate, listTemplates } from './lib/templateStore.js';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
+import { removeSession } from '../server/claudeSessions.mjs';
 import { probeClaudeVersion } from './lib/claudeVersion.js';
 import { readUsage, fmtReset } from './lib/usage.js';
 import { dlog } from './lib/debugLog.js';
@@ -911,6 +913,12 @@ export default function App({ fleet, auth: initialAuth }) {
       }
       // :mcp — list MCP servers attached to the focused session by
       // reading ~/.claude/.mcp.json + <cwd>/.mcp.json. Layer 3.
+      // 0412: the sessions claude is running that are not in the fleet.
+      case 'bg':
+      case 'background': {
+        setModal('bg');
+        return null;
+      }
       case 'mcp': {
         if (!isPluginEnabled(settings, 'plugin_mcpAware')) {
           pushToast(`:mcp is disabled — enable plugin_mcpAware in settings`, 'warn');
@@ -1965,6 +1973,28 @@ export default function App({ fleet, auth: initialAuth }) {
       </Box>
     );
   }
+  if (modal === 'bg') {
+    return (
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
+          <BackgroundSessions
+            background={snapshot.background}
+            theme={theme}
+            width={modalWidth(90, 200)}
+            onClose={() => setModal(null)}
+            onRemove={async (sessionId) => {
+              const r = await removeSession(sessionId);
+              if (r.ok) pushToast(`removed background session ${String(sessionId).slice(0, 8)}`, 'ok');
+              else pushToast(`could not remove ${String(sessionId).slice(0, 8)} — ${r.error}`, 'err');
+            }}
+          />
+        </Box>
+        <Box flexGrow={1} />
+        {feedbackStrip}
+        {renderStatusBar('normal')}
+      </Box>
+    );
+  }
   if (modal === 'dash') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
@@ -2116,7 +2146,7 @@ export default function App({ fleet, auth: initialAuth }) {
   return (
     <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
       <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} version={versionLine()} />
-      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} />
+      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} background={snapshot.background} />
 
       {/* Grid of cards — empty slots are hidden; live cards autosize to
           fill the row. Filter pass dims non-matching slots. */}

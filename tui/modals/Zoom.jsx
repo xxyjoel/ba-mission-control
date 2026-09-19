@@ -419,11 +419,16 @@ export default function Zoom({
             <Text color={theme.accent}>CONTEXT</Text>
             <Box>
               <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{fmtK(agent.context || 0)}</Text>
-              <Text color={theme.dim}> / {fmtK(model ? model.maxCtx : 0)}  </Text>
-              <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>· {(ctxPct * 100).toFixed(0)}%</Text>
+              <Text color={theme.dim}> / {ctxKnown ? fmtK(model.maxCtx) : UNKNOWN}  </Text>
+              <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>· {ctxPctText}</Text>
             </Box>
             <Box>
-              {cells.map((c, i) => (
+              {/* 0409 left this unguarded: the unknown-value pass set `cells`
+                  to null when the model's context limit is unknown, so opening
+                  the stats panel on an unknown model threw
+                  "Cannot read properties of null (reading 'map')" and blanked
+                  the whole zoom view. A bar we cannot draw is simply absent. */}
+              {(cells || []).map((c, i) => (
                 <Text key={i} color={
                   c.kind === 'thresh'  ? theme.yellow :
                   c.kind === 'full'    ? (overT ? theme.red : nearT ? theme.yellow : theme.accent) :

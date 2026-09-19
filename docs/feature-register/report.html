@@ -1,0 +1,633 @@
+<title>What's Broken in Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --ground:      #f6f7f6;
+    --surface:     #ffffff;
+    --surface-alt: #eceeed;
+    --ink:         #14191b;
+    --ink-soft:    #4a5457;
+    --ink-faint:   #6f7a7d;
+    --rule:        #d3d8d6;
+    --rule-soft:   #e3e7e5;
+    --measured:    #1a6b5e;
+    --measured-bg: #e2efec;
+    --broken:      #a83d26;
+    --broken-bg:   #f6e6e1;
+    --caution:     #8a6312;
+    --caution-bg:  #f4ecd9;
+    --shadow:      0 1px 2px rgba(20,25,27,.06);
+  }
+  :root:not([data-theme="light"]) { }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #101416;
+      --surface:     #171d1f;
+      --surface-alt: #1e2528;
+      --ink:         #e6eae9;
+      --ink-soft:    #a8b3b2;
+      --ink-faint:   #7d8887;
+      --rule:        #2b3437;
+      --rule-soft:   #222a2c;
+      --measured:    #5fc3ae;
+      --measured-bg: #153029;
+      --broken:      #e88a6d;
+      --broken-bg:   #331a14;
+      --caution:     #d8ab4e;
+      --caution-bg:  #2e2513;
+      --shadow:      0 1px 2px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #101416;
+    --surface:     #171d1f;
+    --surface-alt: #1e2528;
+    --ink:         #e6eae9;
+    --ink-soft:    #a8b3b2;
+    --ink-faint:   #7d8887;
+    --rule:        #2b3437;
+    --rule-soft:   #222a2c;
+    --measured:    #5fc3ae;
+    --measured-bg: #153029;
+    --broken:      #e88a6d;
+    --broken-bg:   #331a14;
+    --caution:     #d8ab4e;
+    --caution-bg:  #2e2513;
+    --shadow:      0 1px 2px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif;
+    font-size: 17px;
+    line-height: 1.6;
+    margin: 0;
+    padding-inline: 20px;
+    padding-block: 0 72px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin-inline: auto; }
+  .prose { max-width: 66ch; }
+
+  h1, h2, h3, .ui {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    text-wrap: balance;
+  }
+
+  /* ---- masthead ---- */
+  header.mast {
+    border-bottom: 2px solid var(--ink);
+    padding-block: 48px 20px;
+    margin-bottom: 36px;
+  }
+  .eyebrow {
+    font-family: JetBrains Mono, ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 6vw, 46px);
+    font-weight: 700;
+    letter-spacing: -.022em;
+    line-height: 1.08;
+    margin: 0 0 16px;
+  }
+  .standfirst {
+    font-size: 19px;
+    color: var(--ink-soft);
+    margin: 0;
+    max-width: 58ch;
+  }
+
+  /* ---- method note ---- */
+  .method {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--measured);
+    padding: 20px 22px;
+    margin-bottom: 40px;
+    box-shadow: var(--shadow);
+  }
+  .method h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; margin: 0 0 10px; color: var(--measured); }
+  .method p { margin: 0 0 10px; font-size: 16px; }
+  .method p:last-child { margin-bottom: 0; }
+
+  /* ---- tiers ---- */
+  .tierkey { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+  .chip {
+    font-family: JetBrains Mono, ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: .04em;
+    padding: 3px 9px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .t-measured { background: var(--measured-bg); color: var(--measured); }
+  .t-broken   { background: var(--broken-bg);   color: var(--broken); }
+  .t-caution  { background: var(--caution-bg);  color: var(--caution); }
+
+  /* ---- summary table ---- */
+  .tablewrap { overflow-x: auto; margin-bottom: 44px; }
+  table { border-collapse: collapse; width: 100%; font-family: Archivo, sans-serif; font-size: 15px; }
+  caption {
+    text-align: left;
+    font-family: JetBrains Mono, monospace;
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    padding-bottom: 10px;
+  }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule-soft); }
+  th { font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 0; }
+  tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
+  tfoot td { font-weight: 600; padding-top: 11px; border: none; }
+  .hot { color: var(--broken); font-weight: 600; }
+
+  /* ---- root cause ---- */
+  .rootcause {
+    background: var(--surface-alt);
+    border: 1px solid var(--rule);
+    padding: 26px;
+    margin-bottom: 48px;
+  }
+  .rootcause h2 { margin: 0 0 12px; font-size: 22px; letter-spacing: -.01em; }
+  .rootcause p { margin: 0 0 14px; }
+  .rootcause p:last-child { margin-bottom: 0; }
+
+  /* ---- sections ---- */
+  section.area { margin-bottom: 52px; }
+  .areahead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid var(--ink);
+    padding-bottom: 8px;
+    margin-bottom: 26px;
+  }
+  .areahead h2 { font-size: 21px; margin: 0; letter-spacing: -.012em; }
+  .areacount {
+    font-family: JetBrains Mono, monospace;
+    font-size: 12px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+  }
+
+  /* ---- findings ---- */
+  .find { margin-bottom: 30px; }
+  .find:last-child { margin-bottom: 0; }
+  .findhead { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
+  .findnum {
+    font-family: JetBrains Mono, monospace;
+    font-size: 12px;
+    color: var(--broken);
+    font-weight: 600;
+    flex-shrink: 0;
+    padding-top: 3px;
+  }
+  .find h3 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: -.008em; line-height: 1.35; }
+  .findbody { padding-left: 30px; }
+  @media (max-width: 520px) { .findbody { padding-left: 0; } }
+  .findbody > p { margin: 0 0 10px; max-width: 64ch; }
+  .loc {
+    font-family: JetBrains Mono, monospace;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    background: var(--surface-alt);
+    padding: 2px 6px;
+    border-radius: 3px;
+    word-break: break-all;
+  }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+
+  pre.evidence {
+    font-family: JetBrains Mono, ui-monospace, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink-faint);
+    padding: 13px 15px;
+    overflow-x: auto;
+    margin: 0 0 10px;
+    color: var(--ink-soft);
+    white-space: pre;
+  }
+  pre.evidence b { color: var(--broken); font-weight: 600; }
+  pre.evidence i { color: var(--measured); font-style: normal; }
+
+  .mine {
+    border-left: 3px solid var(--caution);
+    background: var(--caution-bg);
+    padding: 14px 16px;
+    margin: 0 0 10px;
+    font-size: 15.5px;
+  }
+  .mine strong { color: var(--caution); }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 22px;
+    margin-top: 12px;
+    color: var(--ink-faint);
+    font-size: 14.5px;
+  }
+  footer p { margin: 0 0 8px; max-width: 64ch; }
+  code { font-family: JetBrains Mono, monospace; font-size: .88em; }
+  a { color: var(--measured); }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">BlueArch Mission Control · audit · 19 September 2026</p>
+  <h1>What's Broken in Mission Control</h1>
+  <p class="standfirst">Roughly 400 features, checked one at a time against real data. About sixty of them do not do what they say.</p>
+</header>
+
+<div class="method prose">
+  <h2>How this was checked</h2>
+  <p>Every feature was asked four questions: what it is, what it is expected to do, whether it does that, and <em>how we know</em>. The fourth question is the point.</p>
+  <p>A passing test was not accepted as proof. Tests here pin current behaviour, and several were found pinning the defect itself, including two written the same week by the author of this report. Where nobody could verify something, the entry says so rather than guessing.</p>
+  <p>Most findings below came from running the code against live data on the machine, not from reading it. The test suite was green throughout.</p>
+  <div class="tierkey">
+    <span class="chip t-measured">measured — ran it, quoted the output</span>
+    <span class="chip t-caution">traced — followed source to screen</span>
+    <span class="chip t-broken">broken</span>
+  </div>
+</div>
+
+<div class="tablewrap">
+  <table>
+    <caption>Coverage by area</caption>
+    <thead>
+      <tr><th>Area</th><th class="num">Features</th><th class="num">Broken</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Fleet view and cards</td><td class="num">135</td><td class="num hot">5</td></tr>
+      <tr><td>Status</td><td class="num">42</td><td class="num hot">13</td></tr>
+      <tr><td>Session lifecycle</td><td class="num">62</td><td class="num hot">10</td></tr>
+      <tr><td>Zoom and terminal</td><td class="num">64</td><td class="num hot">12</td></tr>
+      <tr><td>Commands, hotkeys, modals</td><td class="num">129</td><td class="num hot">12</td></tr>
+      <tr><td>Data, settings, persistence</td><td class="num">72</td><td class="num hot">9</td></tr>
+    </tbody>
+    <tfoot>
+      <tr><td>Total</td><td class="num">504</td><td class="num hot">61</td></tr>
+    </tfoot>
+  </table>
+</div>
+
+<div class="rootcause prose">
+  <h2>Most of the status bugs are one line</h2>
+  <p>The freshness stamp records <em>when we read a file</em>, not <em>when the event happened</em>.</p>
+  <pre class="evidence">server/statusHookTailer.mjs:114
+
+  agent.hookStatusTs = <b>Date.now()</b>;   <b>// the read, not the event</b></pre>
+  <p>Every record claude writes carries its own timestamp. Nothing reads it. The reader starts at byte zero, so attaching to a fourteen-hour-old feed stamps every historical event as "just now", and the last one wins.</p>
+  <p>That is why a card sits on WORKING for hours. The same mistake in the sub-agent reader turned 137 old files into "67 agents, all one second old".</p>
+</div>
+
+<!-- ============ LIFECYCLE ============ -->
+<section class="area">
+  <div class="areahead">
+    <h2>Session lifecycle</h2>
+    <span class="areacount">62 features · 10 broken</span>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">01</span><h3>Pressing K can orphan a claude forever</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/fleet.mjs:229-237</span><span class="chip t-measured">measured</span></div>
+      <p>Kill sends a terminate signal, then immediately empties the slot. Every force-kill path walks that same slot list, so once the slot is empty the process is unreachable by all of them. A claude that ignores the first signal survives the kill, survives quit, and survives shutdown. The card is gone, so nothing shows it is still running.</p>
+      <p>Pressing K is worse than force-closing the application.</p>
+      <pre class="evidence">stand-in claude that ignores SIGTERM
+
+  after K              <b>alive</b>   slot = null
+  after killAll()      <b>alive</b>   not in the slot table
+  after hardKillAll()  <b>alive</b>   not in the slot table
+  after mc clean exit  <b>alive</b>   reparented to launchd</pre>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">02</span><h3>A dead session reports IDLE</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:673</span><span class="chip t-measured">measured</span></div>
+      <p>The restart logic only treats a non-zero exit code as a failure. A process killed by a signal reports exit code zero with a signal number, and a clean exit reports zero too. Neither marks the slot as broken and neither triggers a restart.</p>
+      <pre class="evidence">real child, killed from outside
+
+  after external SIGKILL -> pty: <b>GONE</b>  status = <b>idle</b>  restarts = 0
+  tail: process exited code=0 signal=9
+
+all four death routes through the spawn seam
+
+  exit code 0        pty GONE   status <b>idle</b>
+  exit code 1 x3     pty GONE   status <i>error</i>   <- the only covered case
+  exit SIGKILL       pty GONE   status <b>idle</b>
+  working, exit 0    pty GONE   status <b>working</b></pre>
+      <div class="mine"><strong>This one is mine.</strong> The guard I added on the same day only fires when the restart budget runs out, and the test I wrote for it asserts that a process-less slot is <em>not</em> an error. The test passes and locks in the wrong answer.</div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">03</span><h3>One session can run in two slots at once</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/fleet.mjs · resume()</span><span class="chip t-measured">measured</span></div>
+      <p>The same session was accepted into slot 1 and slot 2 with no complaint. The guards check whether a slot is in use, never whether the session is already live somewhere else.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">04</span><h3>A resume that is not a resume still says "resumed"</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:419-424</span><span class="chip t-caution">traced</span></div>
+      <p>When the conversation file is missing, the launch quietly falls back to starting a brand-new empty conversation. The toast still reads resumed, so the user believes their history came back.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">05</span><h3>Un-pausing always reports "working"</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:844</span><span class="chip t-measured">measured</span></div>
+      <p>The status is set unconditionally. A session that was idle before it was paused comes back claiming to be working.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STATUS ============ -->
+<section class="area">
+  <div class="areahead">
+    <h2>Status</h2>
+    <span class="areacount">42 features · 13 broken</span>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">06</span><h3>WORKING never ages out</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:1172-1189</span><span class="chip t-measured">measured</span></div>
+      <p>A tool-start with no matching stop stands forever. There is no age check anywhere on the path.</p>
+      <pre class="evidence">session aae20e51, live on this machine
+
+  last hook event   PreToolUse   <b>64 minutes ago</b>
+  card shows        <b>WORKING</b>
+  stops since then  0  (they are going to a different session file)</pre>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">07</span><h3>A status with no source at all renders as IDLE</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:1151</span><span class="chip t-measured">measured</span></div>
+      <p>A slot whose feed never spoke is indistinguishable from a session that finished its work. There is no <em>unknown</em> value anywhere in the merge. Silence is displayed as a clean finish.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">08</span><h3>"Needs input" can stand for months and never warns</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:1155-1197</span><span class="chip t-measured">measured</span></div>
+      <p>Only a working session is eligible for the stuck warning, so a session waiting on the user can sit forever without ever raising its hand.</p>
+      <pre class="evidence">live feeds currently parked on "waiting"
+
+  6 feeds       oldest stale by <b>67 days</b></pre>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">09</span><h3>Paused is thrown away</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/ptyAgent.mjs:1115, 1155-1197</span><span class="chip t-caution">traced</span></div>
+      <p>The paused signal is collected and never used. A frozen session reads as working, and because it emits nothing it then starts accruing stuck minutes.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">10</span><h3>New vocabulary from claude is silently dropped</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/statusHookTailer.mjs:277-281</span><span class="chip t-measured">measured</span></div>
+      <p>The reader understands two notification types. Five are now in the wild. An unrecognised one returns nothing and disappears without a trace.</p>
+      <pre class="evidence">types seen in live feeds
+
+  agent_needs_input   x8    <b>unmapped</b>   last line of its file in 6 of 8
+  agent_completed     x5    <b>unmapped</b>
+  auth_success        x3    <b>unmapped</b></pre>
+      <p>A signal we cannot interpret should be reported as uninterpreted, not discarded.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">11</span><h3>The background-agent count was a hardcoded 1, then a wrong 67</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/subagentUsageTailer.mjs</span><span class="chip t-measured">measured</span></div>
+      <p>A file's age was taken from the moment we first looked at it, so 137 historical files all appeared one second old.</p>
+      <pre class="evidence">before          137 files on disk -> <b>67 agents, all 0.0s old</b>
+after the fix   137 files on disk -> <i>0 agents</i>       (newest untouched 13.8h)
+cross-check     the live session   -> <i>1 agent, 1s old</i>  (a real one, writing)</pre>
+      <div class="mine"><strong>This one is mine too.</strong> I replaced a hardcoded 1 with a confident 67, which is worse because it looks like real data. My test passed because I wrote it against a copy of the logic instead of the real code. Now fixed and verified against both live directories above.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COMMANDS ============ -->
+<section class="area">
+  <div class="areahead">
+    <h2>Commands, hotkeys and modals</h2>
+    <span class="areacount">129 features · 12 broken</span>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">12</span><h3><code>:resume 12</code> resumes slot 1 and tells you it worked</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/App.jsx:1025-1031</span><span class="chip t-measured">measured</span></div>
+      <p>Any slot number outside 1 to 10 is silently dropped. The argument list becomes empty, so the command falls through to its no-argument form and acts on whatever is focused. The message is affirmative and names a slot the user never typed.</p>
+      <pre class="evidence">observed on a 20-slot fleet
+
+  :resume 12   -> un-pauses the <b>focused</b> session, toast: "resume slot 1"
+  :resume 99   -> same
+  :resume abc  -> same</pre>
+      <p>This is the exact defect that was fixed for the kill command in the past, where an out-of-range slot used to kill the focused session. Resume, cap and forget never got the same treatment. The fleet can grow to 64 slots; these three stop at 10.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">13</span><h3>Documented keys and commands that do not exist</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">README.md · Help · Settings notes</span><span class="chip t-measured">measured</span></div>
+      <p>A documented feature that does nothing is the worst kind, because the documentation is what the user trusts.</p>
+      <pre class="evidence">Shift+N        README lists it        <b>not bound</b>
+:recall        plugin help lists it   <b>unknown command</b>
+q then y       Settings notes say it  <b>quit confirm ignores y</b>
+lowercase k    HOTKEYS.md says kill   removed (it was dangerous)
+/compact-restart   plugin help says type it in zoom
+               the zoom body is a real claude, so it goes nowhere</pre>
+      <p>Roughly 22 commands are missing from the README and 6 from the in-app help.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ZOOM ============ -->
+<section class="area">
+  <div class="areahead">
+    <h2>Zoom and terminal</h2>
+    <span class="areacount">64 features · 12 broken</span>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">14</span><h3>Scroll does not hold its place</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/zoom/PtyPane.jsx:515</span><span class="chip t-measured">measured</span></div>
+      <p>The scroll position is measured from claude's live cursor, which moves down one row for every row claude prints. Park yourself twenty rows back and the output drags you forward until you are at the bottom again, while the indicator still claims you are twenty rows back.</p>
+      <pre class="evidence">parked 20 rows back, claude keeps printing
+
+  SCROLL 20   window = L062 … L080   <i>user parks here</i>
+  SCROLL 20   window = L067 … L085
+  SCROLL 20   window = L072 … L090
+  SCROLL 20   window = L077 … L095
+  SCROLL 20   window = L082 … L100   <b>back at the bottom</b></pre>
+      <p>The fix needs an anchor that does not move: resolve the offset to an absolute row the moment a scroll key is pressed, and hold it across renders.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">15</span><h3>The shell overlay cannot scroll at all</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/modals/ShellOverlay.jsx:185-188</span><span class="chip t-measured">measured</span></div>
+      <p>No offset, no keys, no hint. The file's own note says the five thousand captured rows are unreachable.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">16</span><h3>The stats panel crashed the zoom view on an unknown model</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/modals/Zoom.jsx:426</span><span class="chip t-measured">measured</span></div>
+      <pre class="evidence">Ctrl+U on a model the catalogue does not know
+
+  <b>Cannot read properties of null (reading 'map')</b>
+  frame: 45 rows -> <b>nothing</b></pre>
+      <div class="mine"><strong>Also mine.</strong> My change to show unknown values set the context bar to nothing when the limit is unknown, and this panel drew it without checking. Fixed and verified: the panel now renders 40 rows and shows the limit as unknown.</div>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">17</span><h3>The update-banner filter erases your own writing</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/zoom/claudeBanner.js:27</span><span class="chip t-measured">measured</span></div>
+      <p>The filter that hides claude's update notice matches ordinary prose. Two typed sentences vanished from the view, and one was reported in the header as an update notice.</p>
+      <pre class="evidence">typed into the session, then <b>blanked from the body</b>
+
+  "we should ship the new version tomorrow"
+  "and then restart the worker to apply the config"   <- also flagged as an update</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CARDS ============ -->
+<section class="area">
+  <div class="areahead">
+    <h2>Fleet view and cards</h2>
+    <span class="areacount">135 features · 5 broken</span>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">18</span><h3>Cards garble below 38 columns</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/Card.jsx:360-381</span><span class="chip t-measured">measured</span></div>
+      <p>Only the name and branch are fitted to the card width. Everything else overflows. A 100-column terminal at the default five columns produces a 24-wide card, so this is reachable on ordinary hardware.</p>
+      <pre class="evidence">rendered at card width 30
+
+  tok/mi3.2k ▂▃▅▃▇█▄▆▆▃▅█37%
+  ▄           182M
+
+rendered at card width 20 — the label itself splits
+
+  tok/
+  in</pre>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">19</span><h3>The header silently drops its right-hand side</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/Header.jsx:45</span><span class="chip t-measured">measured</span></div>
+      <pre class="evidence">swept terminal widths from 60 to 240
+
+  status pill first appears at <b>122 columns</b>
+  clock first appears at       <b>182 columns</b>
+  below that, content falls off the edge with no indication</pre>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">20</span><h3>A green "clean" dot can mean git failed</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/git.mjs:43-48, 65</span><span class="chip t-measured">measured</span></div>
+      <p>A timeout, a missing git binary, a folder that is not a repository, and a genuinely clean tree all return the same zero, and all draw the same green dot.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DATA ============ -->
+<section class="area">
+  <div class="areahead">
+    <h2>Data, settings and persistence</h2>
+    <span class="areacount">72 features · 9 broken</span>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">21</span><h3>Six settings are shown and read by nothing</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/lib/settings.js · tui/lib/plugins.js</span><span class="chip t-measured">measured</span></div>
+      <p>Each sits in the menu looking exactly like a working switch, with a confident description of behaviour that was never built.</p>
+      <pre class="evidence">uses outside the setting's own definition
+
+  Git status poll               <b>0</b>
+  Density                       <b>0</b>
+  Suggest /compact at threshold <b>0</b>
+  Tool-output dedupe in tail    <b>0</b>
+  :recall semantic search       <b>0</b>   <- currently switched on
+  /recall routes to retrieval   <b>0</b></pre>
+      <p>A seventh is half-built: the MCP inventory command works, but the card chip its description promises does not exist.</p>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">22</span><h3>A guessed price is shown as if it were measured</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">server/jsonlConnector.mjs · tui/Card.jsx:125</span><span class="chip t-measured">measured</span></div>
+      <p>A model the catalogue does not know is priced from a similar one, which is reasonable. The tilde that marks a figure as estimated uses a different lookup, which returns nothing for that same model. So the guess is displayed with no mark.</p>
+      <pre class="evidence">unknown model, one million input tokens
+
+  price charged to the card   <b>$5.00</b>   (borrowed from another model)
+  estimated marker            <b>absent</b></pre>
+    </div>
+  </div>
+
+  <div class="find">
+    <div class="findhead"><span class="findnum">23</span><h3>Two model facts are typed by hand and wrong</h3></div>
+    <div class="findbody">
+      <div class="meta"><span class="loc">tui/lib/models.js:64-73</span><span class="chip t-measured">measured</span></div>
+      <pre class="evidence">                 typed      measured
+  sonnet-5       128000  ->  <b>64000</b>
+  haiku-4.5       64000  ->  <b>32000</b>
+  opus-5         <b>not in the table at all</b></pre>
+      <p>Both are silently corrected at startup, which is why the file has been wrong without anyone noticing.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="prose">
+  <p>This page covers the findings with the strongest evidence. The full register is six files in the repository at <code>docs/feature-register/</code>, about 2,045 lines, with every feature listed including the ones that work and the ones nobody could verify.</p>
+  <p>Three of the defects above were introduced by the same work that was meant to fix this class of problem. They are marked, and all three are now fixed and checked against live data.</p>
+</footer>
+
+</div>

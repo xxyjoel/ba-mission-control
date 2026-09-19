@@ -1,0 +1,91 @@
+[
+  {
+    "id": "3a1d168c",
+    "cwd": "/repos/forge",
+    "kind": "background",
+    "startedAt": 1788989504749,
+    "sessionId": "3a1d168c-7b90-4221-ab14-e6afb5d56f74",
+    "name": "session 1",
+    "state": "blocked"
+  },
+  {
+    "id": "93c118d4",
+    "cwd": "/repos/labor-market-app",
+    "kind": "background",
+    "startedAt": 1789094931855,
+    "sessionId": "93c118d4-3ae6-4dc0-bbcb-cd55273f3bee",
+    "name": "session 2",
+    "state": "blocked"
+  },
+  {
+    "pid": 86447,
+    "cwd": "/repos/gtm-gov-miner",
+    "kind": "interactive",
+    "startedAt": 1789784845474,
+    "sessionId": "ec9ffee7-e35e-4b1e-a401-a6cec347a638",
+    "name": "session 3",
+    "status": "idle"
+  },
+  {
+    "pid": 86490,
+    "cwd": "/repos/forge",
+    "kind": "interactive",
+    "startedAt": 1789784845674,
+    "sessionId": "9dd47459-4ddd-4f10-9be0-0c1f10e85554",
+    "name": "session 4",
+    "status": "idle"
+  },
+  {
+    "pid": 86585,
+    "cwd": "/repos/labor-market-app",
+    "kind": "interactive",
+    "startedAt": 1789784846028,
+    "sessionId": "93c118d4-3ae6-4dc0-bbcb-cd55273f3bee",
+    "name": "session 5",
+    "status": "idle"
+  },
+  {
+    "pid": 96127,
+    "id": "a4060968",
+    "cwd": "/repos/stonks",
+    "kind": "background",
+    "startedAt": 1789784919068,
+    "sessionId": "a4060968-7f96-4371-bd7a-14b5ea9b513e",
+    "name": "session 6",
+    "status": "busy",
+    "state": "working"
+  },
+  {
+    "pid": 96113,
+    "id": "9ca62749",
+    "cwd": "/repos/crm-helper",
+    "kind": "background",
+    "startedAt": 1789832717323,
+    "sessionId": "9ca62749-1cf1-4a04-bee4-9278cc590b65",
+    "name": "session 7",
+    "status": "idle",
+    "state": "blocked"
+  },
+  {
+    "pid": 4831,
+    "id": "1facc7d7",
+    "cwd": "/repos/joelproctor",
+    "kind": "background",
+    "startedAt": 1789832744602,
+    "sessionId": "1facc7d7-f0a7-461b-9897-6d2a1bd7ce18",
+    "name": "session 8",
+    "status": "idle",
+    "state": "blocked"
+  },
+  {
+    "pid": 5117,
+    "id": "f7f1a6de",
+    "cwd": "/repos/ba-mission-control",
+    "kind": "background",
+    "startedAt": 1789833117023,
+    "sessionId": "f7f1a6de-d860-497a-b2b9-ed8526d2aeca",
+    "name": "session 9",
+    "status": "busy",
+    "state": "working"
+  }
+]

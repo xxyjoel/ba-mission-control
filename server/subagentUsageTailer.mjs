@@ -173,7 +173,8 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
       for (const f of files) {
         if (!f.startsWith('agent-') || !f.endsWith('.jsonl')) continue;
         let size;
-        try { size = (await fsp.stat(join(dir, f))).size; } catch { continue; }
+        let st;
+        try { st = await fsp.stat(join(dir, f)); size = st.size; } catch { continue; }
         // 0408-F6: a settled file is NOT dead — the parent can resume that
         // sub-agent (Agent tool: SendMessage continues a spawned agent) and its
         // new turns append to the SAME file. Settling used to drop the offset
@@ -188,6 +189,17 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
         if (!offsets.has(f)) {
           // First sighting. Existing-at-prime files start at EOF; new files at 0.
           offsets.set(f, primed ? 0 : size);
+          // 0411 FIX: seed the growth clock from the FILE, never from now.
+          // The priming pass `continue`d before the bookkeeping below, so on
+          // the NEXT pass `lastSize.get(f)` was undefined, every pre-existing
+          // file looked like it had just grown, and its clock was stamped with
+          // the current time. Measured on this machine: 137 historical
+          // sub-agent files, newest untouched for 13.8 hours, reported as 67
+          // agents all aged 0.0 seconds. That is how a hardcoded "1" became a
+          // confident, wrong 67 — worse, because it looks like real data.
+          // A file's age belongs to the file.
+          lastSize.set(f, size);
+          lastGrowTs.set(f, st.mtimeMs);
           if (!primed) continue;
         }
         // Track growth so an idle, fully-read file can settle out of the poll.

@@ -1258,6 +1258,20 @@ export class PtyAgent extends EventEmitter {
     // The card renders an uncounted-but-live chip as '?bg', never as '1bg'.
     if (bgCount === 0 && bgNow - (this.lastSubHookTs || 0) < BG_SUB_ACTIVE_MS) bgCount = null;
     const bgStatus = (bgCount === null || bgCount > 0) ? 'working' : null;
+
+    // A slot whose claude is GONE must never report idle. #onExit sets
+    // this.status = 'error' when auto-restart is exhausted, but that value was
+    // then thrown away: toJSON derives `status` fresh from the hook and
+    // transcript clocks, and none of those branches look at the stored error.
+    // The last signals a dead session left behind are a Stop hook and a quiet
+    // transcript, which read exactly like a healthy idle session.
+    //
+    // Seen on crm-helper 2026-09-19: the fleet log said "auto-restart
+    // exhausted (3 attempts) — leaving slot errored", no claude process for
+    // that slot existed, and the card still showed IDLE while the header
+    // counted err 0. An errored slot that looks idle is worse than a visibly
+    // broken one — the user has no reason to press K and recover it.
+    if (!this.pty && this._statusValue === 'error') status = 'error';
     // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
     // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
     // user (waiting) or done (idle). Hooked: only a stuck outstanding tool

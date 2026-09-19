@@ -6,6 +6,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { fmtK, fmtMoney, barCells, sparkLine } from './lib/format.js';
+import { staleBackgroundSessions } from '../server/claudeSessions.mjs';
 
 const WEEK_CAP = 250;
 const BAR_W    = 24;
@@ -29,7 +30,14 @@ function pctColor(pct, theme) {
   return theme.accent;
 }
 
-export default function Aggregate({ agents, fleetTpm, aggSpark, theme, usage, fmtReset, weekCost = 0 }) {
+export default function Aggregate({ agents, fleetTpm, aggSpark, theme, usage, fmtReset, weekCost = 0, background}) {
+  // Oldest blocked background session, in days. Only counts ones that have
+  // been waiting more than a day — a session that is working is not stale.
+  const stale = background ? (staleBackgroundSessions({ background, attached: [] }, { days: 1 }) || []) : [];
+  const bgStale = stale.length;
+  const bgOldestDays = bgStale > 0
+    ? Math.floor(Math.max(...stale.map((e) => (Date.now() - e.startedAt) / 86400000)))
+    : 0;
   const live = agents.filter(a => a.status !== 'empty');
   const tIn  = live.reduce((s, a) => s + (a.tokensIn  || 0), 0);
   const tOut = live.reduce((s, a) => s + (a.tokensOut || 0), 0);
@@ -53,6 +61,22 @@ export default function Aggregate({ agents, fleetTpm, aggSpark, theme, usage, fm
         <Text color={theme.dim}>tok·out </Text>
         <Text color={theme.brBlue}>{fmtK(tOut)}↑</Text>
       </Cell>
+      {/* 0412: sessions claude is running that are NOT in the fleet. Mission
+          Control does not create these, but this is the only screen the user
+          watches, so a session running outside it must not be invisible.
+          `background === null` means we could not read claude's list — shown
+          as unknown, never as a zero. */}
+      {background !== undefined && (
+        <Cell theme={theme}>
+          <Text color={theme.dim}>bg </Text>
+          {background === null
+            ? <Text color={theme.faint}>?</Text>
+            : <>
+                <Text color={bgStale > 0 ? theme.yellow : theme.fg}>{background.length}</Text>
+                {bgStale > 0 && <Text color={theme.yellow}> · {bgOldestDays}d idle</Text>}
+              </>}
+        </Cell>
+      )}
       <Cell theme={theme}>
         <Text color={theme.dim}>cost·session </Text>
         <Text color={theme.fg}>{fmtMoney(cSes)}</Text>
