@@ -20,6 +20,31 @@ test('matches the common update-available wordings', () => {
   }
 });
 
+test('matches claude ≥2.1.267 auto-update wordings (0408/U1)', () => {
+  // claude no longer says "Update available" — 2.1.267's startup notice is
+  // the "Updated to latest" line (live capture, captureBanner.mjs).
+  for (const s of [
+    'Updated to latest. Got 67 features, 394 bugfixes, and 145 other changes.',
+    '✻ Updated to latest',
+    'Claude Code auto-updated in the background',
+    'Claude will restart on the new version',
+  ]) {
+    assert.ok(matchUpdateBanner(s), `should match: ${s}`);
+  }
+});
+
+test('auto-update phrases still do not swallow user prose (0366 rule)', () => {
+  // The new patterns are fixed phrases with no cue-word gap, so prose that
+  // merely mentions updating across sentences must stay unmatched.
+  for (const s of [
+    'i updated the tests to latest conventions yesterday',
+    'we auto update the docs nightly. the version is fine',
+    'the service will restart. on the new schedule it runs hourly',
+  ]) {
+    assert.equal(matchUpdateBanner(s), null, `should NOT match: ${JSON.stringify(s)}`);
+  }
+});
+
 test('captures a version token when present', () => {
   const hit = matchUpdateBanner('Update available: v2.1.180');
   assert.ok(hit);

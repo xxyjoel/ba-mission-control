@@ -104,24 +104,53 @@ test('strips ESC-introduced sequences, consuming the sequence final', () => {
   assert.equal(humanize('r\x1bcs'), 'rs');         // RIS reset (Fs)
 });
 
-test('strips C0 control bytes incl. CR, BEL, NUL, DEL — keeps tab', () => {
+test('strips C0 control bytes incl. BEL, NUL, DEL; CR and tab collapse to a space (0408/R5)', () => {
   const input = 'a\rb\x07c\x00d\x7fe\tf';
-  // CR/BEL/NUL/DEL stripped; the tab is preserved.
-  assert.equal(humanize(input), 'abcde\tf');
+  // BEL/NUL/DEL stripped outright; CR and tab are line-layout characters, so
+  // they become one space each (every humanize() consumer is a one-row slot —
+  // a literal newline was an unbudgeted frame row, a tab an 8-cell jump).
+  assert.equal(humanize(input), 'a bcde f');
+});
+
+test('collapses newline/tab RUNS to a single space (0408/R5)', () => {
+  // The \n itself becomes one space; pre-existing literal indent spaces stay
+  // (spaces cost cells, not rows — only \r\n\t grow a one-row slot).
+  assert.equal(humanize('cd /tmp && \\\n  npm test && \\\n  echo done'),
+    'cd /tmp && \\   npm test && \\   echo done');
+  assert.equal(humanize('a\r\n\t\nb'), 'a b');
+  assert.equal(humanize('one\ntwo'), 'one two');
+});
+
+test('strips 8-bit C1 controls — CSI U+009B, OSC U+009D, NEL U+0085 (0408/S3)', () => {
+  // xterm.js parses U+009B as CSI and U+009D as OSC with NO ESC byte, so the
+  // 7-bit strippers never fired and the payload reached the host terminal.
+  assert.equal(humanize('a2Jb'), 'ab', 'C1 CSI: params + final are part of the sequence');
+  assert.equal(humanize('a31mRED'), 'aRED');
+  assert.equal(humanize('a52;c;aGVsbG8=b'), 'ab', 'C1 OSC consumed through ST');
+  assert.equal(humanize('a52;c;aGVsbG8=\x07b'), 'ab', 'C1 OSC consumed through BEL');
+  assert.equal(humanize('a52;c;aGVsbG8='), 'a', 'unterminated C1 OSC consumed to end');
+  assert.equal(humanize('ab'), 'ab', 'stray C1 (NEL) swept');
+  assert.equal(humanize('aq#0;2;0;0;0~~b'), 'ab', 'C1 DCS payload consumed');
+});
+
+test('strips 7-bit DCS payload, not just its introducer (0408/S3)', () => {
+  // The old ESCSEQ stripper ate ESC-P but left the sixel body as printable
+  // garbage: "aq#0;2;0;0;0#0~~b".
+  assert.equal(humanize('a\x1bPq#0;2;0;0;0#0~~\x1b\\b'), 'ab');
 });
 
 test('strips a combined OSC-52 + bare-ESC + CR payload (acceptance)', () => {
   const input = 'before\x1b]52;c;ZA==\x07\x1b[31m\rmid\x1bxafter';
   const out = humanize(input);
-  assert.equal(out, 'beforemidafter');
-  assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(out), 'no control bytes remain');
+  assert.equal(out, 'before midafter'); // the CR collapses to one space (0408/R5)
+  assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(out), 'no control bytes remain');
 });
 
 test('idempotent across the broadened stripper', () => {
-  const messy = 'a\x1b]52;c;ZA==\x07\rb\x1b[1mc\x1bx';
+  const messy = 'a\x1b]52;c;ZA==\x07\rb\x1b[1mc\x1bx2J52;c;ZA==\x07d\ne';
   const once = humanize(messy);
   assert.equal(humanize(once), once);
-  assert.ok(!/[\x00-\x08\x0b-\x1f\x7f]/.test(once));
+  assert.ok(!/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(once));
 });
 
 test('idempotent: humanize(humanize(x)) === humanize(x)', () => {

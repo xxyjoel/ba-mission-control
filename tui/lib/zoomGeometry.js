@@ -24,9 +24,14 @@
 // terminal resize + the zoom modal's own width). The server layer only ever
 // receives the resulting numbers.
 
-// Zoom modal width clamp — mirrors App.jsx's modalWidth(min, max) contract.
-// min keeps a narrow terminal readable; max stops lines being too wide to scan.
-export const ZOOM_MODAL_MIN = 104;
+// Zoom modal width clamp. ZOOM_MODAL_MIN is a hard FLOOR for degenerate
+// terminals only — NOT a preferred width. It used to be 104, which forced a
+// 104-col modal onto an 80-col terminal: Ink shrank the border box to fit but
+// the PTY body kept its 98 computed columns, so every claude line truncated
+// twice (0408/R3). The modal now follows the terminal (termCols - 4 for
+// App.jsx's paddingX) and the floor exists only so a tiny/unknown terminal
+// still yields a usable box. max stops lines being too wide to scan.
+export const ZOOM_MODAL_MIN = 40;
 export const ZOOM_MODAL_MAX = 220;
 
 // Chrome the Zoom modal spends horizontally around the PTY body:
@@ -43,11 +48,20 @@ export const ZOOM_CHROME_COLS = 6;
 // = 14. Keep in step with Zoom.jsx's fixedRows and App.jsx's zoomHeight.
 export const ZOOM_CHROME_ROWS = 14;
 
-// The width the zoom modal renders at, for a given terminal width.
-// App.jsx subtracts 4 for its own paddingX before clamping.
+// The width the zoom modal renders at, for a given terminal width: the
+// terminal minus App.jsx's own paddingX (4), clamped to [MIN, MAX]. Never
+// wider than the terminal can actually show (0408/R3).
 export function zoomModalWidth(termCols) {
-  const usable = Math.max(20, (termCols | 0) - 4);
+  const usable = (termCols | 0) - 4;
   return Math.min(ZOOM_MODAL_MAX, Math.max(ZOOM_MODAL_MIN, usable));
+}
+
+// The inner content width for a modal of `modalWidth` columns: border +
+// paddingX removed. Zoom.jsx's innerW and the PTY cols BOTH come from here so
+// the modal chrome and the PTY can never disagree about the body width —
+// that disagreement was the double-truncation on narrow terminals (0408/R3).
+export function zoomInnerWidth(modalWidth) {
+  return Math.max(20, (modalWidth || 0) - ZOOM_CHROME_COLS);
 }
 
 // The PTY geometry for every agent in the fleet: the largest zoom body this
@@ -55,7 +69,7 @@ export function zoomModalWidth(termCols) {
 // terminal still yields a usable PTY instead of a 0-column one.
 export function zoomBodyDims(termCols, termRows) {
   return {
-    cols: Math.max(20, zoomModalWidth(termCols) - ZOOM_CHROME_COLS),
+    cols: zoomInnerWidth(zoomModalWidth(termCols)),
     rows: Math.max(6, (termRows | 0) - ZOOM_CHROME_ROWS),
   };
 }

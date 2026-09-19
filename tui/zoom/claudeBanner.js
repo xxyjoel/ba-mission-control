@@ -27,6 +27,14 @@ const PATTERNS = [
   /\b(new|newer)\s+version\b/i,
   /\bclaude\s+update\b/i,
   /npm\s+i(?:nstall)?\s+-g[^\n]*claude-code/i,
+  // claude ≥2.1.267 auto-updates and prints "Updated to latest. Got 67
+  // features, 394 bugfixes, and 145 other changes." — it no longer says
+  // "Update available" at all (0408/U1). These are FIXED phrases with no
+  // cue-word gap, so the 0366 sentence-boundary rule can't be violated:
+  // there is no [^.!?]* span for user prose to bridge.
+  /\bupdated to latest\b/i,
+  /\bauto-updated\b/i,
+  /\bwill restart on the new version\b/i,
 ];
 
 const VERSION_RE = /\bv?(\d+\.\d+\.\d+(?:[-.][0-9A-Za-z.]+)?)\b/;

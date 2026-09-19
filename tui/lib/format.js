@@ -5,6 +5,11 @@
 // components. Color is applied at the caller via <Text color="cyan">.
 
 import { homedir } from 'node:os';
+// 0408/R7: measure DISPLAY width (terminal cells), not graphemes. string-width
+// is already in the tree as Ink's own dependency — Ink lays text out with it,
+// so measuring with anything else is what made padCol/trunc disagree with the
+// renderer (a 20-"grapheme" CJK name is 26 cells wide and wrapped the row).
+import stringWidth from 'string-width';
 
 const BLOCK = '█';
 const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
@@ -66,6 +71,9 @@ export function sparkLine(values, width) {
 
 export const fmtK = (n) => {
   if (n == null || !isFinite(n)) return '0';
+  // 0408/M3: millions unit — a 224M cache-read count rendered as "224001.6k".
+  // Behavior below 1M is unchanged (pinned by tests/lib/format.test.mjs).
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + 'M';
   if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'k';
   return String(Math.round(n));
 };
@@ -81,28 +89,52 @@ export function fmtMem(kb) {
   return Math.round(mb) + 'M';
 }
 
+// 0408/R7: fast-path guard — printable ASCII is always 1 cell per code unit,
+// so `s.length <= budget` proves the string fits without calling string-width.
+// Anything else (CJK, emoji, combining marks) must be measured in cells.
+const NON_ASCII_RX = /[^\x20-\x7e]/;
+
 export function trunc(s, w) {
   s = s == null ? '' : String(s);
-  // Fast path: code-unit length ≤ w ⇒ grapheme count ≤ w (graphemes never
-  // exceed code units), so the string fits — no segmentation needed. This keeps
-  // the common render-path call cheap; only over-long strings get segmented.
-  if (s.length <= w) return s;
-  // 0010: slice on grapheme boundaries so a multi-byte cluster (surrogate-pair
-  // emoji, combining marks, ZWJ sequences) is never cut mid-character.
-  const g = graphemes(s);
-  if (g.length <= w) return s;
-  return g.slice(0, Math.max(0, w - 1)).join('') + '…';
+  // Fast path: printable-ASCII with code-unit length ≤ w always fits. This
+  // keeps the common render-path call cheap; only wide/over-long strings get
+  // measured. (A single CJK char is 1 code unit but 2 CELLS, so the old
+  // `s.length <= w` shortcut was itself part of the R7 defect.)
+  if (s.length <= w && !NON_ASCII_RX.test(s)) return s;
+  if (stringWidth(s) <= w) return s;
+  // 0010/0408: cut on grapheme boundaries, budgeted in display CELLS, so a
+  // multi-byte cluster is never split and a wide glyph never overflows the
+  // column. The ellipsis takes 1 cell of the budget.
+  const budget = Math.max(0, w - 1);
+  let out = '', used = 0;
+  for (const seg of graphemes(s)) {
+    const cw = stringWidth(seg);
+    if (used + cw > budget) break;
+    out += seg;
+    used += cw;
+  }
+  return out + '…';
 }
 
-// padCol — fit a string into exactly `width` grapheme cells: grapheme-safe
+// padCol — fit a string into exactly `width` display CELLS: grapheme-safe
 // truncate if too long, space-pad if too short. Used for fixed-width columns
 // (e.g. the FleetLog name column) so a multi-byte name is never split mid-
-// character by a code-unit padEnd/slice. (0024)
+// character AND a wide-glyph name never misaligns every column to its right.
+// (0024, rewidthed by 0408/R7: cells, not graphemes.)
 export function padCol(s, width) {
   s = s == null ? '' : String(s);
-  const g = graphemes(s);
-  if (g.length >= width) return g.slice(0, width).join('');
-  return g.join('') + ' '.repeat(width - g.length);
+  if (!NON_ASCII_RX.test(s)) {
+    if (s.length >= width) return s.slice(0, width);
+    return s + ' '.repeat(width - s.length);
+  }
+  let out = '', used = 0;
+  for (const seg of graphemes(s)) {
+    const cw = stringWidth(seg);
+    if (used + cw > width) break; // a straddling wide glyph is dropped, then padded
+    out += seg;
+    used += cw;
+  }
+  return out + ' '.repeat(Math.max(0, width - used));
 }
 
 export function fmtClock(ts, use24 = true) {
@@ -119,9 +151,13 @@ export function fmtClock(ts, use24 = true) {
 // the worst of the raw text. Specifically:
 //
 //   1. Strip ALL terminal escape sequences — not just CSI color codes:
-//      OSC (window-title AND OSC-52 clipboard-write), CSI, other
+//      OSC (window-title AND OSC-52 clipboard-write), CSI, DCS/SOS/PM/APC
+//      string payloads, their 8-bit C1 single-byte forms (U+0080–U+009F —
+//      xterm.js parses U+009B as CSI and U+009D as OSC, no ESC needed), other
 //      ESC-introduced forms (charset/keypad designators), plus stray C0
-//      control bytes (CR/BEL/NUL/DEL/lone-ESC). Session content is
+//      control bytes (CR/BEL/NUL/DEL/lone-ESC). Newline/tab runs collapse to
+//      one space — every caller renders a one-row slot (0408/R5). Session
+//      content is
 //      attacker-influenceable (a file claude Read()s, a tool-name, an
 //      api-error cause string) and is painted to the user's REAL
 //      terminal even in the non-zoomed fleet view — an OSC-52 in that
@@ -143,10 +179,24 @@ export function fmtClock(ts, use24 = true) {
 // length-bounded preview truncates it before the terminator); then CSI;
 // then any remaining single ESC-introduced sequence; then a final sweep
 // of lone C0 control bytes (which mops up a bare ESC too).
-const OSC_RX = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g;   // OSC incl. OSC-52 clipboard / title
+const OSC_RX = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|)?/g; // OSC incl. OSC-52 clipboard / title (BEL, 7-bit ST or C1 ST terminated)
+// 0408/S3: 7-bit DCS/SOS/PM/APC — string-payload escapes whose body would
+// otherwise leak as printable text (e.g. a sixel DCS left "q#0;2;0;0;0~~").
+const DCS7_RX = /\x1b[PX^_][^\x07\x1b]*(?:\x07|\x1b\\|)?/g;
 const CSI_RX = /\x1b\[[0-?]*[ -/]*[@-~]/g;             // CSI (color/cursor), full param/intermediate grammar
+// 0408/S3: 8-bit C1 forms. xterm.js parses U+009B as CSI and U+009D as OSC, so
+// an attacker can drop the ESC byte entirely and the old 7-bit strippers never
+// fired — the payload reached the host terminal (escape-leak.mjs / ink-c1.mjs).
+// String-type C1s (DCS U+0090, SOS U+0098, OSC U+009D, PM U+009E, APC U+009F)
+// consume their payload through ST (U+009C) or BEL — or to end-of-string when
+// a length-bounded preview truncated the terminator away.
+const C1_STR_RX = /[-][^\x07]*(?:|\x07)?/g;
+const C1_CSI_RX = /[0-?]*[ -/]*[@-~]/g;          // C1 CSI: params + final are part of the sequence
 const ESCSEQ_RX = /\x1b[@-Z\\-_]|\x1b[ -/]*[0-~]/g;     // other Fe + nF/Fp/Fs escapes
-const CTRL_RX = /[\x00-\x08\x0b-\x1f\x7f]/g;            // C0 except \t (0x09) and \n (0x0a); incl. CR, BEL, lone ESC, DEL
+// C0 except \t/\n (collapsed to a space below, before this sweep) PLUS the
+// whole C1 range U+0080–U+009F (any stray 8-bit control that wasn't a
+// recognised sequence introducer — e.g. NEL U+0085). (0408/S3 widened)
+const CTRL_RX = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 const PATH_RX = /(\/[^\s/]+){2,}/g;
 const UUID_RX = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const JSON_OBJ_RX = /\{[^{}\n]{40,}\}/g;
@@ -156,9 +206,18 @@ const HOME = (() => { try { return homedir(); } catch { return null; } })();
 export function humanize(text) {
   if (text == null) return '';
   let out = String(text);
+  out = out.replace(C1_STR_RX, '');
   out = out.replace(OSC_RX, '');
+  out = out.replace(DCS7_RX, '');
   out = out.replace(CSI_RX, '');
+  out = out.replace(C1_CSI_RX, '');
   out = out.replace(ESCSEQ_RX, '');
+  // 0408/R5: every humanize() caller renders into a ONE-ROW slot (Card rows,
+  // FleetLog rows, Zoom todo lines, toasts). A literal newline/tab in the text
+  // becomes an extra unbudgeted frame row (or an Ink 8-cell tab jump), so a
+  // 3-line Bash command took 3 rows of a 1-row log slot. Collapse each run to
+  // a single space BEFORE the control sweep (CR sits inside CTRL_RX's range).
+  out = out.replace(/[\r\n\t]+/g, ' ');
   out = out.replace(CTRL_RX, '');
   if (HOME) out = out.split(HOME).join('~');
   out = out.replace(PATH_RX, (p) => {

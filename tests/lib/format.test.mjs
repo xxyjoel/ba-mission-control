@@ -5,7 +5,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtK, fmtMoney, fmtDuration, barCells, bar, sparkLine, trunc } from '../../tui/lib/format.js';
+import stringWidth from 'string-width';
+import { fmtK, fmtMoney, fmtDuration, barCells, bar, sparkLine, trunc, padCol } from '../../tui/lib/format.js';
 
 // ── fmtK (0011/0012) ───────────────────────────────────────────
 test('fmtK: preserves negative sign and formats absolute magnitude', () => {
@@ -18,6 +19,16 @@ test('fmtK: positive thousands get one-decimal k suffix', () => {
   assert.equal(fmtK(1500), '1.5k');
   assert.equal(fmtK(999), '999');
   assert.equal(fmtK(0), '0');
+});
+
+test('fmtK: values at 1M and above get the M unit (0408/M3)', () => {
+  assert.equal(fmtK(224001600), '224.0M');
+  assert.equal(fmtK(1000000), '1.0M');
+  assert.equal(fmtK(1500000), '1.5M');
+  assert.equal(fmtK(-2500000), '-2.5M');
+  // behavior below 1M is unchanged
+  assert.equal(fmtK(999999), '1000.0k');
+  assert.equal(fmtK(12000), '12.0k');
 });
 
 test('fmtK: NaN / Infinity / null / undefined are sane (0)', () => {
@@ -96,7 +107,11 @@ test('sparkLine: all-zero input renders nothing, not a flat low row (0106)', () 
   assert.notEqual(sparkLine([0, 0, 5, 0], 14), '');
 });
 
-// ── trunc grapheme-safety (0009/0010) ──────────────────────────
+// ── trunc: grapheme-safe (0009/0010) AND display-width-true (0408/R7) ──
+// The old contract counted GRAPHEMES: padCol('日本語日本語', 20) was 26 cells
+// wide, so wide-glyph names wrapped card titles and misaligned every fleet-log
+// column to their right. The budget is now display CELLS, measured with the
+// same string-width Ink lays text out with.
 test('trunc: ASCII behavior unchanged (slice + ellipsis)', () => {
   assert.equal(trunc('hello world', 5), 'hell…');
   assert.equal(trunc('short', 10), 'short');
@@ -104,17 +119,51 @@ test('trunc: ASCII behavior unchanged (slice + ellipsis)', () => {
 });
 
 test('trunc: never slices through a surrogate-pair emoji (0009)', () => {
-  // 3 emoji = 6 UTF-16 code units but 3 graphemes; width 4 fits all 3.
-  assert.equal(trunc('😀😀😀', 4), '😀😀😀');
-  // width 2 ⇒ 1 grapheme + ellipsis. The OLD code-unit slice produced a lone
-  // high-surrogate '\ud83d…'; grapheme-safe trunc yields a clean '😀…'.
-  const out = trunc('😀😀😀', 2);
+  // 3 emoji = 6 CELLS; width 6 fits all 3, width 7 too.
+  assert.equal(trunc('😀😀😀', 6), '😀😀😀');
+  // width 3 ⇒ 1 two-cell emoji + one-cell ellipsis. The OLD code-unit slice
+  // produced a lone high-surrogate '\ud83d…'; this yields a clean '😀…'.
+  const out = trunc('😀😀😀', 3);
   assert.equal(out, '😀…');
   assert.ok(!/[\ud800-\udfff]/.test(out.replace(/[\ud800-\udbff][\udc00-\udfff]/g, '')), 'no lone surrogate left');
 });
 
+test('trunc: output never exceeds the budget in display cells (0408/R7)', () => {
+  for (const s of ['日本語日本語', '🚀🚀🚀🚀', 'ascii-name', '認証リファクタリング作業セッション']) {
+    for (const w of [3, 5, 10, 20]) {
+      const out = trunc(s, w);
+      assert.ok(stringWidth(out) <= w, `trunc(${JSON.stringify(s)}, ${w}) is ${stringWidth(out)} cells`);
+    }
+  }
+  // The R7 repro row: a CJK string that "fit" by grapheme count but not cells.
+  assert.equal(trunc('日本語日本語', 3), '日…');
+});
+
 test('trunc: keeps a ZWJ / combining grapheme cluster intact', () => {
-  const fam = '👨‍👩‍👧'; // family emoji = one grapheme via ZWJ
-  // fits in width 2 (1 grapheme) — returned whole, not cut mid-cluster.
-  assert.equal(trunc(fam + 'x', 2), fam + 'x');
+  const fam = '👨‍👩‍👧'; // family emoji = one grapheme (2 cells) via ZWJ
+  // 2-cell cluster + 'x' = 3 cells; fits at width 3 — returned whole.
+  assert.equal(trunc(fam + 'x', 3), fam + 'x');
+  // At width 3 with more text after, the cluster survives whole + ellipsis —
+  // never a partial ZWJ sequence.
+  assert.equal(trunc(fam + 'xyz', 3), fam + '…');
+});
+
+// ── padCol: exact display width (0024, rewidthed 0408/R7) ─────
+test('padCol: returns exactly `width` display cells for every input', () => {
+  for (const s of ['日本語日本語', '🚀🚀🚀🚀', 'ascii-name', '👨‍👩‍👧‍👦x', '', 'a']) {
+    const out = padCol(s, 20);
+    assert.equal(stringWidth(out), 20, `padCol(${JSON.stringify(s)}, 20) is ${stringWidth(out)} cells`);
+  }
+});
+
+test('padCol: ASCII pad/cut behavior unchanged', () => {
+  assert.equal(padCol('abc', 6), 'abc   ');
+  assert.equal(padCol('abcdefgh', 4), 'abcd');
+  assert.equal(padCol(null, 3), '   ');
+});
+
+test('padCol: a wide glyph that would straddle the boundary is dropped, then padded', () => {
+  // 3 CJK chars = 6 cells; width 5 fits 2 chars (4 cells) + 1 space.
+  assert.equal(padCol('日本語', 5), '日本 ');
+  assert.equal(stringWidth(padCol('日本語', 5)), 5);
 });

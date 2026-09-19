@@ -230,6 +230,13 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   } else if (agent.status === 'waiting') {
     action = approval ? 'needs approval · answer to proceed' : 'needs input · answer to continue';
     actionColor = approval ? theme.red : theme.yellow;
+  } else if (agent.status === 'idle' && agent.bgCount > 0) {
+    // 0408/D2: background agents keep working while the foreground turn is
+    // idle (e7e28fa keeps status 'idle' during fan-out). The triage verb must
+    // read the WHOLE card's truth, not status alone — `IDLE · 3bg WORKING`
+    // above a `needs a nudge →` told the operator to interrupt a busy slot.
+    // Use the working-branch verb instead.
+    action = 'check back'; actionColor = theme.dim;
   } else if (agent.status === 'idle') {
     // 0386: no `idle · Xm in state` fallback — status already sits top-right
     // and the duration bottom-right, so the midbox restatement was noise.
@@ -399,7 +406,9 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           per-agent), so it lives once in the aggregate bar up top — showing it
           per-card made every card duplicate the same number. */}
       <Box>
-        <Text color={theme.dim}>{fmtMoney(agent.costSession || 0)} </Text>
+        {/* 0408/M4: `~` marks a cost computed from an INHERITED pricing row
+            (models.js estimatedPricing) — it must not pass for a billed figure. */}
+        <Text color={theme.dim}>{model && model.estimatedPricing ? '~' : ''}{fmtMoney(agent.costSession || 0)} </Text>
         <Text color={theme.faint}>ses</Text>
         <Box flexGrow={1} />
         <Text color={theme.green}>{fmtK(agent.tokensIn || 0)}↓ {fmtK(agent.tokensOut || 0)}↑</Text>

@@ -60,10 +60,14 @@ test('name column does not split a multi-byte (emoji) name (0023/0024)', () => {
   const { lastFrame, unmount } = render(<FleetLog log={[row({ name: '😀😀😀' })]} theme={theme} maxLines={12} />);
   assert.ok(lastFrame().includes('😀😀😀'), 'short emoji name intact');
   unmount();
-  // a name longer than the 20-cell column is sliced on grapheme boundaries.
+  // A name longer than the 20-CELL column is sliced on grapheme boundaries.
+  // 0408/R7: the column budget is display cells now, not graphemes — an emoji
+  // is 2 cells wide, so 10 whole emoji fill the 20-cell column (the old
+  // 20-grapheme slice was 40 cells and misaligned every column to its right).
   const long = '😀'.repeat(30);
   const r2 = render(<FleetLog log={[row({ name: long })]} theme={theme} maxLines={12} />);
-  assert.ok(r2.lastFrame().includes('😀'.repeat(20)), 'sliced to 20 whole emoji, none split');
+  assert.ok(r2.lastFrame().includes('😀'.repeat(10)), 'sliced to 10 whole emoji (20 cells), none split');
+  assert.ok(!r2.lastFrame().includes('😀'.repeat(11)), 'no more than the 20-cell budget');
   r2.unmount();
 });
 

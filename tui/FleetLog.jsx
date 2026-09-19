@@ -86,19 +86,27 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
     // 0388: no flexGrow/minHeight — the log takes exactly its rows so the
     // Settings line count is authoritative; App.jsx's spacer absorbs slack.
     <Box flexDirection="column" paddingX={1}>
-      <Box>
-        <Text color={theme.accent}>▸ FLEET LOG</Text>
-        <Text color={theme.dim}> · {rows.length} events</Text>
+      {/* Header pinned to ONE row (0408/R4): FLEETLOG_HEAD_H budgets exactly 1,
+          but under 90 cols the clamp note + narrative tag wrapped it to two and
+          pushed the whole fleet frame past the last screen row. The label is
+          flexShrink={0}; the informational tags truncate; height=1 +
+          overflow=hidden clips anything that still tries to wrap. The clamp
+          note is the short `· 8/12` form — the count pair is the signal. */}
+      <Box height={1} overflow="hidden">
+        <Box flexShrink={0}>
+          <Text color={theme.accent}>▸ FLEET LOG</Text>
+        </Box>
+        <Text color={theme.dim} wrap="truncate"> · {rows.length} events</Text>
         {/* Say so when the terminal cannot honour the Settings line count.
             The clamp was silent, which read as "I set 30 lines and get 8" —
             the number in Settings is a ceiling, and the terminal's height is
             what actually decides. */}
         {requestedLines > maxLines && (
-          <Text color={theme.faint}> · {maxLines}/{requestedLines} lines (terminal height)</Text>
+          <Text color={theme.faint} wrap="truncate"> · {maxLines}/{requestedLines}</Text>
         )}
-        {mode === 'narrative' && <Text color={theme.yellow}> · narrative</Text>}
+        {mode === 'narrative' && <Text color={theme.yellow} wrap="truncate"> · narrative</Text>}
         <Box flexGrow={1} />
-        <Text color={theme.faint}>[ tail -f mc://fleet ]</Text>
+        <Text color={theme.faint} wrap="truncate">[ tail -f mc://fleet ]</Text>
       </Box>
       <Box flexDirection="column">
         {rows.map((l, i) => {
@@ -110,15 +118,21 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
           // '—' fallback to match Card.jsx (not the literal 'unknown').
           const nameTxt = padCol(l.name || '—', 20);
           return (
-            <Box key={i}>
+            // height=1 + overflow=hidden: a log row is a ONE-row slot by
+            // contract — even if some future field slips past humanize()'s
+            // newline collapse, the row clips instead of growing the frame.
+            <Box key={i} height={1} overflow="hidden">
               <Text color={theme.faint}>{fmtClock(l.ts || Date.now())} </Text>
               <Text color={slotCol}>{slotTxt} </Text>
               <Text color={nameCol}>{nameTxt} </Text>
               <Text color={colorForKind(l.kind, theme)}>{glyphForKind(l.kind)} </Text>
               {/* 0030: show the tool prefix for tool AND err rows; an err's
-                  prefix is red to match its body, not dim. */}
+                  prefix is red to match its body, not dim. 0408/S3: the tool
+                  NAME comes off the untrusted stream too (an MCP server picks
+                  it) — humanize + trunc before it can reach the terminal or
+                  wrap this one-row slot. */}
               {l.tool && (l.kind === 'tool' || l.kind === 'err') &&
-                <Text color={l.kind === 'err' ? theme.red : theme.dim}>{l.tool} </Text>}
+                <Text color={l.kind === 'err' ? theme.red : theme.dim}>{trunc(humanize(l.tool), 28)} </Text>}
               <Text color={l.kind === 'err' ? theme.red : l.kind === 'sys' ? theme.dim : theme.fg} wrap="truncate">
                 {trunc(humanize(l.preview || l.text || ''), textBudget)}
               </Text>

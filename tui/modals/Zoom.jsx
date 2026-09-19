@@ -25,7 +25,8 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { MODELS, modelColor, modelByCli } from '../lib/models.js';
-import { barCells, fmtK, fmtMoney, fmtDuration, humanize } from '../lib/format.js';
+import { barCells, fmtK, fmtMoney, fmtDuration, humanize, trunc } from '../lib/format.js';
+import { zoomInnerWidth } from '../lib/zoomGeometry.js';
 import { readProjectHealth, healthColor } from '../lib/projectHealth.js';
 import PtyPane from '../zoom/PtyPane.jsx';
 import { classifyZoomKey } from '../zoom/zoomKeys.js';
@@ -52,6 +53,13 @@ function summariseTools(tail) {
   return [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
+}
+
+// Drop the `mcp__<server>__` prefix from MCP tool names for the strip — the
+// tool half carries the signal, and 8 fully-qualified MCP names wrapped the
+// one-row strip into five (0408/R6).
+function shortToolName(name) {
+  return String(name || '').replace(/^mcp__.+?__/, '');
 }
 
 export default function Zoom({
@@ -112,43 +120,99 @@ export default function Zoom({
   // Session Health for this project (cached read; null until first scored turn).
   const health = readProjectHealth(agent.cwd);
 
-  const barW = 40;
-  const cells = barCells({ value: ctxPct, width: barW, threshFrac: model ? threshold / model.maxCtx : 0.75 });
+  // Inner width inside the bordered modal — from the SAME helper that sizes
+  // the fleet's PTY (0408/R3), so the modal chrome and the PTY body can never
+  // disagree about the content width again.
+  const innerW = zoomInnerWidth(width || 100);
 
-  // Inner width inside the bordered modal: width − 2 (border) − 4 (paddingX).
-  const innerW = Math.max(20, (width || 100) - 6);
+  // CONTEXT bar width — fits its half-width stats column even on a narrow
+  // modal, so the bar can't wrap the panel's fixed-height rows.
+  const barW = Math.max(10, Math.min(40, Math.floor(innerW / 2) - 4));
+  const cells = barCells({ value: ctxPct, width: barW, threshFrac: model ? threshold / model.maxCtx : 0.75 });
 
   const tools = useMemo(() => summariseTools(agent.tail), [agent.tail]);
   const todos = agent.todos || [];
-  // Cap the rendered todo rows so a runaway plan doesn't crowd the PTY.
-  // 8 covers the common case; the rest collapse into a "+N more" tag.
-  const MAX_TODOS_SHOWN = 8;
-  const todoRows = todos.length > 0
-    ? 1 /* header */ + Math.min(todos.length, MAX_TODOS_SHOWN) + (todos.length > MAX_TODOS_SHOWN ? 1 : 0)
-    : 0;
 
-  // Compute the PTY pane body size. The Zoom modal does NOT own the
-  // whole terminal screen — App.jsx wraps it in paddingY=2 plus a
-  // FeedbackStrip and StatusBar below, so the actual vertical room
-  // is termRows - 4. The caller passes that in as `height`; we fall
-  // back to stdout.rows-4 if it wasn't provided.
-  // Per-region breakdown (matches the JSX below top-to-bottom):
+  // ── Vertical budget (0408/R1+R2) ──────────────────────────────
+  // The Zoom modal does NOT own the whole terminal screen — App.jsx wraps it
+  // in paddingY=2 plus a FeedbackStrip and StatusBar below. The caller passes
+  // the real room in as `height`; we fall back to stdout.rows-4 if it wasn't
+  // provided. The contract: NEVER render more rows than `height`. Ink cannot
+  // erase a frame taller than the terminal, so one extra row tears the UI.
+  //
+  // Always-on chrome (matches the JSX below top-to-bottom):
   //   2 border + 2 padY + 1 header + (1 marginTop + 1 compact-stats)
-  //   + 1 PTY-body marginTop + 1 footer = 9 always-on rows.
-  // (Was 10 — a double-count that ate one PTY row; the caller now subtracts the
-  // real FeedbackStrip height, so this must be the true chrome count or claude's
-  // bottom line clips. Idle bodyRows is unchanged: zoomHeight shrank by 1 too.)
-  // Optional panels each add their own marginTop=1 wrapper, so
-  // statsExpanded is +7 (not +6) and showTools is +2 (not +1).
-  // todos panel adds 1 marginTop on top of todoRows (header + items + overflow).
+  //   + 1 PTY-body marginTop + 1 footer = 9 rows. Header, compact stats, the
+  //   tools strip and the footer are pinned height={1} overflow="hidden" so a
+  //   wrap can never grow them past their budgeted row.
+  //
+  // Optional panels are budgeted from what they ACTUALLY render (the old
+  // fixedRows said "stats = 7" while the panel drew 10 plus an unbudgeted
+  // ACTIVE AGENTS block — every Ctrl+U overflowed the modal). When the room
+  // left for the PTY body would drop below MIN_BODY_ROWS a panel is SHED
+  // instead of overflowing, todos first, then tools, then stats; the todo
+  // list also shrinks item-by-item to fit its leftover budget.
+  const CHROME_ROWS = 9;
+  const MIN_BODY_ROWS = 6;
   const availableRows = height || Math.max(10, (stdout?.rows || 50) - 4);
-  const fixedRows =
-    9 +
-    (statsExpanded ? 7 : 0) +
-    (showTools ? 2 : 0) +
-    (todoRows > 0 ? todoRows + 1 : 0);
-  const bodyRows = Math.max(6, availableRows - fixedRows);
+  let panelRoom = Math.max(0, availableRows - CHROME_ROWS - MIN_BODY_ROWS);
+
+  // Stats panel (shed LAST): 1 marginTop + 9 USAGE rows (title + 8 stat rows)
+  // + the ACTIVE AGENTS block when sub-agents run (1 marginTop + 1 title + n).
+  const nSub = Array.isArray(agent.activeSubagents) ? agent.activeSubagents.length : 0;
+  const statsRows = 1 + 9 + (nSub > 0 ? 2 + nSub : 0);
+  const renderStats = statsExpanded && statsRows <= panelRoom;
+  if (renderStats) panelRoom -= statsRows;
+
+  // Tools strip: 1 marginTop + 1 clipped row.
+  const renderTools = showTools && 2 <= panelRoom;
+  if (renderTools) panelRoom -= 2;
+
+  // Todos (shed FIRST — they get whatever room is left): 1 marginTop +
+  // 1 header + shown items + a "+N more" row when the list is cut. Cap at 8
+  // as before, then shrink to the leftover budget.
+  const MAX_TODOS_CAP = 8;
+  const todoRowsFor = (n) => (n > 0 ? 2 + n + (todos.length > n ? 1 : 0) : 0);
+  let todosShown = Math.min(todos.length, MAX_TODOS_CAP);
+  while (todosShown > 0 && todoRowsFor(todosShown) > panelRoom) todosShown--;
+  const todoPanelRows = todoRowsFor(todosShown);
+
+  const fixedRows = CHROME_ROWS
+    + (renderStats ? statsRows : 0)
+    + (renderTools ? 2 : 0)
+    + todoPanelRows;
+  // ≥ MIN_BODY_ROWS by construction whenever availableRows ≥ 15; below that
+  // every panel is already shed and the floor is PtyPane's own minimum (5).
+  const bodyRows = Math.max(5, availableRows - fixedRows);
   const bodyCols = innerW;
+
+  // ── Header width budget (0408/R6) ─────────────────────────────
+  // A 67-char branch or a long name wrapped the header to two rows — an
+  // unbudgeted frame row. Pre-truncate both to the room actually left after
+  // the fixed chips, the way Card.jsx budgets its title/meta rows. name,
+  // branch and resolvedModel come from untrusted session state → humanize().
+  const permText = agent.permissionMode ? `perm: ${agent.permissionMode}` : '';
+  const updateText = claudeUpdate
+    ? `⬆ update${claudeUpdate.version ? ` ${claudeUpdate.version}` : ''}` : '';
+  const resolvedText = unknownResolved
+    ? trunc(humanize(String(agent.resolvedModel)), 24) : '';
+  const gitChipsW = ((agent.dirty || 0) > 0 ? ` +${agent.dirty}`.length : ' ●clean'.length)
+    + (agent.ahead > 0 ? ` ↑${agent.ahead}`.length : 0)
+    + (agent.behind > 0 ? ` ↓${agent.behind}`.length : 0);
+  const rightW = (updateText ? updateText.length + 4 : 0)
+    + (permText ? permText.length + 4 : 0)
+    + `${statusGlyph} ${statusWord}`.length;
+  const nameStr = trunc(humanize(agent.name || '—'), 24);
+  const leftFixedW = `[${agent.slot}] `.length + nameStr.length + 2
+    + (model ? `[${model.label}]  `.length : 0)
+    + (resolvedText ? `⚠ resolved ${resolvedText}  `.length : 0)
+    + 2; // '⎇ '
+  const branchStr = trunc(humanize(agent.branch || '—'),
+    Math.max(3, innerW - leftFixedW - gitChipsW - rightW - 1));
+
+  // Session cost is a ~estimate when the model's pricing row is inherited,
+  // not verified (0408/M4) — mark it so it can't pass for a billed figure.
+  const costPrefix = model && model.estimatedPricing ? '~' : '';
 
   return (
     <Box
@@ -159,49 +223,61 @@ export default function Zoom({
       paddingY={1}
       width={width}
     >
-      {/* ── Header: slot · name · model · branch · perm · status ── */}
-      <Box>
-        <Text color={theme.accent}>[{agent.slot}] </Text>
-        <Text color={theme.accent}>{agent.name}  </Text>
-        {model && (
-          <Text color={modelColor(modelId, theme)}>[{model.label}]  </Text>
-        )}
-        {/* Only warn when claude's resolved cli model is unknown to the catalog
-            (genuine drift). An in-catalog /model switch updates the [label]
-            above instead of showing a warning. */}
-        {unknownResolved && (
-          <>
-            <Text color={theme.yellow}>⚠ resolved </Text>
-            <Text color={theme.fg}>{agent.resolvedModel}  </Text>
-          </>
-        )}
-        <Text color={theme.dim}>⎇ </Text>
-        <Text color={theme.fg}>{agent.branch}</Text>
-        {(agent.dirty || 0) > 0
-          ? <Text color={theme.yellow}> +{agent.dirty}</Text>
-          : <Text color={theme.green}> ●clean</Text>}
-        {agent.ahead  > 0 && <Text color={theme.accent}> ↑{agent.ahead}</Text>}
-        {agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
+      {/* ── Header: slot · name · model · branch · perm · status ──
+          Pinned to ONE row (0408/R6): name/branch/resolvedModel are
+          pre-truncated to the measured leftover room, the fixed chips sit in
+          flexShrink={0} boxes, and height=1 + overflow=hidden clips anything
+          that still tries to wrap. */}
+      <Box height={1} overflow="hidden">
+        <Box flexShrink={0}>
+          <Text color={theme.accent}>[{agent.slot}] </Text>
+          <Text color={theme.accent}>{nameStr}  </Text>
+          {model && (
+            <Text color={modelColor(modelId, theme)}>[{model.label}]  </Text>
+          )}
+          {/* Only warn when claude's resolved cli model is unknown to the catalog
+              (genuine drift). An in-catalog /model switch updates the [label]
+              above instead of showing a warning. resolvedText is humanized +
+              truncated — the raw id comes from the untrusted stream (0181). */}
+          {resolvedText && (
+            <>
+              <Text color={theme.yellow}>⚠ resolved </Text>
+              <Text color={theme.fg}>{resolvedText}  </Text>
+            </>
+          )}
+          <Text color={theme.dim}>⎇ </Text>
+          <Text color={theme.fg}>{branchStr}</Text>
+          {(agent.dirty || 0) > 0
+            ? <Text color={theme.yellow}> +{agent.dirty}</Text>
+            : <Text color={theme.green}> ●clean</Text>}
+          {agent.ahead  > 0 && <Text color={theme.accent}> ↑{agent.ahead}</Text>}
+          {agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
+        </Box>
         <Box flexGrow={1} />
-        {claudeUpdate && (
-          <>
-            <Text color={theme.faint}>⬆ update{claudeUpdate.version ? ` ${claudeUpdate.version}` : ''}</Text>
-            <Text color={theme.faint}>  · </Text>
-          </>
-        )}
-        {agent.permissionMode && (
-          <>
-            <Text color={agent.permissionMode === 'bypassPermissions' ? theme.red : agent.permissionMode === 'plan' ? theme.cyan : theme.dim}>
-              perm: {agent.permissionMode}
-            </Text>
-            <Text color={theme.faint}>  · </Text>
-          </>
-        )}
-        <Text color={sCol}>{statusGlyph} {statusWord}</Text>
+        <Box flexShrink={0}>
+          {updateText !== '' && (
+            <>
+              {/* claude's own update notice, lifted out of the PTY body —
+                  rendered faint so it reads as ambient chrome (0408/U1). */}
+              <Text color={theme.faint}>{updateText}</Text>
+              <Text color={theme.faint}>  · </Text>
+            </>
+          )}
+          {agent.permissionMode && (
+            <>
+              <Text color={agent.permissionMode === 'bypassPermissions' ? theme.red : agent.permissionMode === 'plan' ? theme.cyan : theme.dim}>
+                {permText}
+              </Text>
+              <Text color={theme.faint}>  · </Text>
+            </>
+          )}
+          <Text color={sCol}>{statusGlyph} {statusWord}</Text>
+        </Box>
       </Box>
 
-      {/* ── Compact stats line (always visible) ── */}
-      <Box marginTop={1}>
+      {/* ── Compact stats line (always visible; pinned to its one budgeted
+          row — a narrow modal clips the tail chips instead of wrapping) ── */}
+      <Box marginTop={1} height={1} overflow="hidden">
         <Text color={theme.dim}>ctx </Text>
         <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{fmtK(agent.context || 0)}</Text>
         <Text color={theme.dim}>/{fmtK(model ? model.maxCtx : 0)}  </Text>
@@ -214,7 +290,7 @@ export default function Zoom({
         <Text color={theme.dim}>  cache </Text>
         <Text color={theme.faint}>{fmtK(agent.tokensCacheRead || 0)}</Text>
         <Text color={theme.faint}>  ·  </Text>
-        <Text color={theme.fg}>{fmtMoney(agent.costSession || 0)}</Text>
+        <Text color={theme.fg}>{costPrefix}{fmtMoney(agent.costSession || 0)}</Text>
         <Text color={theme.dim}> (wk </Text>
         <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
         <Text color={theme.dim}>)</Text>
@@ -248,9 +324,9 @@ export default function Zoom({
           NOTE: while zoom is active the stream-json sibling is SIGSTOP'd,
           so this list is a snapshot from zoom-entry until the PTY child
           (also a `claude --resume`) exits and the sibling catches up. */}
-      {todos.length > 0 && (
+      {todosShown > 0 && (
         <Box marginTop={1} flexDirection="column">
-          <Box>
+          <Box height={1} overflow="hidden">
             <Text color={theme.accent}>▸ OPEN TASKS</Text>
             <Text color={theme.faint}>  · </Text>
             <Text color={theme.dim}>
@@ -265,13 +341,16 @@ export default function Zoom({
               </>
             )}
           </Box>
-          {todos.slice(0, MAX_TODOS_SHOWN).map((t, i) => {
+          {todos.slice(0, todosShown).map((t, i) => {
             const isDone = t.status === 'completed';
             const isActive = t.status === 'in_progress';
             const glyph = isDone ? '✓' : isActive ? '▸' : '○';
             const glyphColor = isDone ? theme.green : isActive ? theme.accent : theme.faint;
             const textColor = isDone ? theme.dim : isActive ? theme.fg : theme.dim;
-            const display = isActive && t.activeForm ? t.activeForm : t.content;
+            // humanize(): todo text comes from claude's TodoWrite input —
+            // untrusted, and an embedded newline would grow this one-row slot
+            // (0408/R5); escapes must not reach the terminal (0181).
+            const display = humanize(isActive && t.activeForm ? t.activeForm : t.content);
             return (
               <Box key={i}>
                 <Text color={glyphColor}>{glyph} </Text>
@@ -281,22 +360,25 @@ export default function Zoom({
               </Box>
             );
           })}
-          {todos.length > MAX_TODOS_SHOWN && (
-            <Text color={theme.faint}>  …+{todos.length - MAX_TODOS_SHOWN} more</Text>
+          {todos.length > todosShown && (
+            <Text color={theme.faint}>  …+{todos.length - todosShown} more</Text>
           )}
         </Box>
       )}
 
-      {/* ── Ctrl+T: per-tool usage summary (mc chrome, not claude's). ── */}
-      {showTools && (
-        <Box marginTop={1}>
-          <Text color={theme.accent}>tools · </Text>
+      {/* ── Ctrl+K: per-tool usage summary (mc chrome, not claude's).
+          Pinned to ONE row (0408/R6): tool names come from the untrusted
+          stream — humanized, mcp__server__ prefix dropped, truncated — and
+          the strip clips instead of wrapping. ── */}
+      {renderTools && (
+        <Box marginTop={1} height={1} overflow="hidden">
+          <Box flexShrink={0}><Text color={theme.accent}>tools · </Text></Box>
           {tools.length === 0 ? (
             <Text color={theme.faint}>(no tools used yet)</Text>
           ) : tools.slice(0, 8).map((t, i) => (
             <React.Fragment key={t.name}>
               {i > 0 && <Text color={theme.faint}> · </Text>}
-              <Text color={theme.fg}>{t.name}</Text>
+              <Text color={theme.fg}>{trunc(humanize(shortToolName(t.name)), 24)}</Text>
               <Text color={theme.dim}>×{t.count}</Text>
             </React.Fragment>
           ))}
@@ -306,9 +388,12 @@ export default function Zoom({
         </Box>
       )}
 
-      {/* ── Ctrl+S: expanded stats panel (CONTEXT + USAGE columns) ── */}
-      {statsExpanded && (
-        <Box marginTop={1}>
+      {/* ── Ctrl+U: expanded stats panel (CONTEXT + USAGE columns).
+          Height is pinned to the exact row count the vertical budget charged
+          for it (statsRows minus its marginTop), so an internal wrap on a
+          narrow modal clips instead of growing the frame (0408/R1). ── */}
+      {renderStats && (
+        <Box marginTop={1} height={statsRows - 1} overflow="hidden">
           <Box flexDirection="column" width="50%">
             <Text color={theme.accent}>CONTEXT</Text>
             <Box>
@@ -347,7 +432,7 @@ export default function Zoom({
             <Box>
               <Text color={theme.dim}>cost · session </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{fmtMoney(agent.costSession || 0)}</Text>
+              <Text color={theme.fg}>{costPrefix}{fmtMoney(agent.costSession || 0)}</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cost · week    </Text>
@@ -407,20 +492,24 @@ export default function Zoom({
           Keys mirror tui/zoom/zoomKeys.js (the single source of truth):
           ⌃Q exit · ⌃J newline · ⌃Y scroll · ⌃K tools · ⌃U stats. Everything
           else — including Esc (interrupt claude) and ⇧⇥ (claude's own perm
-          cycler) — is forwarded to the embedded claude session. */}
-      <Box>
-        <Text color={theme.accent} bold>⌃Q</Text>
-        <Text color={theme.dim}> exit  ·  </Text>
-        <Text color={theme.accent}>⌃J</Text>
-        <Text color={theme.dim}> newline  ·  </Text>
-        <Text color={theme.accent}>⌃Y</Text>
-        <Text color={theme.dim}> scroll  ·  </Text>
-        <Text color={theme.accent}>⌃K</Text>
-        <Text color={theme.dim}> tools{showTools ? ' (on)' : ''}  ·  </Text>
-        <Text color={theme.accent}>⌃U</Text>
-        <Text color={theme.dim}> stats{statsExpanded ? ' (on)' : ''}</Text>
+          cycler) — is forwarded to the embedded claude session.
+          height=1 + overflow=hidden: on a narrow modal the row clips instead
+          of wrapping into a second, unbudgeted frame row (0408/R1). */}
+      <Box height={1} overflow="hidden">
+        <Box flexShrink={0}>
+          <Text color={theme.accent} bold>⌃Q</Text>
+          <Text color={theme.dim}> exit  ·  </Text>
+          <Text color={theme.accent}>⌃J</Text>
+          <Text color={theme.dim}> newline  ·  </Text>
+          <Text color={theme.accent}>⌃Y</Text>
+          <Text color={theme.dim}> scroll  ·  </Text>
+          <Text color={theme.accent}>⌃K</Text>
+          <Text color={theme.dim}> tools{showTools ? ' (on)' : ''}  ·  </Text>
+          <Text color={theme.accent}>⌃U</Text>
+          <Text color={theme.dim}> stats{statsExpanded ? ' (on)' : ''}</Text>
+        </Box>
         <Box flexGrow={1} />
-        <Text color={theme.faint}>Esc · ⇧⇥ → claude</Text>
+        <Text color={theme.faint} wrap="truncate">Esc · ⇧⇥ → claude</Text>
       </Box>
     </Box>
   );

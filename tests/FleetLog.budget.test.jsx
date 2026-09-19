@@ -61,7 +61,10 @@ test('says so when the terminal cannot honour the Settings line count', () => {
   const { lastFrame, unmount } = render(
     <FleetLog log={LOG} theme={THEME} maxLines={8} requestedLines={30} width={120} />,
   );
-  assert.match(strip(lastFrame()), /8\/30 lines \(terminal height\)/,
+  // 0408/R4: the note is the short `· 8/30` form — the long "lines (terminal
+  // height)" suffix wrapped the one-row header under 90 cols, which pushed the
+  // whole fleet frame past the last screen row.
+  assert.match(strip(lastFrame()), /· 8\/30/,
     'a silent clamp is what made "I set 30 and get 8" look like a bug');
   unmount();
 });
@@ -70,7 +73,7 @@ test('stays quiet when the setting IS honoured', () => {
   const { lastFrame, unmount } = render(
     <FleetLog log={LOG} theme={THEME} maxLines={12} requestedLines={12} width={120} />,
   );
-  assert.doesNotMatch(strip(lastFrame()), /lines \(terminal height\)/);
+  assert.doesNotMatch(strip(lastFrame()), /· 12\/12/);
   unmount();
 });
 

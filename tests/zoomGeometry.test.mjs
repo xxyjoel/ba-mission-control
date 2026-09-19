@@ -1,50 +1,60 @@
-// tests/zoomGeometry.test.mjs — 0404. The fleet's PTY geometry rule.
+// tests/zoomGeometry.test.mjs — 0404/0408. The fleet's PTY geometry rule.
 //
-// Two invariants matter, because breaking either brings back the double-print
-// (claude reprints its whole frame on every resize and the old copy stays in
-// the emulator's scrollback):
+// Three invariants matter:
 //
 //   1. The PTY width must equal the zoom body width EXACTLY — if the modal and
 //      the viewport compute it differently, the pane truncates claude's frame
-//      or the PTY gets resized to "fix" the mismatch.
+//      or the PTY gets resized to "fix" the mismatch. Both now come from
+//      zoomInnerWidth() so they cannot disagree.
 //   2. The PTY height must be the LARGEST body the zoom modal can ever hand
 //      out, so toasts and the optional panels only ever shrink the rendered
 //      window, never the PTY.
+//   3. (0408/R3) The modal is NEVER wider than the terminal can show. The old
+//      ZOOM_MODAL_MIN=104 forced a 104-col modal onto an 80-col terminal: Ink
+//      shrank the border box to 76 but the PTY body kept its 98 computed
+//      columns, so every claude line truncated twice.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  zoomModalWidth, zoomBodyDims,
+  zoomModalWidth, zoomInnerWidth, zoomBodyDims,
   ZOOM_MODAL_MIN, ZOOM_MODAL_MAX, ZOOM_CHROME_COLS, ZOOM_CHROME_ROWS,
 } from '../tui/lib/zoomGeometry.js';
 
-// Mirrors App.jsx's modalWidth(min, max) over `usable = termCols - 4`.
-function appModalWidth(termCols, min, max) {
-  const usable = Math.max(20, termCols - 4);
-  return Math.min(max, Math.max(min, usable));
-}
-
-// Mirrors Zoom.jsx: innerW = width - 6, and the body rows left after the
-// always-on chrome with NO optional panels and the smallest FeedbackStrip.
+// Mirrors Zoom.jsx: the body rows left after the always-on chrome with NO
+// optional panels and the smallest FeedbackStrip (App.jsx, no toasts).
 function zoomBodyRowsFromApp(termRows) {
-  const feedbackRows = 1 + Math.max(1, 0);          // App.jsx, no toasts
+  const feedbackRows = 1 + Math.max(1, 0);
   const availableRows = Math.max(10, termRows - (3 + feedbackRows));
-  const fixedRows = 9;                               // Zoom.jsx, no panels
+  const fixedRows = 9; // Zoom.jsx CHROME_ROWS, no panels
   return Math.max(6, availableRows - fixedRows);
 }
 
-test('zoomModalWidth matches App.jsx modalWidth(104, 220) across terminal sizes', () => {
-  for (const termCols of [40, 80, 100, 108, 120, 180, 224, 226, 300, 500]) {
-    assert.equal(
-      zoomModalWidth(termCols),
-      appModalWidth(termCols, ZOOM_MODAL_MIN, ZOOM_MODAL_MAX),
-      `drifted at termCols=${termCols}`,
+test('zoomModalWidth never exceeds what the terminal can show (0408/R3)', () => {
+  for (const termCols of [60, 80, 100, 108, 120, 180]) {
+    assert.ok(
+      zoomModalWidth(termCols) <= termCols - 4,
+      `termCols=${termCols}: modal ${zoomModalWidth(termCols)} is wider than the usable ${termCols - 4}`,
     );
   }
 });
 
-test('zoomBodyDims.cols is the zoom modal inner width (border + paddingX)', () => {
-  for (const termCols of [80, 120, 180, 300]) {
+test('zoomModalWidth follows the terminal between the floor and the cap', () => {
+  assert.equal(zoomModalWidth(80), 76, 'an 80-col terminal gets a 76-col modal, not 104');
+  assert.equal(zoomModalWidth(108), 104);
+  assert.equal(zoomModalWidth(120), 116);
+  assert.equal(zoomModalWidth(224), 220, 'cap at ZOOM_MODAL_MAX');
+  assert.equal(zoomModalWidth(500), ZOOM_MODAL_MAX);
+  // The floor exists only for degenerate terminals — it is NOT a preferred
+  // width the way the old 104 was.
+  assert.equal(zoomModalWidth(20), ZOOM_MODAL_MIN);
+  assert.equal(zoomModalWidth(0), ZOOM_MODAL_MIN);
+  assert.ok(ZOOM_MODAL_MIN < 104, 'the 104 floor was the R3 defect');
+});
+
+test('zoomBodyDims.cols === zoomInnerWidth(zoomModalWidth) — one helper, no drift', () => {
+  for (const termCols of [60, 80, 120, 180, 300]) {
+    assert.equal(zoomBodyDims(termCols, 50).cols, zoomInnerWidth(zoomModalWidth(termCols)));
     assert.equal(zoomBodyDims(termCols, 50).cols, zoomModalWidth(termCols) - ZOOM_CHROME_COLS);
   }
   assert.equal(ZOOM_CHROME_COLS, 6, 'border 2 + paddingX 2*2');
