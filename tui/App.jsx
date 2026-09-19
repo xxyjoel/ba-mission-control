@@ -56,7 +56,7 @@ import { isDebugKeysActive, setDebugKeysActive, clearDebugKeysLog, DEBUG_KEYS_PA
 import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPathFor } from './lib/projectMemory.js';
 import { isPluginEnabled } from './lib/plugins.js';
 import { listIssuesForCwd } from './lib/tasks.js';
-import { fmtClock, fmtDuration, fmtMoney } from './lib/format.js';
+import { fmtClock, fmtDuration, fmtMoney, humanize } from './lib/format.js';
 import { resolveKillTarget } from './lib/killTarget.js';
 
 // Permission modes claude CLI accepts. Source: `claude --help`.
@@ -122,6 +122,19 @@ const IDLE_TICK_MS = 3000;
 // the pre-resize copy in the scrollback. 250ms is below the threshold where a
 // deliberate resize feels unresponsive and well above a drag's event spacing.
 const VIEWPORT_SETTLE_MS = 250;
+
+// Height budget for the full-screen overlays (zoom, shell). The frame is:
+//   wrapper paddingY (2) + overlay body + FeedbackStrip (1 header +
+//   max(1, toasts)) + StatusBar (1)
+// so the body may take at most termRows - (3 + feedbackRows). 0408/I6+R2:
+// this used to be floored at 10 rows, which on a short terminal PUSHED the
+// frame past the last screen row — Ink cannot erase a frame taller than the
+// terminal, so the view tore and scrolled. Clamp instead: the body shrinks
+// to as little as 1 row, but the frame never exceeds the screen.
+export function overlayHeight(termRows, toastCount) {
+  const feedbackRows = 1 + Math.max(1, toastCount);
+  return Math.max(1, termRows - (3 + feedbackRows));
+}
 
 export default function App({ fleet, auth: initialAuth }) {
   const { exit } = useApp();
@@ -363,6 +376,10 @@ export default function App({ fleet, auth: initialAuth }) {
   const pushToast = (text, kind = 'info') => {
     const id = toastIdRef.current++;
     const expiresAt = Date.now() + (settings.toastDurationMs || 4000);
+    // 0408/S3+R5: toast text can carry session-derived content (agent names,
+    // error causes, api strings) — sanitize at push time so escape sequences
+    // never reach the terminal and the strip's one-row-per-toast budget holds.
+    text = humanize(String(text ?? ''));
     // Keep at most MAX_TOAST_ROWS alive — that number IS the height the grid
     // layout reserves for the strip (gridLayout.FEEDBACK_H). Letting more
     // through would render rows nothing budgeted for, which pushes the frame
@@ -957,14 +974,11 @@ export default function App({ fleet, auth: initialAuth }) {
         pushToast(`press K (or :kill ${armSlot}) again to confirm · or :kill! ${armSlot}`, 'warn');
         return null;
       }
-      case 'pause':
-      case 'resume': {
+      case 'pause': {
         const target = focusedAgent;
         if (!target || target.status === 'empty') { pushToast(`no live session focused`, 'warn'); return null; }
-        const a = fleet.agentById(target.id);
-        if (cmd === 'pause') a?.pause();
-        else a?.resume();
-        pushToast(`${cmd} slot ${target.slot}`, 'ok');
+        fleet.agentById(target.id)?.pause();
+        pushToast(`pause slot ${target.slot}`, 'ok');
         return null;
       }
       case 'note':
@@ -981,6 +995,13 @@ export default function App({ fleet, auth: initialAuth }) {
       case 'a': {
         const target = focusedAgent;
         if (!target || target.status === 'empty') { pushToast(`no live session focused`, 'warn'); return null; }
+        // 0408/I1: approve() sends a billed "yes, please continue" turn that
+        // authorises whatever claude last proposed. Only meaningful — and only
+        // safe — when the session is actually waiting on input.
+        if (target.status !== 'waiting') {
+          pushToast(`slot ${target.slot} is ${target.status} — approve only applies when waiting for input`, 'warn');
+          return null;
+        }
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         a.approve();
@@ -988,23 +1009,32 @@ export default function App({ fleet, auth: initialAuth }) {
         return null;
       }
       case 'resume': {
-        // Selective restore — supports 0 args (use focused slot),
-        // 1 arg (single slot), or 2+ args / comma-separated list
-        // (multi-restore). Distinct from `:resume-all` (whole bySlot
-        // map) and `:history` (view-only reference list).
+        // 0408/I3: this file used to carry TWO `case 'resume':` labels — the
+        // first (a SIGCONT on the focused session) always won and this
+        // selective-restore block was unreachable. One label now routes on the
+        // argument:
+        //   :resume             — SIGCONT the focused live session (the verb
+        //                         paired with :pause); with no live focus,
+        //                         restore the focused slot's saved record.
+        //   :resume <slot ...>  — selective restore of saved sessions (single
+        //                         slot, several, or a comma-separated list).
+        // Distinct from `:resume-all` (whole open-set) and `:history`
+        // (view-only reference list).
         const tokens = (arg || '')
           .split(/[\s,]+/)
           .map(s => parseInt(s, 10))
           .filter(n => n >= 1 && n <= 10);
         if (tokens.length === 0) {
-          // No args / unparseable — fall back to single-restore on focused slot.
+          // Bare verb: un-pause the focused live session…
+          if (focusedAgent && focusedAgent.status !== 'empty') {
+            fleet.agentById(focusedAgent.id)?.resume();
+            pushToast(`resume slot ${focusedAgent.slot}`, 'ok');
+            return null;
+          }
+          // …or, with nothing live in focus, restore the focused slot.
           const slot = focusedSlot;
           const rec = getResumeRecord(slot);
           if (!rec) { pushToast(`no saved session for slot ${slot}`, 'warn'); return null; }
-          if (agents.find(a => a.slot === slot && a.status !== 'empty')) {
-            pushToast(`slot ${slot} is in use — kill first`, 'warn');
-            return null;
-          }
           resumeSession(slot, rec);
           return null;
         }
@@ -1579,7 +1609,14 @@ export default function App({ fleet, auth: initialAuth }) {
     if (input === 'p' || input === 'P') {
       if (focusedAgent && focusedAgent.status !== 'empty') {
         const a = fleet.agentById(focusedAgent.id);
-        a && a.pause();
+        if (a) {
+          a.pause();
+          // 0408/I1: pause used to be silent — a stray keystroke SIGSTOPped a
+          // session with no feedback at all. Say what just happened.
+          pushToast(`paused slot ${focusedAgent.slot} · r to resume`, 'ok');
+        }
+      } else {
+        pushToast(`no live session focused`, 'warn');
       }
       return;
     }
@@ -1590,7 +1627,11 @@ export default function App({ fleet, auth: initialAuth }) {
       }
       return;
     }
-    if (input === 'k' || input === 'K') {
+    // 0408/I1: kill arms on UPPERCASE K only. Lowercase 'k' is vim-up; when
+    // that nav is a no-op (top row / single card) it falls through to here,
+    // and with 'k' in the chord a doubled up-press armed AND killed a
+    // session. Lowercase 'k' is now a plain no-op outside navigation.
+    if (input === 'K') {
       if (!focusedAgent || focusedAgent.status === 'empty') {
         pushToast('no live session focused — arrow keys to pick one', 'warn');
         return;
@@ -1620,11 +1661,19 @@ export default function App({ fleet, auth: initialAuth }) {
         }
       }, KILL_ARM_MS);
       pendingKillRef.current = { id, slot, timer };
-      pushToast(`press K again to kill slot ${slot} · cancels in 3s`, 'warn');
+      pushToast(`press K (shift+k) again to kill slot ${slot} · cancels in 3s`, 'warn');
       return;
     }
     if (input === 'a' || input === 'A') {
       if (focusedAgent && focusedAgent.status !== 'empty') {
+        // 0408/I1: approve() sends a billed "yes, please continue" turn that
+        // authorises claude's last proposal — gate it on the session actually
+        // waiting for input, so a stray 'a' (dictation, muscle memory) on a
+        // working/idle session cannot silently green-light anything.
+        if (focusedAgent.status !== 'waiting') {
+          pushToast(`slot ${focusedAgent.slot} is ${focusedAgent.status} — approve only applies when waiting for input`, 'warn');
+          return;
+        }
         const a = fleet.agentById(focusedAgent.id);
         if (a) { a.approve(); pushToast(`approve → slot ${focusedAgent.slot}`, 'ok'); }
       } else {
@@ -1881,7 +1930,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'help') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}><Help onClose={() => setModal(null)} theme={theme} width={modalWidth(64, 110)} view={helpView} /></Box>
+        <Box flexShrink={0} paddingX={2} paddingY={1}><Help onClose={() => setModal(null)} theme={theme} width={modalWidth(64, 110)} view={helpView} /></Box>
         <Box flexGrow={1} />
         {feedbackStrip}
         {renderStatusBar('normal')}
@@ -1892,7 +1941,7 @@ export default function App({ fleet, auth: initialAuth }) {
     const liveCount = agents.filter(a => a.status !== 'empty').length;
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
           <QuitConfirm onCancel={() => setModal(null)} onQuit={(mode) => setQuitMode(mode)} theme={theme} agentCount={liveCount} />
         </Box>
         <Box flexGrow={1} />
@@ -1904,7 +1953,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'bcast') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}><Broadcast agents={agents} onSend={sendBroadcast} onClose={() => setModal(null)} theme={theme} width={modalWidth(84, 160)} /></Box>
+        <Box flexShrink={0} paddingX={2} paddingY={1}><Broadcast agents={agents} onSend={sendBroadcast} onClose={() => setModal(null)} theme={theme} width={modalWidth(84, 160)} confirm={settings.broadcastConfirm !== false} rows={termRows} /></Box>
         <Box flexGrow={1} />
         {feedbackStrip}
         {renderStatusBar('broadcast')}
@@ -1914,7 +1963,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'dash') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
           <Dashboard
             agents={agents}
             threshold={threshold}
@@ -1938,7 +1987,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'new' && newSlot) {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
           <NewSession
             slot={newSlot}
             repos={repos}
@@ -1958,7 +2007,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'settings') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}><Settings settings={settings} setSettings={setSettingsState} onClose={() => setModal(null)} theme={theme} width={modalWidth(92, 140)} /></Box>
+        <Box flexShrink={0} paddingX={2} paddingY={1}><Settings settings={settings} setSettings={setSettingsState} onClose={() => setModal(null)} theme={theme} width={modalWidth(92, 140)} rows={termRows} /></Box>
         <Box flexGrow={1} />
         {feedbackStrip}
         {renderStatusBar('command')}
@@ -1968,7 +2017,7 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'repoPicker') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
           <RepoPicker
             current={settings.repoParents}
             onPick={(absPath) => {
@@ -1979,6 +2028,7 @@ export default function App({ fleet, auth: initialAuth }) {
             onClose={() => setModal(null)}
             theme={theme}
             width={modalWidth(84, 160)}
+            rows={termRows}
           />
         </Box>
         <Box flexGrow={1} />
@@ -2000,15 +2050,16 @@ export default function App({ fleet, auth: initialAuth }) {
     // messages can't push the zoom modal past the screen and clip claude's
     // bottom rows — where claude's own Shift+Tab MODE SELECTOR renders. (Bug:
     // the selector "disappeared from view" whenever feedback was showing.)
-    const feedbackRows = 1 + Math.max(1, toasts.length);
-    const zoomHeight = Math.max(10, termRows - (3 + feedbackRows));
+    // 0408: was floored at 10 rows, which on a short terminal pushed the frame
+    // past the last screen row. overlayHeight clamps to what actually fits.
+    const zoomHeight = overlayHeight(termRows, toasts.length);
     // 0404: zoomHeight shrinks when toasts arrive, but the PTY does NOT follow
     // it — a resize duplicates claude's frame in the emulator. PtyPane renders
     // the bottom slice of the (taller) emulator instead. The width comes from
     // the same helper as the fleet viewport so the two cannot drift.
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
           <Zoom
             agent={zoomedAgent}
             threshold={threshold}
@@ -2037,11 +2088,12 @@ export default function App({ fleet, auth: initialAuth }) {
     // last screen row. Same undercount the zoom path had (0362), same
     // consequence as the fleet view's: Ink cannot erase a frame taller than the
     // terminal, so the screen tears and scrolls. Mirror zoom's math exactly.
-    const feedbackRows = 1 + Math.max(1, toasts.length);
-    const shellHeight = Math.max(10, termRows - (3 + feedbackRows));
+    // 0408: same clamp as zoom — the old Math.max(10, …) floor could exceed
+    // the terminal height. overlayHeight never lets the frame past the last row.
+    const shellHeight = overlayHeight(termRows, toasts.length);
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box paddingX={2} paddingY={1}>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
           <ShellOverlay
             onClose={() => setModal(null)}
             theme={theme}
@@ -2058,7 +2110,7 @@ export default function App({ fleet, auth: initialAuth }) {
 
   return (
     <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-      <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} />
+      <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} version={versionLine()} />
       <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} />
 
       {/* Grid of cards — empty slots are hidden; live cards autosize to

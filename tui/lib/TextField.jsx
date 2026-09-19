@@ -73,6 +73,28 @@ function moveUp(value, cursor) {
   const prevLen = lastNL - prevStart;
   return prevStart + Math.min(col, prevLen);
 }
+// ── Code-point stepping (0408/I7) ────────────────────────────
+// The buffer is a UTF-16 string, so an emoji (or any astral-plane char) is
+// TWO code units. Cursor math that steps by one unit splits the surrogate
+// pair: backspace after "a😀" left "a\ud83d", and ←-then-type inserted inside
+// the pair. All motion/edit below steps by CODE POINT instead.
+const isHighSurrogate = (c) => c >= '\uD800' && c <= '\uDBFF';
+const isLowSurrogate  = (c) => c >= '\uDC00' && c <= '\uDFFF';
+// Index of the code-point boundary at or before i (never lands between a pair).
+function snapToBoundary(s, i) {
+  return (i > 0 && i < s.length && isLowSurrogate(s[i]) && isHighSurrogate(s[i - 1])) ? i - 1 : i;
+}
+// One code point left of i (0 at the start).
+function prevCodePoint(s, i) {
+  if (i <= 0) return 0;
+  return (i >= 2 && isLowSurrogate(s[i - 1]) && isHighSurrogate(s[i - 2])) ? i - 2 : i - 1;
+}
+// One code point right of i (length at the end).
+function nextCodePoint(s, i) {
+  if (i >= s.length) return s.length;
+  return (isHighSurrogate(s[i]) && i + 1 < s.length && isLowSurrogate(s[i + 1])) ? i + 2 : i + 1;
+}
+
 // Move cursor down one visual line; null when no next line.
 function moveDown(value, cursor) {
   const nextNL = value.indexOf('\n', cursor);
@@ -95,6 +117,12 @@ export default function TextField({
   color,
   caretColor,
   width,
+  // 0408/I6: optional hard cap on rendered rows. A multi-line paste used to
+  // render every line, blowing the host modal's height budget (at 80×24 Ink
+  // then shrank the column and every other line vanished). With maxRows set,
+  // the field renders a fixed-height window of at most maxRows lines that
+  // follows the caret, clipped with overflow=hidden.
+  maxRows,
 }) {
   const [blink, setBlink] = useState(true);
   useEffect(() => {
@@ -154,11 +182,14 @@ export default function TextField({
   };
 
   // Cursor-only motion. Writes the ref as well as the state so a motion and an
-  // edit inside the same burst compose instead of fighting.
+  // edit inside the same burst compose instead of fighting. Snapped to a
+  // code-point boundary so vertical motion / word jumps / Home-End can never
+  // park the cursor between surrogate halves (0408/I7).
   const setCursor = (next) => {
     const clamped = Math.min(Math.max(0, next), liveRef.current.length);
-    cursorRef.current = clamped;
-    setCursorPos(clamped);
+    const snapped = snapToBoundary(liveRef.current, clamped);
+    cursorRef.current = snapped;
+    setCursorPos(snapped);
   };
 
   const escTimerRef = useRef(null);
@@ -222,11 +253,11 @@ export default function TextField({
       return;
     }
     if (key.leftArrow) {
-      setCursor(Math.max(0, pos - 1));
+      setCursor(prevCodePoint(cur, pos));
       return;
     }
     if (key.rightArrow) {
-      setCursor(Math.min(cur.length, pos + 1));
+      setCursor(nextCodePoint(cur, pos));
       return;
     }
     // Home → Ctrl+A (readline). The raw Home-key escape sequence
@@ -272,7 +303,10 @@ export default function TextField({
     // is tracked in audit/IMPROVEMENTS.md (terminal-specific follow-up).
     if (key.backspace || key.delete) {
       if (pos === 0) return;
-      commit(cur.slice(0, pos - 1) + cur.slice(pos), pos - 1);
+      // Delete one CODE POINT before the cursor — an emoji goes away whole
+      // instead of leaving a lone surrogate half (0408/I7).
+      const np = prevCodePoint(cur, pos);
+      commit(cur.slice(0, np) + cur.slice(pos), np);
       return;
     }
 
@@ -302,7 +336,10 @@ export default function TextField({
     if (input && input.length > 0) {
       const text = normalizeTypedText(input, { allowNewlines: true });
       if (!text) return;
-      commit(cur.slice(0, pos) + text + cur.slice(pos), pos + text.length);
+      // Snap the splice point to a code-point boundary so typed text can never
+      // land between an emoji's surrogate halves (0408/I7).
+      const at = snapToBoundary(cur, pos);
+      commit(cur.slice(0, at) + text + cur.slice(at), at + text.length);
     }
   }, { isActive: focus });
 
@@ -319,15 +356,38 @@ export default function TextField({
   const afterCursor = source.slice(cursorForRender);
   const beforeLines = beforeCursor.split('\n');
   const afterLines = afterCursor.split('\n');
-  const above = beforeLines.slice(0, -1);
+  let above = beforeLines.slice(0, -1);
   const beforeTail = beforeLines[beforeLines.length - 1] ?? '';
   const afterHead = afterLines[0] ?? '';
-  const below = afterLines.slice(1);
+  let below = afterLines.slice(1);
+
+  // 0408/I6: window the rows around the caret when a cap is set. The caret
+  // row always stays visible; rows scroll off the top (and bottom) instead of
+  // growing the field past its budget. When capped, sibling rows truncate
+  // rather than wrap so one logical line can never cost two screen rows.
+  const cap = Number.isFinite(maxRows) && maxRows > 0 ? Math.floor(maxRows) : null;
+  const totalRows = above.length + 1 + below.length;
+  if (cap && totalRows > cap) {
+    const caretRow = above.length;
+    // Window start: keep the caret row inside [start, start+cap).
+    const start = Math.min(Math.max(0, caretRow - cap + 1), totalRows - cap);
+    const end = start + cap;
+    above = above.slice(start);                      // rows before the caret row
+    below = below.slice(0, Math.max(0, end - caretRow - 1)); // rows after it
+  }
+  const sideWrap = cap ? 'truncate' : 'wrap';
 
   return (
-    <Box width={width} flexGrow={width ? 0 : 1} flexDirection="column">
+    <Box
+      width={width}
+      flexGrow={width ? 0 : 1}
+      flexShrink={cap ? 0 : undefined}
+      flexDirection="column"
+      height={cap ? Math.min(totalRows, cap) : undefined}
+      overflow={cap ? 'hidden' : undefined}
+    >
       {above.map((line, i) => (
-        <Text key={`a${i}`} color={valueColor} wrap="wrap">{line || ' '}</Text>
+        <Text key={`a${i}`} color={valueColor} wrap={sideWrap}>{line || ' '}</Text>
       ))}
       <Text color={valueColor} wrap="truncate-start">
         {beforeTail}
@@ -335,7 +395,7 @@ export default function TextField({
         {afterHead}
       </Text>
       {below.map((line, i) => (
-        <Text key={`b${i}`} color={valueColor} wrap="wrap">{line || ' '}</Text>
+        <Text key={`b${i}`} color={valueColor} wrap={sideWrap}>{line || ' '}</Text>
       ))}
     </Box>
   );

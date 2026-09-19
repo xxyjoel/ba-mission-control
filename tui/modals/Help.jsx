@@ -28,8 +28,8 @@ const SECTIONS = [
     ['In NewSession · cycle model', '← →'],
     ['Resume saved session', ':resume <slot>'],
     ['Pause / Resume', 'p / r'],
-    ['Kill (press K twice · 3s arm)', 'K K   or  :kill!'],
-    ['Approve pending action', 'a'],
+    ['Kill (uppercase K twice · 3s arm)', 'K K   or  :kill!'],
+    ['Approve pending action (only while waiting)', 'a'],
     ['Cycle perm (plan → auto → acceptEdits)', 'shift+tab'],
   ]},
   { title: 'ZOOM (focused session)', views: ['zoom'], rows: [
@@ -40,12 +40,11 @@ const SECTIONS = [
     ['Show / hide tool events', 'ctrl+k'],
     ['→ forwarded to claude', 'esc · ctrl+t · ctrl+s · shift+tab'],
   ]},
-  { title: 'SLASH COMMANDS (in zoom composer)', views: ['zoom'], rows: [
-    ['/help · /cost · /usage', 'show info'],
-    ['/perm <mode>', 'change session perm'],
-    ['/note <text>', 'local annotation'],
-    ['/approve · /pause · /resume', 'session actions'],
-    ['/kill · /quit', 'terminate · close'],
+  // 0408/I9: the "SLASH COMMANDS (in zoom composer)" section is gone — zoom
+  // hands the body to a real claude PTY now, so slash commands typed there
+  // are claude's own (/compact, /model, …), not an mc-side catalog.
+  { title: 'ZOOM SLASH COMMANDS', views: ['zoom'], rows: [
+    ['Typed in zoom, slash commands go to claude itself', '/compact · /model · …'],
   ]},
   { title: 'COMMANDS', rows: [
     ['Open broadcast modal', 'b'],
@@ -62,8 +61,8 @@ const SECTIONS = [
     [':goto <slot>', 'focus slot 1..N (for caps > 10)'],
     [':perm <mode>', "change focused session's mode (live)"],
     [':perm default <mode>', 'change fleet default for new launches'],
-    [':kill [slot] · :pause · :resume', 'agent actions'],
-    [':resume [slot ...]', 'restore one or many (e.g. :resume 1 3 5)'],
+    [':kill [slot] · :pause · :resume', 'agent actions (bare :resume = SIGCONT focused)'],
+    [':resume <slot ...>', 'restore one or many saved (e.g. :resume 1 3 5)'],
     [':resume-all', 'restart the sessions open at last close'],
     [':history [n]', 'VIEW-ONLY last N sessions (reference; not restorable)'],
     [':sessions  /  :forget <slot>', 'manage saved'],

@@ -36,8 +36,16 @@ function contextLines({ auth, agents, usage }) {
 //   :feedback         → "💬 feedback"
 //   :request          → "📨 customer request"
 //   custom            → "📌 <kind>"
-export async function postSlack({ webhook, kind = 'feedback', text, context = {} }) {
+// `fetchImpl` and `timeoutMs` are injection seams for tests — production
+// callers pass neither and get the global fetch with a 10s cap.
+export async function postSlack({ webhook, kind = 'feedback', text, context = {}, fetchImpl, timeoutMs = 10000 }) {
   if (!webhook) return { ok: false, error: 'no slack webhook configured (set with :slack <url>)' };
+  // 0408/S6: re-validate HERE, not only in the `:slack` verb — settings.json
+  // is user-editable on disk, so the value can be anything by the time it
+  // reaches this fetch. Refuse any URL outside Slack's webhook origin.
+  if (typeof webhook !== 'string' || !webhook.startsWith('https://hooks.slack.com/')) {
+    return { ok: false, error: 'webhook must start with https://hooks.slack.com/ — not sent' };
+  }
   if (!text || !text.trim()) return { ok: false, error: 'empty message' };
 
   const title = kind === 'feedback'        ? '💬 *Mission Control · feedback*'
@@ -53,10 +61,16 @@ export async function postSlack({ webhook, kind = 'feedback', text, context = {}
   ].join('\n');
 
   try {
-    const res = await fetch(webhook, {
+    // 0408/S6: redirect:'error' — a webhook must never be followed off the
+    // validated origin; AbortSignal.timeout — a hung POST must not wedge the
+    // caller's toast flow forever.
+    const doFetch = fetchImpl || fetch;
+    const res = await doFetch(webhook, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: body }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');

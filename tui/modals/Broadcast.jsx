@@ -9,25 +9,45 @@
 //   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 //
 // Per-agent target chips: TAB cycles which one is focused; SPACE toggles its
-// inclusion. `a` toggles all. ↵ commits with the typed text (when
-// `broadcastConfirm` is on, requires a confirmed state; v1 just sends on ↵).
+// inclusion. `a` toggles all. ↵ commits with the typed text. 0408/I5: when
+// `confirm` is on (settings.broadcastConfirm, on by default), the first ↵
+// arms a "send to N sessions? ↵ again to confirm" line and only the second ↵
+// sends; esc cancels (closes the modal, nothing sent). Editing the text or
+// the target set disarms, so the confirmed N can never go stale.
 
-import React, { useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import React, { useState, useRef } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
 import TextField from '../lib/TextField.jsx';
 
-export default function Broadcast({ agents, onSend, onClose, theme, width = 84 }) {
+export default function Broadcast({ agents, onSend, onClose, theme, width = 84, confirm = true, rows }) {
+  const { stdout } = useStdout();
+  // 0408/I6: cap the input field so a multi-line paste cannot grow the modal
+  // past the terminal. Chrome around the field ≈ 18 rows (App wrapper +
+  // strip + status bar + this modal's border/header/chips/footer).
+  const termRows = rows ?? (stdout?.rows || 24);
+  const inputMaxRows = Math.max(1, Math.min(8, termRows - 18));
   const live = agents.filter(a => a.status !== 'empty');
-  const [text, setText] = useState('');
+  const [text, _setText] = useState('');
   const [targets, setTargets] = useState(() => new Set(live.map(a => a.id)));
   const [chipIdx, setChipIdx] = useState(-1);          // -1 = focus in text field
   const inText = chipIdx === -1;
 
-  const toggle = (id) => setTargets(s => {
-    const n = new Set(s);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    return n;
-  });
+  // Two-step send arming. Ref + state pair: the ref keeps the read inside the
+  // same-tick submit handler synchronous (a state read would be stale when
+  // Enter follows Enter quickly), the state drives the confirm line's render.
+  const [armed, setArmed] = useState(false);
+  const armedRef = useRef(false);
+  const disarm = () => { armedRef.current = false; setArmed(false); };
+  const setText = (v) => { disarm(); _setText(v); };
+
+  const toggle = (id) => {
+    disarm();
+    setTargets(s => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
 
   useInput((input, key) => {
     if (key.escape) { onClose(); return; }
@@ -48,6 +68,7 @@ export default function Broadcast({ agents, onSend, onClose, theme, width = 84 }
       if (key.leftArrow)  setChipIdx(i => Math.max(0, i - 1));
       if (key.rightArrow) setChipIdx(i => Math.min(live.length - 1, i + 1));
       if (input === 'a' || input === 'A') {
+        disarm();
         const allOn = targets.size === live.length;
         setTargets(allOn ? new Set() : new Set(live.map(a => a.id)));
         return;
@@ -58,6 +79,12 @@ export default function Broadcast({ agents, onSend, onClose, theme, width = 84 }
   const send = () => {
     const t = text.trim();
     if (!t || targets.size === 0) return;
+    // 0408/I5: with confirm on, the first ↵ only arms; the second sends.
+    if (confirm && !armedRef.current) {
+      armedRef.current = true;
+      setArmed(true);
+      return;
+    }
     onSend(t, [...targets]);
   };
 
@@ -107,13 +134,20 @@ export default function Broadcast({ agents, onSend, onClose, theme, width = 84 }
           focus={inText}
           color={theme.fg}
           caretColor={theme.accent}
+          maxRows={inputMaxRows}
           placeholder='"commit and push; include progress notes" — or — "update CLAUDE.md to require import sorting"'
         />
       </Box>
       <Box marginTop={1}>
-        <Text color={theme.dim}>
-          <Text color={theme.accent}>↵</Text> send to {targets.size}  ·  <Text color={theme.accent}>tab</Text> chips  ·  <Text color={theme.accent}>esc</Text> cancel
-        </Text>
+        {armed ? (
+          <Text color={theme.yellow} wrap="truncate">
+            send to {targets.size} session{targets.size === 1 ? '' : 's'}? <Text color={theme.accent}>↵</Text> again to confirm  ·  <Text color={theme.accent}>esc</Text> cancel
+          </Text>
+        ) : (
+          <Text color={theme.dim}>
+            <Text color={theme.accent}>↵</Text> send to {targets.size}{confirm ? ' (asks to confirm)' : ''}  ·  <Text color={theme.accent}>tab</Text> chips  ·  <Text color={theme.accent}>esc</Text> cancel
+          </Text>
+        )}
       </Box>
     </Box>
   );

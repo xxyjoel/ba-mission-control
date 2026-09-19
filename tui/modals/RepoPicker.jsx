@@ -14,13 +14,13 @@
 //   esc        cancel
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, basename } from 'node:path';
 
 const HOME = homedir();
-const VIEW = 12;                          // visible rows in the dir list
+const VIEW_MAX = 12;                      // most visible rows in the dir list
 const SKIP = new Set(['node_modules', 'dist', 'build']);
 
 function tildify(p) {
@@ -29,7 +29,14 @@ function tildify(p) {
   return p;
 }
 
-export default function RepoPicker({ start, current = [], onPick, onClose, theme, width = 84 }) {
+export default function RepoPicker({ start, current = [], onPick, onClose, theme, width = 84, rows: termRowsProp }) {
+  const { stdout } = useStdout();
+  // 0408/I6: the dir list was a fixed 12 rows; on a 24-row terminal the modal
+  // outgrew the screen and Ink dropped rows. Size the list to what actually
+  // fits: chrome outside it ≈ 17 rows (App wrapper + strip + status bar +
+  // border/padding/header/paths/indicators/footer). `rows` is a test seam.
+  const termRows = termRowsProp ?? (stdout?.rows || 24);
+  const VIEW = Math.max(3, Math.min(VIEW_MAX, termRows - 17));
   const [cwd, setCwd] = useState(() => start || HOME);
   const [entries, setEntries] = useState([]);  // child directory names
   const [idx, setIdx] = useState(0);
@@ -103,7 +110,7 @@ export default function RepoPicker({ start, current = [], onPick, onClose, theme
   useEffect(() => {
     if (idx < scrollTop) setScrollTop(idx);
     else if (idx >= scrollTop + VIEW) setScrollTop(idx - VIEW + 1);
-  }, [idx]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [idx, VIEW]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hiddenAbove = scrollTop;
   const hiddenBelow = Math.max(0, rows.length - scrollTop - VIEW);
@@ -137,7 +144,7 @@ export default function RepoPicker({ start, current = [], onPick, onClose, theme
       </Box>
 
       {/* Directory list — fixed viewport with hidden-count indicators. */}
-      <Box flexDirection="column" marginY={1} height={VIEW + 2}>
+      <Box flexDirection="column" marginY={1} height={VIEW + 2} overflow="hidden" flexShrink={0}>
         <Box>
           <Text color={theme.faint}>{hiddenAbove > 0 ? `  ▲ ${hiddenAbove} more above` : '  '}</Text>
         </Box>
@@ -173,7 +180,7 @@ export default function RepoPicker({ start, current = [], onPick, onClose, theme
       </Box>
 
       <Box>
-        <Text color={theme.dim}>
+        <Text color={theme.dim} wrap="truncate">
           <Text color={theme.accent}>↑↓</Text> nav  ·  <Text color={theme.accent}>→</Text> enter dir  ·  <Text color={theme.accent}>←</Text> up  ·  <Text color={theme.accent}>↵</Text> pick folder  ·  <Text color={theme.accent}>.</Text> pick current  ·  <Text color={theme.accent}>esc</Text> cancel
         </Text>
       </Box>

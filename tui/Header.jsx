@@ -20,7 +20,10 @@ function Seg({ children, theme, last }) {
   );
 }
 
-export default function Header({ agents, threshold, nowStr, sessionStr, theme, auth, version = 'v0.2.0' }) {
+// 0408/I8: no hard-coded version default — it lied ('v0.2.0' on a 1.1.x
+// build). App passes version={versionLine()}; with nothing passed we show
+// nothing rather than a stale number.
+export default function Header({ agents, threshold, nowStr, sessionStr, theme, auth, version = '' }) {
   const live = agents.filter(a => a.status !== 'empty');
   const working = live.filter(a => a.status === 'working').length;
   const waiting = live.filter(a => a.status === 'waiting').length;

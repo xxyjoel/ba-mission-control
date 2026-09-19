@@ -316,8 +316,8 @@ no automatic stage-bound summary today.
 | `D` | Fleet dashboard — sortable one-row-per-slot table for at-scale triage |
 | `n` / `N` / `Ctrl+N` | New session — appended below the last active card (fills a killed-slot hole only when there's no room to append) |
 | `P` / `R` | Pause (SIGSTOP) / Resume (SIGCONT) |
-| `K` | Kill — armed by first press (3s window); confirms on second `K`. `:kill <slot>` follows the same arm/confirm flow; `:kill! <slot>` bypasses. |
-| `A` | Approve — send a generic "continue" message to a focused session (useful when an agent stalls asking for confirmation) |
+| `K` | Kill — **uppercase only** (lowercase `k` stays vim-up and never kills); armed by first press (3s window); confirms on second `K`. `:kill <slot>` follows the same arm/confirm flow; `:kill! <slot>` bypasses. |
+| `A` | Approve — send a generic "continue" message to the focused session. Only accepted while the session is **waiting** for input (a warn toast explains otherwise) |
 | `Shift+Tab` | Cycle focused session's permission mode: `plan → auto → acceptEdits` |
 | `!` | Open shell overlay — a persistent `$SHELL` pane for `aws sso login`, `git`, `kubectl`, etc. |
 | `?` | Help |
@@ -339,7 +339,7 @@ running session still resumes the conversation.
 | Command | What it does |
 | --- | --- |
 | `:resume-all` | Restart the slots that were **open when mc last closed**. After a *save* quit each is rehydrated via `claude --resume` (conversation + totals restored); after any non-save exit each reopens **fresh** in its repo. The toast reports `resuming N · M fresh`. Killed/closed slots are excluded. On boot, a toast surfaces this if records exist. |
-| `:resume <slot> [slot ...]` | Restore **specific** slots — e.g. `:resume 1 3 5` or `:resume 1,3,5`. Falls back to the focused slot with no args. |
+| `:resume <slot> [slot ...]` | Restore **specific** slots — e.g. `:resume 1 3 5` or `:resume 1,3,5`. Bare `:resume` resumes (SIGCONT) the focused **live** session — the pair to `:pause` — or, when the focused slot is empty, restores that slot's saved record. |
 | `:history [n]` | **View-only** browse of the last N sessions for historical reference. Never bulk-restores (by design). |
 | `:sessions` (alias `:ls`) | List saved sessions (`bySlot`) for the current resumable set. |
 | `:forget <slot>` | Drop one slot's saved state. |
@@ -388,23 +388,12 @@ Zooming in, zooming out, a toast landing, and opening the stats or tasks panel
 therefore resize nothing; the zoom pane renders the bottom slice of the
 emulator instead, and `Ctrl+Y` scroll reaches whatever the window skipped.
 
-#### Slash commands (in zoom composer)
+#### Slash commands (in zoom)
 
-These are handled **client-side** — they don't round-trip to the `claude` subprocess (stream-json non-interactive mode doesn't parse slash commands). Everything except `/quit` routes through the same dispatcher that powers the `:cmd` command bar, so the two surfaces share their handler table.
-
-| Command | Effect |
-| --- | --- |
-| `/help` | Open the keymap reference |
-| `/cost` | Toast this session's running cost ($ session + $ week) |
-| `/usage` | Show plan-side rate-limit usage (5h + 7d) |
-| `/perm <mode>` | Change this session's permission mode |
-| `/note <text>` | Drop a local annotation in the chat log |
-| `/approve` | Send a generic "continue" reply (same as the `A` hotkey) |
-| `/pause` / `/resume` | SIGSTOP / SIGCONT this session |
-| `/kill` | Terminate this session (SIGTERM) |
-| `/quit` (or `/exit`) | Close the zoom view (same as `Ctrl+Q`) |
-
-A message that doesn't start with `/` is sent through to claude unchanged — slash dispatch only fires on leading-`/` inputs.
+The zoom body is a real `claude` PTY, so slash commands typed there are
+**claude's own** (`/compact`, `/model`, `/clear`, …) and are handled by claude
+itself. mc no longer intercepts a client-side slash catalog in zoom — the
+mc-side verbs live in the `:cmd` command bar (below), available from the grid.
 
 ### Shell overlay (`!`)
 
@@ -429,9 +418,9 @@ The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the h
 | `:model default <id>` | Set the fleet default model for new launches |
 | `:model refresh` | Programmatically probe the live model catalog — see [Model catalog](#model-catalog) |
 | `:kill [slot]` | Kill focused (or specified) session |
-| `:pause` / `:resume` | SIGSTOP / SIGCONT the focused session |
-| `:approve` (or `:a`) | Same as the `A` hotkey |
-| `:resume [slot]` | Rehydrate the saved session in this slot from disk via `claude --resume` |
+| `:pause` / `:resume` | SIGSTOP / SIGCONT the focused **live** session |
+| `:approve` (or `:a`) | Same as the `A` hotkey — only accepted while the session is **waiting** for input |
+| `:resume <slot ...>` | Rehydrate saved session(s) from disk via `claude --resume` (bare `:resume` with an empty focused slot restores that slot) |
 | `:sessions` | Show saved sessions (toast) |
 | `:forget <slot>` | Drop the saved session for a slot |
 | `:repos` | Open the folder picker to choose where repos are scanned. The chosen folder **replaces** the built-in defaults. `:repos clear` resets to defaults. |
