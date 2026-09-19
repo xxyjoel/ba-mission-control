@@ -41,7 +41,8 @@ async function main() {
   }
 
   // Ensure the parent directory exists (first run, or new machine).
-  mkdirSync(dirname(filePath), { recursive: true });
+  // 0700 (0408/S4): status files carry session/tool metadata — owner-only.
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
 
   const record = { ts: Date.now(), session_id, event };
   if (notification_type !== undefined) record.notification_type = notification_type;
@@ -55,7 +56,9 @@ async function main() {
   // 'working' while a permission box sat on screen (focus-duck).
   if (agent_id !== undefined || agent_type !== undefined) record.sub = true;
 
-  appendFileSync(filePath, JSON.stringify(record) + '\n', 'utf8');
+  // mode applies only when appendFileSync CREATES the file (0408/S4);
+  // existing files are tightened once at boot by tightenStateModes().
+  appendFileSync(filePath, JSON.stringify(record) + '\n', { encoding: 'utf8', mode: 0o600 });
 }
 
 main().catch(() => {}).finally(() => process.exit(0));

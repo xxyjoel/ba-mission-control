@@ -1784,7 +1784,10 @@ export default function App({ fleet, auth: initialAuth }) {
     }
     const agent = fleet.resume({
       slot, sessionId: rec.sessionId, cwd: rec.cwd, branch: rec.branch,
-      model: rec.model, name: rec.name, permissionMode,
+      // A /model switch made inside claude lands in resolvedModel; prefer it
+      // so a resume relaunches on the model the user actually chose. The
+      // friendly launch id stays the fallback for records without one.
+      model: rec.resolvedModel || rec.model, name: rec.name, permissionMode,
     });
     if (agent) {
       if (rec.tokensIn != null) agent.tokensIn = rec.tokensIn;

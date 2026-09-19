@@ -18,7 +18,7 @@ import { isSandboxed, getConfigDir } from './lib/configDir.js';
 import { loadSettings } from './lib/settings.js';
 import { zoomBodyDims } from './lib/zoomGeometry.js';
 import { syncFromSnapshot, setQuitMode, pruneSessions, setStoreReadOnly } from './lib/sessionStore.js';
-import { acquireInstanceLock, releaseInstanceLock } from './lib/instanceLock.js';
+import { acquireInstanceLock, releaseInstanceLock, tightenStateModes } from './lib/instanceLock.js';
 import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange, syncModelsFromApi } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
@@ -120,25 +120,34 @@ if ((!isSandboxed() || process.env.MC_SYNC_MODELS === '1') && bootSettings.syncM
 // surfaces as "posix_spawnp failed" the first time a PTY is spawned. Best-effort.
 try { fixNodePty(); } catch { /* never block boot */ }
 
-// 0365: session-store hygiene + single-writer guard, in that order, BEFORE
-// anything can read a resume record. Prune the drifted-store substrate
-// (out-of-range slots, duplicate-repo records), then claim the config dir —
-// a second live instance boots store-read-only so concurrent writers can't
-// clobber sessions.json (the slot-identity-crossover substrate).
+// 0408/S4: one-time boot pass over existing on-disk state — dirs to 0700,
+// files to 0600. New writes carry explicit modes; this tightens what older
+// versions already left at umask defaults (settings.json can hold the Slack
+// webhook; ~/.local/state/claude-mc holds whole transcripts).
 try {
-  const { dropped, deduped } = pruneSessions({ maxSlots: bootSettings.maxSlots });
-  if (dropped || deduped) dlog('store', 'prune', { dropped, deduped });
+  const tightened = tightenStateModes();
+  if (tightened.dirs || tightened.files) dlog('store', 'tighten-modes', tightened);
 } catch { /* hygiene must never block boot */ }
+
+// 0365/0408-F4: single-writer guard FIRST, then session-store hygiene —
+// acquiring the lock before pruneSessions means a second instance is already
+// read-only when prune would otherwise persist, so two concurrent boots can't
+// interleave prune writes on one sessions.json. (acquireInstanceLock arms
+// read-only mode itself on ok:false; every store's persist honours it.)
 const lock = acquireInstanceLock();
 if (!lock.ok) {
   setStoreReadOnly(true);
   // eslint-disable-next-line no-console
   console.error(
     `mc: another instance (pid ${lock.holderPid}) owns this config dir — `
-    + `session saving is DISABLED in this one. Close the other mc, or use `
-    + `MC_CONFIG_DIR for an isolated sandbox / MC_ALLOW_MULTI=1 to override.`,
+    + `session/settings/cost saving is DISABLED in this one. Close the other `
+    + `mc, or use MC_CONFIG_DIR for an isolated sandbox / MC_ALLOW_MULTI=1 to override.`,
   );
 }
+try {
+  const { dropped, deduped } = pruneSessions({ maxSlots: bootSettings.maxSlots });
+  if (dropped || deduped) dlog('store', 'prune', { dropped, deduped });
+} catch { /* hygiene must never block boot */ }
 
 // 0404: fix every agent's PTY geometry to the zoom body size BEFORE the first
 // spawn. A claude that is resized later reprints its whole frame and leaves the
@@ -186,6 +195,7 @@ function persistOpenSet() {
   } catch {}
 }
 
+let shutdownStarted = false;
 const shutdown = () => {
   // Signal-driven exits (terminal close / cmd+W = SIGHUP, Ctrl-C, SIGTERM) are an
   // IMPLICIT quit, not a request to throw work away. Leave the persist mode at its
@@ -196,13 +206,28 @@ const shutdown = () => {
   // 'clear' in QuitConfirm before Ink tears down. (Previously this handler forced
   // 'clear' on every signal exit, so closing the terminal silently dropped every
   // session's sessionId — the "mc did not save my sessions" data loss.)
+  if (shutdownStarted) return;
+  shutdownStarted = true;
   persistOpenSet();          // capture live set BEFORE killing
   try { releaseInstanceLock(); } catch {}
   try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
   try { fleet.killAll(); } catch {}
   try { app.unmount(); } catch {}
-  process.exit(0);
+  // 0408/P5: escalate instead of exiting immediately. `process.exit(0)` right
+  // after killAll() gave a SIGTERM-ignoring claude (wedged on a permission
+  // prompt / daemon entanglement) no follow-up — it was reparented to launchd
+  // and kept running. Same shape as the clean-quit path below: give SIGTERM a
+  // short grace, then SIGKILL stragglers and exit. unref() keeps the timer
+  // from holding the loop open — when every child dies promptly the loop
+  // drains and the synchronous 'exit' net (which also hardKills) fires at
+  // once; a wedged child's open PTY handle keeps the loop alive until the
+  // reaper lands the SIGKILL.
+  const reaper = setTimeout(() => {
+    try { fleet.hardKillAll(); } catch {}
+    process.exit(0);
+  }, 1500);
+  reaper.unref?.();
 };
 process.on('SIGINT',  shutdown);
 process.on('SIGTERM', shutdown);
@@ -268,6 +293,10 @@ process.on('exit', () => {
   persistOpenSet();          // safety net for paths that bypass shutdown()
   try { killShellSession(); } catch {}
   try { fleet.killAll(); } catch {}
+  // 0408/P5: 'exit' is synchronous — no timer can run after it — so escalate
+  // to SIGKILL immediately. A child that ignores SIGTERM must not outlive mc
+  // on ANY exit path (crash, exception, early loop drain).
+  try { fleet.hardKillAll(); } catch {}
   // Restore the normal terminal buffer on every exit path (clean quit,
   // SIGINT, SIGTERM, uncaught exception). Skip if we never entered.
   if (altScreen) {

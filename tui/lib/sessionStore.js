@@ -25,9 +25,10 @@
 // v1 → v2 migration: add `history: []` on first read. Bumped silently —
 // older mc versions just ignore the new field.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, unlinkSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getConfigDir } from './configDir.js';
+import { isReadOnlyMode, setReadOnlyMode } from './instanceLock.js';
 
 const CONFIG_DIR  = getConfigDir();
 const STORE_FILE  = join(CONFIG_DIR, 'sessions.json');
@@ -42,6 +43,14 @@ function emptyStore() { return { version: 2, savedAt: 0, bySlot: {}, history: []
 // not wall-clock now). Keeps recent migration-era records resumable while aging
 // out ancient leftovers. Records that carry `live` ignore this entirely.
 const RESUME_RECENCY_MS = 120_000;
+
+// 0408/F5: the slots THIS process has observed live at least once. Only these
+// may ever be marked live:false by syncFromSnapshot — a stored slot this run
+// has never seen live is a dormant record from a previous run (not yet
+// resumed), and closing it because some OTHER slot went live wiped the
+// `:resume-all` set the moment one new session launched. Per-process by
+// design: a fresh boot must never close records it hasn't touched.
+const seenLiveSlots = new Set();
 
 // Quit mode governs what a persist writes. 'save' (the default, and what every
 // exit uses UNLESS the user explicitly asks to discard) records the FULL resumable
@@ -62,9 +71,11 @@ let quitMode = 'save';
 // config dir (instanceLock). This instance keeps full UI function but never
 // writes sessions.json, so concurrent instances can't clobber each other's
 // records (the drifted-store substrate behind the slot-identity crossover).
-let storeReadOnly = false;
-export function setStoreReadOnly(v) { storeReadOnly = !!v; }
-export function isStoreReadOnly() { return storeReadOnly; }
+// 0408/F4: the flag itself now lives in instanceLock.js so EVERY store
+// (costStore, settings, templateStore) shares the same gate; these exports
+// stay as thin delegates for existing callers.
+export function setStoreReadOnly(v) { setReadOnlyMode(v); }
+export function isStoreReadOnly() { return isReadOnlyMode(); }
 export function setQuitMode(mode) {
   quitMode = mode === 'save' ? 'save' : 'clear';
 }
@@ -141,7 +152,7 @@ export function loadSessions() {
 }
 
 function persist(store) {
-  if (storeReadOnly) return; // 0365: second instance must not touch the store
+  if (isReadOnlyMode()) return; // 0365: second instance must not touch the store
   // Atomic write pattern with .bak rotation. Steps:
   //   1. Ensure config dir exists
   //   2. Copy current main → .bak (so we have a rollback target if a
@@ -151,13 +162,13 @@ function persist(store) {
   // Step 2 is best-effort — if main doesn't exist or copy fails, we
   // proceed with the write rather than blocking persistence.
   try {
-    mkdirSync(dirname(STORE_FILE), { recursive: true });
+    mkdirSync(dirname(STORE_FILE), { recursive: true, mode: 0o700 });
     store.savedAt = Date.now();
     const payload = JSON.stringify(store, null, 2);
     if (existsSync(STORE_FILE)) {
-      try { copyFileSync(STORE_FILE, BACKUP_FILE); } catch { /* best-effort backup */ }
+      try { copyFileSync(STORE_FILE, BACKUP_FILE); chmodSync(BACKUP_FILE, 0o600); } catch { /* best-effort backup */ }
     }
-    writeFileSync(TMP_FILE, payload);
+    writeFileSync(TMP_FILE, payload, { mode: 0o600 });
     renameSync(TMP_FILE, STORE_FILE);
   } catch {
     // Persistence failed entirely — clean up any stray .tmp so the
@@ -190,6 +201,15 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
       cwd: a.cwd,
       branch: a.branch,
       model: a.model,
+      // 0408/M1: the model claude ACTUALLY resolved to (raw CLI id, e.g.
+      // "claude-fable-5-1" — set from the session's init/assistant events,
+      // including after a mid-session /model switch). Persisted so a resume
+      // relaunches on the model the session was really running, not the
+      // stale launch label. Only written when known — a resumed session has
+      // no resolution until its first event, and null must not clobber the
+      // last-known value carried on the previous record (the {...prev,
+      // ...rec} merge below keeps it when the key is absent here).
+      ...(a.resolvedModel ? { resolvedModel: a.resolvedModel } : {}),
       name: a.name,
       permissionMode: a.permissionMode || 'acceptEdits',
       lastSeen: Date.now(),
@@ -242,8 +262,9 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
     }
   }
   // Mark CLOSED slots so `:resume-all` skips them. A slot counts as closed
-  // when it is empty in a snapshot that still has at least one live session
-  // (a deliberate kill/close). We co-locate this `live` flag ON each bySlot
+  // ONLY when THIS process has previously observed it live and it is now
+  // empty in a snapshot that still has at least one live session (a
+  // deliberate kill/close). We co-locate this `live` flag ON each bySlot
   // record rather than tracking a separate `openSlots` array: a parallel array
   // silently desyncs from bySlot — e.g. a long-running process whose code
   // predates the array faithfully updates bySlot but never the array, leaving
@@ -251,15 +272,21 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
   // desync, and the recency window in listOpenResumeRecords backstops a flag
   // that was never cleared (crash before the final sync).
   //
-  // Guard: only mark closed when SOME slot is live. An all-empty snapshot is
+  // Guard 1: only mark closed when SOME slot is live. An all-empty snapshot is
   // boot / terminal-close (children all died at once), NOT a per-slot kill —
   // marking those closed would wipe the resume set.
+  // Guard 2 (0408/F5): only close slots in this process's seenLiveSlots set.
+  // Stored slots this run has NEVER seen live are yesterday's not-yet-resumed
+  // sessions — launching ONE new session used to mark every one of them
+  // live:false, leaving `:resume-all` nothing to restore.
   const liveSlots = new Set(
     agents.filter(a => a && a.status !== 'empty' && a.sessionId).map(a => a.slot),
   );
+  for (const slot of liveSlots) seenLiveSlots.add(slot);
   if (liveSlots.size > 0) {
     for (const slot of Object.keys(store.bySlot)) {
-      if (!liveSlots.has(Number(slot)) && store.bySlot[slot].live !== false) {
+      const n = Number(slot);
+      if (!liveSlots.has(n) && seenLiveSlots.has(n) && store.bySlot[slot].live !== false) {
         store.bySlot[slot] = { ...store.bySlot[slot], live: false };
         dirty = true;
       }

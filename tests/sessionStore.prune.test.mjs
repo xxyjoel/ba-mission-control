@@ -64,7 +64,10 @@ test('instance lock: second live holder → not ok; stale/dead holder → acquir
 
   // A LIVE foreign holder (use our own pid under a different identity guard:
   // simulate by writing pid 1 — launchd — which is always alive and never us).
-  writeFileSync(LOCK_FILE, JSON.stringify({ pid: 1, startedAt: 1 }));
+  // Since 0408/F4 the stamp is COMPARED to the pid's real start time (a stamp
+  // far older than the process start = recycled pid = stale), so the fixture
+  // must carry a plausible stamp: launchd started before "now", never after.
+  writeFileSync(LOCK_FILE, JSON.stringify({ pid: 1, startedAt: Date.now() }));
   const res = acquireInstanceLock();
   assert.equal(res.ok, false, 'live foreign holder blocks');
   assert.equal(res.holderPid, 1);

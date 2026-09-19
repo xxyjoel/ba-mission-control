@@ -4,9 +4,10 @@
 // restart. Schema matches Mission Control TUI.html so future menu additions
 // stay 1:1 with the design.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, unlinkSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getConfigDir } from './configDir.js';
+import { isReadOnlyMode } from './instanceLock.js';
 import { PLUGINS, applyPluginDefaults } from './plugins.js';
 // The Default-model cycler lists the LIVE catalog (static entries + models
 // discovered from the claude CLI probe). Passed as a function so it is
@@ -176,6 +177,83 @@ const MODEL_ID_MIGRATIONS = {
   'opus-4.1':   'opus-4.7',
 };
 
+// ── Read-time validation (0408/I4) ──────────────────────────────────────
+// settings.json is hand-editable, so every value read off disk is untrusted:
+// `"repoParents": "~/src"` crashed boot (`.join is not a function`),
+// `"toastDurationMs": "4000"` spun the toast timer into a warning loop,
+// `"tickRate": "fast"` made the tick interval NaN → a hot render loop.
+// Coerce and clamp EVERY known key against SETTINGS_SCHEMA + the type of its
+// default before the object reaches any consumer. Unknown keys pass through
+// untouched (forward compatibility).
+
+// Flat key → schema item map, built once. `computed` items are display-only.
+const SCHEMA_BY_KEY = (() => {
+  const map = {};
+  for (const section of SETTINGS_SCHEMA) {
+    for (const item of section.items || []) {
+      if (item.kind !== 'computed') map[item.key] = item;
+    }
+  }
+  return map;
+})();
+
+// Toggle coercion: any falsy value is OFF (`"syncModelsOnBoot": 0` or an
+// explicit null must not run boot discovery), the strings "true"/"false"
+// mean what they say. Only a MISSING value (undefined — the key was never
+// in the file, though the defaults-merge normally fills it first) falls
+// back to the default.
+function coerceToggle(v, def) {
+  if (typeof v === 'boolean') return v;
+  if (v === undefined) return !!def;
+  if (v === 'false') return false;
+  return !!v;
+}
+
+function coerceNumber(v, def, item) {
+  let n = Number(v);
+  if (!Number.isFinite(n)) n = def;
+  if (item) {
+    if (typeof item.min === 'number' && n < item.min) n = item.min;
+    if (typeof item.max === 'number' && n > item.max) n = item.max;
+  }
+  return n;
+}
+
+// Coerce one key. `def` is the authoritative default for the key; `item` is
+// its SETTINGS_SCHEMA entry when one exists.
+function coerceKey(v, def, item) {
+  // cycle: value must be one of the declared options. Function options
+  // (live model catalog) can't be enumerated safely at load — just require
+  // a string. Numeric options ("gridCols": "4") match by string equality.
+  if (item?.kind === 'cycle') {
+    const options = typeof item.options === 'function' ? null : item.options;
+    if (!options) return typeof v === 'string' && v ? v : def;
+    const hit = options.find(o => o === v || String(o) === String(v));
+    return hit !== undefined ? hit : def;
+  }
+  if (item?.kind === 'toggle' || typeof def === 'boolean') return coerceToggle(v, def);
+  if (item?.kind === 'number' || typeof def === 'number') return coerceNumber(v, def, item);
+  if (Array.isArray(def)) {
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.length > 0) : [...def];
+  }
+  if (typeof def === 'string') return typeof v === 'string' ? v : def;
+  return v;
+}
+
+// Validate a merged settings object in place. Exported for tests.
+export function sanitizeSettings(merged) {
+  for (const [key, def] of Object.entries(SETTINGS_DEFAULTS)) {
+    merged[key] = coerceKey(merged[key], def, SCHEMA_BY_KEY[key]);
+  }
+  // Plugin toggles live outside SETTINGS_DEFAULTS; their defaults come from
+  // the plugin declarations (applyPluginDefaults filled any missing keys
+  // before this runs, so only garbage values need coercing here).
+  for (const p of PLUGINS) {
+    merged[p.key] = coerceToggle(merged[p.key], p.default);
+  }
+  return merged;
+}
+
 // .bak rollback — see sessionStore.js for rationale. A corrupted
 // settings.json used to silently reset every preference to default,
 // which is the wrong thing to do when the prior write is on disk
@@ -189,7 +267,7 @@ function tryRead(file) {
     if (MODEL_ID_MIGRATIONS[merged.defaultModel]) {
       merged.defaultModel = MODEL_ID_MIGRATIONS[merged.defaultModel];
     }
-    return merged;
+    return sanitizeSettings(merged);
   } catch {
     return null;
   }
@@ -200,13 +278,14 @@ export function loadSettings() {
 }
 
 export function saveSettings(settings) {
+  if (isReadOnlyMode()) return; // 0408/F4: second instance must not clobber the shared file
   try {
-    mkdirSync(dirname(CONFIG_FILE), { recursive: true });
+    mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: 0o700 });
     const payload = JSON.stringify(settings, null, 2);
     if (existsSync(CONFIG_FILE)) {
-      try { copyFileSync(CONFIG_FILE, BACKUP_FILE); } catch { /* best-effort */ }
+      try { copyFileSync(CONFIG_FILE, BACKUP_FILE); chmodSync(BACKUP_FILE, 0o600); } catch { /* best-effort */ }
     }
-    writeFileSync(TMP_FILE, payload);
+    writeFileSync(TMP_FILE, payload, { mode: 0o600 });
     renameSync(TMP_FILE, CONFIG_FILE);
   } catch {
     try { if (existsSync(TMP_FILE)) unlinkSync(TMP_FILE); } catch {}

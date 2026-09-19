@@ -70,11 +70,14 @@ test('costStore: corrupted main file falls back to .bak', async (t) => {
   });
   // CostStore.update() auto-persists when dirty, so a single call
   // produces the main file. Two distinct stores ensure the .bak gets
-  // a chance to rotate.
+  // a chance to rotate. Each session is observed at $0 first — since
+  // 0408/F2 a first sight is a baseline (a restored total), not spend.
   const store1 = new CostStore();
+  store1.update([{ id: 'a1', status: 'idle', costSession: 0 }]);
   store1.update([{ id: 'a1', status: 'idle', costSession: 0.5 }]);
   assert.ok(existsSync(COSTS_PATH), 'main file must exist after first update');
   const store2 = new CostStore();
+  store2.update([{ id: 'a2', status: 'idle', costSession: 0 }]);
   store2.update([{ id: 'a2', status: 'idle', costSession: 1.5 }]);
   assert.ok(existsSync(COSTS_BAK), '.bak created on second update');
   // Corrupt main

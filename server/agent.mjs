@@ -38,10 +38,16 @@ const TRANSCRIPT_DIR = join(
 );
 const TRANSCRIPT_DISABLED = process.env.MC_NO_TRANSCRIPT === '1';
 
+// UUID guard (0408/S4) — mirrors statusFile.mjs / sessionFileTailer.mjs so a
+// tampered or garbage session id read off disk can't traverse outside the
+// transcript dir (e.g. "../../../x"). Every transcript path MUST pass this.
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Exported so the TUI's `:transcript` verb can tell the user exactly
 // where their session's persistent log lives. Pure path math; no I/O.
+// Returns null for anything that isn't a canonical UUID.
 export function transcriptPathFor(sessionId) {
-  if (!sessionId) return null;
+  if (typeof sessionId !== 'string' || !UUID_SHAPE.test(sessionId)) return null;
   return join(TRANSCRIPT_DIR, `${sessionId}.jsonl`);
 }
 export const TRANSCRIPT_BASE_DIR = TRANSCRIPT_DIR;
@@ -259,11 +265,13 @@ export class Agent extends EventEmitter {
     if (TRANSCRIPT_DISABLED) return;
     try {
       if (!this.transcriptStream) {
-        mkdirSync(TRANSCRIPT_DIR, { recursive: true });
-        this.transcriptStream = createWriteStream(
-          join(TRANSCRIPT_DIR, `${this.sessionId}.jsonl`),
-          { flags: 'a' },
-        );
+        // 0408/S4: transcriptPathFor applies the UUID guard — a non-UUID
+        // sessionId (fixture leakage, hand-edited store) must never be
+        // joined into a filesystem path. No path → no transcript.
+        const path = transcriptPathFor(this.sessionId);
+        if (!path) return;
+        mkdirSync(TRANSCRIPT_DIR, { recursive: true, mode: 0o700 });
+        this.transcriptStream = createWriteStream(path, { flags: 'a', mode: 0o600 });
         // Header record so a fresh `.jsonl` is self-describing if a user
         // greps a few of these and wants to know which slot is which.
         this.transcriptStream.write(JSON.stringify({

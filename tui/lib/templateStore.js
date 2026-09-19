@@ -26,6 +26,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getConfigDir } from './configDir.js';
+import { isReadOnlyMode } from './instanceLock.js';
 
 const CONFIG_DIR  = getConfigDir();
 const FILE        = join(CONFIG_DIR, 'templates.json');
@@ -87,9 +88,10 @@ const DEFAULTS = {
 };
 
 function persist(obj) {
+  if (isReadOnlyMode()) return; // 0408/F4: second instance must not clobber the shared file
   try {
-    mkdirSync(dirname(FILE), { recursive: true });
-    writeFileSync(FILE, JSON.stringify(obj, null, 2));
+    mkdirSync(dirname(FILE), { recursive: true, mode: 0o700 });
+    writeFileSync(FILE, JSON.stringify(obj, null, 2), { mode: 0o600 });
   } catch {
     // best-effort
   }

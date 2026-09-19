@@ -9,9 +9,11 @@ import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 import { isSandboxed } from './lib/configDir.js';
 import { isDebugKeysActive, subscribeDebugKeys } from './lib/debugKeys.js';
+import { isStoreReadOnly } from './lib/sessionStore.js';
 
 // Computed once at import time — the env var is fixed for the process.
 const SANDBOXED = isSandboxed();
+
 
 // React hook — re-renders the status bar whenever the runtime flag
 // flips so the REC chip appears/disappears immediately on :debug-keys.
@@ -46,6 +48,7 @@ function useBlink(enabled, intervalMs = 500) {
 }
 
 export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal', cmdBuffer = '', filterActive = '', theme }) {
+  const storeReadOnly = isStoreReadOnly();
   // When the user is typing in the command bar, override the mode chip so
   // the focus is unambiguous.
   const effectiveMode = cmdMode === 'filter'  ? 'filter'
@@ -69,6 +72,14 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
           little — which truncated the sandbox banner to "DEV ·" and the slot
           label to "[]". The trailing hints (truncated, and hidden entirely
           while a command is being typed) are what should absorb it. */}
+      {storeReadOnly && (
+        <Box flexShrink={0}>
+          <Text backgroundColor={theme.yellow || 'yellow'} color={theme.bg || 'black'} bold>
+            {' NOT SAVING '}
+          </Text>
+          <Text> </Text>
+        </Box>
+      )}
       {SANDBOXED && (
         <Box flexShrink={0}>
           <Text backgroundColor={theme.red || 'red'} color={theme.bg || 'black'} bold>

@@ -14,16 +14,30 @@
 //   {
 //     "currentWeek": "2026-W21",
 //     "weeks": { "2026-W21": 12.45, "2026-W20": 3.10 },
-//     "lastSeen": { "<agent.id>": 0.42 }   // memory of last costSession per agent
+//     "lastSeen": { "<sessionId>": 0.42 }  // memory of last costSession per session
 //   }
 //
 // `lastSeen` is intentionally NOT keyed by week — it tracks the
 // monotonic position of a still-live session, regardless of which week
 // the deltas land in.
+//
+// 0408/F2: `lastSeen` is keyed by SESSION id (stable across resumes), not
+// agent id (minted fresh per launch). A resumed session restores its saved
+// costSession total; under agent-id keying every resume made that restored
+// total look like brand-new spend and double-counted the week/day buckets.
+// Belt-and-braces: the FIRST sight of any session key is a baseline, never
+// a delta — so even a session whose lastSeen entry was gc'd (or a store
+// wiped between runs) can't re-count its restored total.
+//
+// 0408/F4: persist() merges the deltas accrued since the last write onto
+// whatever is on disk instead of blind-overwriting — two instances sharing
+// one config dir no longer last-writer-wins each other's spend — and a
+// read-only instance (instanceLock lost) never writes at all.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync, unlinkSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getConfigDir } from './configDir.js';
+import { isReadOnlyMode } from './instanceLock.js';
 
 const CONFIG_DIR  = getConfigDir();
 const STORE_FILE  = join(CONFIG_DIR, 'costs-week.json');
@@ -55,6 +69,11 @@ function emptyStore() {
 // — a corrupted costs-week.json used to silently zero out the user's
 // week-to-date spend, which is the wrong default when the data is
 // trivially recoverable from the prior write (audit #161).
+// Legacy `lastSeen` keys from the agent-id era ("s3-lkj4x2", "slot-3").
+// Agent ids are re-minted every launch, so these entries can never match a
+// live agent again — drop them at load (0408/F2 migration).
+const LEGACY_AGENT_ID_RX = /^(s\d+-|slot-\d+$)/;
+
 function tryRead(file) {
   try {
     if (!existsSync(file)) return null;
@@ -62,6 +81,9 @@ function tryRead(file) {
     if (!raw.weeks)    raw.weeks = {};
     if (!raw.days)     raw.days = {};
     if (!raw.lastSeen) raw.lastSeen = {};
+    for (const k of Object.keys(raw.lastSeen)) {
+      if (LEGACY_AGENT_ID_RX.test(k)) delete raw.lastSeen[k];
+    }
     if (!raw.currentWeek) raw.currentWeek = isoWeek();
     if (!raw.currentDay)  raw.currentDay  = isoDay();
     return raw;
@@ -74,17 +96,41 @@ function loadStore() {
   return tryRead(STORE_FILE) || tryRead(BACKUP_FILE) || emptyStore();
 }
 
-function persist(store) {
+// Fold the deltas accrued since the last successful write onto the CURRENT
+// on-disk buckets (another instance may have written since we loaded), then
+// write the merged result. Returns the merged store on success, null when
+// nothing was written (read-only mode or write failure) — the caller decides
+// whether to clear its pending deltas.
+function persist(store, pending = { weeks: {}, days: {} }) {
+  if (isReadOnlyMode()) return null; // 0408/F4: second instance never writes
   try {
-    mkdirSync(dirname(STORE_FILE), { recursive: true });
+    mkdirSync(dirname(STORE_FILE), { recursive: true, mode: 0o700 });
+    // Merge: for bucket keys that exist on disk, disk is the shared base and
+    // our unpersisted delta is added on top; keys only we know keep our
+    // in-memory value. lastSeen is ours (the seed-on-first-sight rule in
+    // update() protects any other instance whose entries this drops).
+    const disk = tryRead(STORE_FILE) || tryRead(BACKUP_FILE);
+    if (disk) {
+      for (const [name, mine] of [['weeks', store.weeks], ['days', store.days]]) {
+        for (const k of Object.keys(disk[name])) {
+          mine[k] = disk[name][k] + (pending[name]?.[k] || 0);
+        }
+      }
+    }
+    // Retention applies to the merged view too, so a merge can't resurrect
+    // pruned keys past the rolling window.
+    pruneOldest(store.weeks, WEEKS_KEEP);
+    pruneOldest(store.days, DAYS_KEEP);
     const payload = JSON.stringify(store, null, 2);
     if (existsSync(STORE_FILE)) {
-      try { copyFileSync(STORE_FILE, BACKUP_FILE); } catch { /* best-effort */ }
+      try { copyFileSync(STORE_FILE, BACKUP_FILE); chmodSync(BACKUP_FILE, 0o600); } catch { /* best-effort */ }
     }
-    writeFileSync(TMP_FILE, payload);
+    writeFileSync(TMP_FILE, payload, { mode: 0o600 });
     renameSync(TMP_FILE, STORE_FILE);
+    return store;
   } catch {
     try { if (existsSync(TMP_FILE)) unlinkSync(TMP_FILE); } catch {}
+    return null;
   }
 }
 
@@ -116,16 +162,33 @@ export class CostStore {
   constructor() {
     this.store = loadStore();
     this.dirty = false;
+    // Deltas applied to weeks/days since the last SUCCESSFUL persist. What
+    // persist() folds onto the current on-disk value for shared keys, so a
+    // concurrent instance's spend isn't overwritten (0408/F4).
+    this.pending = { weeks: {}, days: {} };
+  }
+
+  // The lastSeen key for one agent: the SESSION id when it has one (stable
+  // across relaunches / resumes — 0408/F2), the agent id as a fallback for
+  // mocks/tests that carry no session.
+  static seenKey(a) { return a.sessionId || a.id; }
+
+  #addDelta(bucket, key, delta) {
+    this.store[bucket][key] = (this.store[bucket][key] || 0) + delta;
+    this.pending[bucket][key] = (this.pending[bucket][key] || 0) + delta;
   }
 
   // Apply a snapshot's agents to the store. For each live agent:
-  // - delta = costSession - lastSeen[id]   (clamped at 0)
-  // - add delta to the current ISO week
-  // - update lastSeen[id]
-  // For each `empty` slot we leave lastSeen alone so a killed-then-relaunched
-  // session in the same slot starts fresh under a new id anyway.
+  // - delta = costSession - lastSeen[sessionId]   (clamped at 0)
+  // - add delta to the current ISO week + UTC day
+  // - update lastSeen[sessionId]
+  // The FIRST sight of a session key is always a BASELINE, never a delta: a
+  // resumed session restores its persisted costSession total, and counting
+  // that restored total as fresh spend double-counted the week on every
+  // resume (0408/F2). A genuinely fresh session is first observed at ~$0,
+  // so baselining loses nothing there.
   //
-  // Returns { weekCost } so the caller can stamp it onto every live agent.
+  // Returns { weekCost, dayCost } so the caller can render the fleet totals.
   update(agents) {
     const wk = isoWeek();
     const day = isoDay();
@@ -142,24 +205,31 @@ export class CostStore {
 
     for (const a of agents) {
       if (!a || a.status === 'empty') continue;
-      const id = a.id;
+      const key = CostStore.seenKey(a);
       const cur = Number(a.costSession || 0);
-      const last = Number(this.store.lastSeen[id] || 0);
+      if (!(key in this.store.lastSeen)) {
+        // First sight → baseline. Restored totals (resume) land here and are
+        // absorbed; new spend accrues as deltas from this anchor.
+        this.store.lastSeen[key] = cur;
+        if (cur > 0) this.dirty = true; // persist a non-zero baseline
+        continue;
+      }
+      const last = Number(this.store.lastSeen[key] || 0);
       if (cur > last) {
         const delta = cur - last;
-        this.store.weeks[wk] += delta;
-        this.store.days[day] += delta;
-        this.store.lastSeen[id] = cur;
+        this.#addDelta('weeks', wk, delta);
+        this.#addDelta('days', day, delta);
+        this.store.lastSeen[key] = cur;
         this.dirty = true;
       } else if (cur < last) {
         // Process restarted or crashed and reset its counter — re-anchor.
-        this.store.lastSeen[id] = cur;
+        this.store.lastSeen[key] = cur;
         this.dirty = true;
       }
     }
 
     if (this.dirty) {
-      persist(this.store);
+      this.#persist();
       this.dirty = false;
     }
     return {
@@ -168,21 +238,31 @@ export class CostStore {
     };
   }
 
-  // Drop any lastSeen entries whose id isn't in the live agents list.
+  // Write-through with delta merge; clears pending only when the write landed
+  // (a failed / read-only write keeps the deltas for the next attempt).
+  #persist() {
+    if (persist(this.store, this.pending)) {
+      this.pending = { weeks: {}, days: {} };
+    }
+  }
+
+  // Drop any lastSeen entries whose session isn't in the live agents list.
   // Called when sessions exit so the store doesn't grow unboundedly across
   // long sessions.
   gc(agents) {
-    const liveIds = new Set(agents.filter(a => a && a.status !== 'empty').map(a => a.id));
+    const liveKeys = new Set(
+      agents.filter(a => a && a.status !== 'empty').map(a => CostStore.seenKey(a)),
+    );
     let changed = false;
-    for (const id of Object.keys(this.store.lastSeen)) {
-      if (!liveIds.has(id)) { delete this.store.lastSeen[id]; changed = true; }
+    for (const key of Object.keys(this.store.lastSeen)) {
+      if (!liveKeys.has(key)) { delete this.store.lastSeen[key]; changed = true; }
     }
     // Bound the historical cost buckets (task 0354) — they otherwise grow one
     // key per week/day forever. Current week/day are the largest keys, so the
     // rolling-window prune never drops the live buckets.
     if (pruneOldest(this.store.weeks, WEEKS_KEEP)) changed = true;
     if (pruneOldest(this.store.days, DAYS_KEEP)) changed = true;
-    if (changed) { persist(this.store); }
+    if (changed) { this.#persist(); }
   }
 
   weekCost() {

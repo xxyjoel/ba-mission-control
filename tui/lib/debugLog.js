@@ -39,9 +39,10 @@ export function dlog(scope, msg, kv) {
   if (!enabled()) return;
   try {
     const p = debugLogPath();
-    if (!dirReady) { mkdirSync(dirname(p), { recursive: true }); dirReady = true; }
+    // 0700/0600 (0408/S4): the log can carry session metadata (cwds, sids).
+    if (!dirReady) { mkdirSync(dirname(p), { recursive: true, mode: 0o700 }); dirReady = true; }
     const rec = { t: new Date().toISOString(), scope: String(scope), msg: String(msg) };
     if (kv && typeof kv === 'object') Object.assign(rec, kv);
-    appendFileSync(p, JSON.stringify(rec) + '\n');
+    appendFileSync(p, JSON.stringify(rec) + '\n', { mode: 0o600 });
   } catch { /* logging must never break the app */ }
 }
