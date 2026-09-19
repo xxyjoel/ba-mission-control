@@ -119,6 +119,12 @@ export default function PtyPane({
   // (see the view memo). Read by the scroll-mode key handler so its maximum
   // offset matches the window the user is actually looking at.
   const skipRef = useRef(0);
+  // Rows of the CONTENT-ANCHOR skip the reader has walked back through. The
+  // pane is often shorter than the emulator, so the nearest history is not in
+  // the scrollback at all — it is the rows this window skips to stay pinned to
+  // claude's last written line. Scrolling up consumes these first, then the
+  // emulator's scrollback.
+  const skipBackRef = useRef(0);
   // Render-trigger subscriptions on the term. Disposed on unmount.
   const writeSubRef  = useRef(null);
   const scrollSubRef = useRef(null);
@@ -141,6 +147,21 @@ export default function PtyPane({
   // output. > 0 = pinned back in history. Capped at the buffer's
   // actual scrollback size in the render path.
   const [scrollOffset, setScrollOffset] = useState(0);
+  // 0413: scrolling is the EMULATOR's job, not ours. This pane used to compute
+  // its own window as `viewportY - offset`, and viewportY advances one row for
+  // every row claude prints — so a reader parked twenty rows back was dragged
+  // to the bottom by the output itself while the indicator still claimed
+  // twenty. Measured: parked at L062-L080, twenty lines later L082-L100.
+  //
+  // An absolute row number does not fix it either: once the scrollback is full
+  // old lines are evicted and every row number shifts. Measured: parked at
+  // L162, forty lines later the same row number held L183.
+  //
+  // xterm already solves both. `term.scrollLines()` moves its viewport, and it
+  // deliberately does NOT snap to the bottom on new output while the user is
+  // scrolled back. Verified against the real emulator: parked on L161, forty
+  // lines later still L161 (its viewportY moved 161 -> 140 to compensate for
+  // the eviction). So we drive its viewport and render whatever it shows.
 
   // Clamp width/height to sensible minimums. xterm-headless requires
   // cols ≥ 1, rows ≥ 1; claude's UI looks broken below ~30 cols.
@@ -374,23 +395,52 @@ export default function PtyPane({
       const term = termRef.current;
       // Matches the view memo's clamp exactly: baseY + the rows the window is
       // currently skipping is the offset at which startY reaches buffer row 0.
-      const maxOffset = term ? Math.max(0, term.buffer.active.baseY + (skipRef.current || 0)) : 0;
       const halfPage = Math.max(1, Math.floor(viewRows / 2));
-      if (key.escape) { setScrollMode(false); setScrollOffset(0); return; }
-      if (input === 'w') { setScrollOffset(o => Math.min(maxOffset, o + 1)); return; }
-      if (input === 's') { setScrollOffset(o => Math.max(0, o - 1)); return; }
+      const readOffset = () => {
+        const b = term.buffer.active;
+        return Math.max(0, b.baseY - b.viewportY) + (skipBackRef.current || 0);
+      };
+      // Negative moves up. Going up, walk back through the skipped viewport
+      // rows first, then into the emulator's scrollback. Coming down, undo them
+      // in the opposite order. The emulator clamps its own end; we clamp ours.
+      const moveBy = (lines) => {
+        if (!term) return;
+        let n = Math.abs(lines);
+        if (lines < 0) {
+          const room = Math.max(0, (skipRef.current || 0) - (skipBackRef.current || 0));
+          const take = Math.min(room, n);
+          if (take > 0) { skipBackRef.current = (skipBackRef.current || 0) + take; n -= take; }
+          if (n > 0) term.scrollLines(-n);
+        } else if (lines > 0) {
+          const b = term.buffer.active;
+          const inScrollback = Math.max(0, b.baseY - b.viewportY);
+          const take = Math.min(inScrollback, n);
+          if (take > 0) { term.scrollLines(take); n -= take; }
+          if (n > 0) skipBackRef.current = Math.max(0, (skipBackRef.current || 0) - n);
+        }
+        setScrollOffset(readOffset());
+      };
+      const toBottom = () => {
+        if (!term) return;
+        term.scrollToBottom();
+        skipBackRef.current = 0;
+        setScrollOffset(0);
+      };
+      if (key.escape) { setScrollMode(false); toBottom(); return; }
+      if (input === 'w') { moveBy(-1); return; }
+      if (input === 's') { moveBy(1); return; }
       // 0392: f = half-page UP, b = half-page DOWN (toward bottom) — swapped
       // from the less-style b-back/f-forward on user request so f pairs with
       // w (up) and b pairs with s (down).
-      if (input === 'f') { setScrollOffset(o => Math.min(maxOffset, o + halfPage)); return; }
-      if (input === 'b') { setScrollOffset(o => Math.max(0, o - halfPage)); return; }
-      if (input === 'g') { setScrollOffset(maxOffset); return; }
-      if (input === 'G') { setScrollOffset(0); return; }
+      if (input === 'f') { moveBy(-halfPage); return; }
+      if (input === 'b') { moveBy(halfPage); return; }
+      if (input === 'g') { if (term) { skipBackRef.current = skipRef.current || 0; term.scrollToTop(); setScrollOffset(readOffset()); } return; }
+      if (input === 'G') { toBottom(); return; }
       // Anything else — exit scroll mode and drop the key. The user
       // is signaling "I'm done scrolling"; next keystroke goes to
       // claude as normal.
       setScrollMode(false);
-      setScrollOffset(0);
+      toBottom();
       return;
     }
 
@@ -511,8 +561,16 @@ export default function PtyPane({
     // sit at the top and make the last few scroll steps do nothing. The cursor
     // only paints when the live viewport is on screen — scrolled-back history
     // shows no cursor.
-    const offset = Math.max(0, Math.min(scrollOffset, buf.baseY + skip));
-    const startY = Math.max(0, buf.viewportY + skip - offset);
+    // The emulator owns the scroll position, so render its viewport as-is.
+    // `skip` only exists to anchor the LIVE view on claude's last written row;
+    // applying it while scrolled back would stop the reader ever reaching the
+    // first row of history, which an existing test catches.
+    const scrolledBack = Math.max(0, buf.baseY - buf.viewportY);
+    // Walking back through the skipped rows moves the window up inside the
+    // viewport; once they are used up, the emulator's own scroll takes over.
+    const effSkip = Math.max(0, skip - (skipBackRef.current || 0));
+    const startY = Math.max(0, buf.viewportY + (scrolledBack > 0 ? 0 : effSkip));
+    const offset = scrolledBack + (skipBackRef.current || 0);
     // Cursor row in OUR coordinates: claude's row minus the rows we skipped.
     const cursorRow = cursorY - skip;
     const cursorInView = offset === 0 && (

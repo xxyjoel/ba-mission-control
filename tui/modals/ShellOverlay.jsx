@@ -49,6 +49,8 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
   const rows = Math.max(3,  outerH - 7);
 
   const [tick, setTick] = useState(0);
+  // Rows the view is scrolled back. 0 = following the live output.
+  const [scrollBack, setScrollBack] = useState(0);
   const [error, setError] = useState(null); // set when the shell PTY can't spawn
   const writeSubRef  = useRef(null);
   const scrollSubRef = useRef(null);
@@ -144,8 +146,29 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     }
     if (action === 'EXIT') { dlog('shell', 'exit→onClose', {}); onClose?.(); return; }
 
+    // 0413: the overlay captured TERM_SCROLLBACK rows of history and gave the
+    // user no way to reach any of it — the window was pinned to the live
+    // viewport and the file's own note said the history was "inaccessible".
+    // Scrolling is the emulator's job: it holds a scrolled position across new
+    // output and across scrollback eviction, which hand-rolled arithmetic in
+    // the zoom pane got wrong twice. Ctrl+Y up, Ctrl+E down, matching less.
+    // PageUp / PageDown, and NOT a Ctrl chord: Ctrl+Y, Ctrl+E, Ctrl+U and
+    // Ctrl+D are all readline bindings (yank, end-of-line, kill-line-backward,
+    // end-of-file) and must reach the shell. An existing test caught this
+    // exact mistake when Ctrl+U was taken for page-up.
+    const termNow = termRef.current;
+    if (termNow && (key.pageUp || key.pageDown)) {
+      const page = Math.max(1, Math.floor(rows / 2));
+      termNow.scrollLines(key.pageUp ? -page : page);
+      const b = termNow.buffer.active;
+      setScrollBack(Math.max(0, b.baseY - b.viewportY));
+      return;
+    }
+
     const pty = ptyRef.current;
     if (!pty) return;
+    // Typing snaps back to the live output, like a real terminal.
+    if (scrollBack > 0 && termNow) { termNow.scrollToBottom(); setScrollBack(0); }
 
     // Bracketed-paste guard (mirrors PtyPane.jsx:361-374).
     if (
@@ -186,6 +209,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     // TERM_SCROLLBACK rows in the buffer are inaccessible to the user. Add a
     // scroll offset state + Ctrl+Y / Ctrl+E bindings to let the user page
     // through history without leaving the overlay (see overlay-terminal.md §key-risk).
+    // The emulator owns the scroll position; render whatever it is showing.
     const startY  = buf.viewportY;
     const out = [];
     for (let y = 0; y < rows; y++) {
@@ -195,7 +219,7 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, cols, rows, cursorStyle]);
+  }, [tick, cols, rows, cursorStyle, scrollBack]);
 
   // Header: `shell · <shell-basename> · <spawn-cwd>`
   const shellName = basename(process.env.SHELL || '/bin/bash');
@@ -261,7 +285,10 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
           notice, or accept the limitation and document it in the README. */}
       <Box>
         <Text color={theme?.accent} bold>⌃Q</Text>
-        <Text color={theme?.dim}> close  ·  all other keys → shell  ·  avoid fullscreen apps (vim/less) here</Text>
+        <Text color={theme?.dim}> close  ·  </Text>
+        <Text color={theme?.accent} bold>PgUp/PgDn</Text>
+        <Text color={theme?.dim}> scroll history  ·  other keys → shell</Text>
+        {scrollBack > 0 && <Text color={theme?.yellow}>  ▲ {scrollBack} back · type to return</Text>}
       </Box>
     </Box>
   );

@@ -146,6 +146,14 @@ npm link
 mc
 ```
 
+**Scrolling back through output.** In the Zoom view press `Ctrl+Y` to enter
+scroll mode, then `w`/`s` for a line, `f`/`b` for half a page, `g` for the top
+and `G` to return to the live output. In the `!` shell overlay use `PageUp` and
+`PageDown`; typing anything returns you to the live output. Both views hold
+your place while the session keeps printing, and both are limited by the
+5,000 rows of history each session keeps — scroll past that and you are
+clamped to the oldest row still held.
+
 Configurable env vars:
 
 | Var            | Default        | Effect |
