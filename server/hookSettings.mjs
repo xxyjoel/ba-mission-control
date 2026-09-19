@@ -16,9 +16,13 @@
 export function buildHookSettings({ emitterPath }) {
   // Use the running node binary so no PATH lookup is needed at hook time.
   // process.execPath is an absolute path and always contains "node" in the name.
-  // Quote both paths so a home/install dir containing spaces isn't shell-split
-  // by claude's hook runner (which invokes `command` through a shell).
-  const command = `"${process.execPath}" "${emitterPath}"`;
+  // S7 (0408): SINGLE-quote both paths (embedded ' escaped as '\''). This is
+  // the one shipped shell string — claude's hook runner passes `command`
+  // through a shell — and double quotes still let ", $, ` and \ in a
+  // home/install path alter the command. Inside single quotes the shell
+  // expands nothing.
+  const shq = (s) => `'` + String(s).replace(/'/g, `'\\''`) + `'`;
+  const command = `${shq(process.execPath)} ${shq(emitterPath)}`;
 
   // Single command hook entry reused across all three events.
   // timeout is in seconds; 5 is the max allowed by the test (range 1–5).

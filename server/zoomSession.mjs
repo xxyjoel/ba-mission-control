@@ -148,6 +148,12 @@ export function startZoomSession(agent, { cols, rows } = {}) {
   let lastDataAt = Date.now();
   try { pty.onData(() => { lastDataAt = Date.now(); }); } catch {}
 
+  // S5 (0408): node-pty keeps `pid` after exit and swallows ESRCH, so
+  // finalize()'s pty.kill() on an already-exited claude would signal whatever
+  // process now owns that (recycled) pid. Track the exit and skip the kill.
+  let ptyExited = false;
+  try { pty.onExit(() => { ptyExited = true; }); } catch {}
+
   // The tailer used to live in PtyPane, but it MUST outlive the
   // React component now that dispose() defers teardown for the
   // quiet-wait. Otherwise FleetLog would miss any user/assistant
@@ -205,7 +211,7 @@ export function startZoomSession(agent, { cols, rows } = {}) {
     if (finalized) return;
     finalized = true;
     try { clearTimeout(detectTimer); } catch {}
-    try { pty.kill(); } catch {}
+    if (!ptyExited) { try { pty.kill(); } catch {} } // S5 (0408): never signal a dead handle's recycled pid
     try { tailer?.stop(); } catch {}
     tailer = null;
 

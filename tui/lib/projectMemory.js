@@ -14,7 +14,7 @@
 // `:remember "X"` appends a dated bullet to the file. We never read
 // outside cwd, never overwrite — append-only.
 
-import { existsSync, mkdirSync, readFileSync, appendFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, statSync, lstatSync, openSync, readSync, closeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 export const MEMORY_DIR_NAME = '.mc';
@@ -29,14 +29,40 @@ export function memoryPathFor(cwd) {
   return join(resolve(cwd), MEMORY_DIR_NAME, MEMORY_FILE_NAME);
 }
 
+// S2 (0408): the memory body is injected into the session's first prompt, so
+// it is attacker-reachable content from any cloned repo. Cap what we read —
+// an unbounded file would balloon the paste (and the bill) silently.
+export const MEMORY_MAX_BYTES = 64 * 1024;
+
 // Returns the raw memory body or null if no file. Always safe to call;
 // IO errors map to null so the boot path doesn't fail when a repo has
 // no memory file yet (the common case).
+//
+// S2 (0408): lstat, never stat — a repo could ship `.mc/MEMORY.md` as a
+// symlink pointing anywhere on the machine (~/.ssh/id_ed25519, another
+// project's secrets) and the old readFileSync followed it straight into the
+// prompt. Only a regular file is read, and only the first MEMORY_MAX_BYTES.
 export function readProjectMemory(cwd) {
   try {
     const p = memoryPathFor(cwd);
-    if (!p || !existsSync(p)) return null;
-    const body = readFileSync(p, 'utf8').trim();
+    if (!p) return null;
+    let st;
+    try { st = lstatSync(p); } catch { return null; }
+    if (!st.isFile()) return null; // symlink, dir, fifo — refuse
+    let body;
+    if (st.size > MEMORY_MAX_BYTES) {
+      const fd = openSync(p, 'r');
+      try {
+        const buf = Buffer.alloc(MEMORY_MAX_BYTES);
+        const n = readSync(fd, buf, 0, MEMORY_MAX_BYTES, 0);
+        body = buf.subarray(0, n).toString('utf8');
+      } finally {
+        closeSync(fd);
+      }
+    } else {
+      body = readFileSync(p, 'utf8');
+    }
+    body = body.trim();
     return body.length > 0 ? body : null;
   } catch {
     return null;

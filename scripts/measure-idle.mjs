@@ -11,7 +11,7 @@
 // Baselines on the maintainer's machine (Apple Silicon, 2026-08):
 //   pre  idle-energy batch (0377–0381): 1.07% of one core, ~216 B/s pty output
 //   post — see tasks/0376 Result for the recorded number.
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -30,13 +30,14 @@ const child = pty.spawn(process.execPath, [join(REPO, 'bin', 'mc.mjs')], {
 let ptyBytes = 0;
 child.onData((d) => { ptyBytes += d.length; });
 
+// S7 (0408): argv-form ps, never a shell string with interpolation.
 const cpuPct = (pid) => {
-  try { return parseFloat(execSync(`ps -o %cpu= -p ${pid}`, { encoding: 'utf8' }).trim()); }
+  try { return parseFloat(execFileSync('ps', ['-o', '%cpu=', '-p', String(pid)], { encoding: 'utf8' }).trim()); }
   catch { return NaN; }
 };
 const cpuTimeS = (pid) => {
   try {
-    const t = execSync(`ps -o cputime= -p ${pid}`, { encoding: 'utf8' }).trim(); // mm:ss.cc
+    const t = execFileSync('ps', ['-o', 'cputime=', '-p', String(pid)], { encoding: 'utf8' }).trim(); // mm:ss.cc
     const [m, s] = t.split(':');
     return parseFloat(m) * 60 + parseFloat(s);
   } catch { return NaN; }

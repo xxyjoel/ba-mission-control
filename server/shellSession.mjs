@@ -67,7 +67,8 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
   } catch (e) {
     dlog('shell', 'spawn-failed', { shell, cwd, msg: e?.message });
     _session = {
-      pty: null, term: null, cell: null, atFreshPrompt: false, _termDataSub: null,
+      pty: null, term: null, cell: null, atFreshPrompt: false, promptIntegration: false,
+      _termDataSub: null, _exitSub: null,
       error: `shell failed to start (${shell}): ${e?.message || e}`,
     };
     return _session;
@@ -88,6 +89,33 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
         scrollback: TERM_SCROLLBACK,
       });
       cell = term.buffer.active.getNullCell();
+      // S8 (0408): shell-integration prompt marks. When the user's shell (or
+      // their terminal's integration snippet) emits OSC 133 (prompt lifecycle)
+      // or OSC 7 (cwd report at each prompt), that is a RELIABLE at-prompt
+      // signal — and once we've seen one, the PROMPT_RE heuristic below is
+      // retired for this session, so a REPL's `>>>` or an ssh remote's `$`
+      // can no longer arm the cd injection. Shells with no integration keep
+      // the regex fallback unchanged.
+      try {
+        term.parser.registerOscHandler(133, (data) => {
+          const s = _session;
+          if (s && s.term === term) {
+            s.promptIntegration = true;
+            const kind = String(data).charAt(0);
+            if (kind === 'A' || kind === 'B') s.atFreshPrompt = true;
+            else if (kind === 'C') s.atFreshPrompt = false;
+          }
+          return false;
+        });
+        term.parser.registerOscHandler(7, () => {
+          const s = _session;
+          if (s && s.term === term) {
+            s.promptIntegration = true;
+            s.atFreshPrompt = true;
+          }
+          return false;
+        });
+      } catch { /* integration marks unavailable — regex fallback stays */ }
     } catch (e) {
       // Term construction failed; continue without buffer (safe degradation).
       term = null;
@@ -106,14 +134,32 @@ export function getShellSession({ spawn = ptySpawn } = {}) {
     }
     // Update prompt detection from the PTY output stream. A chunk ending in
     // a shell prompt suffix signals the shell is waiting for input.
-    if (_session) _session.atFreshPrompt = PROMPT_RE.test(chunk);
+    // S8 (0408): only while no shell-integration mark has been seen — once the
+    // shell speaks OSC 133/7, those marks own atFreshPrompt (see above).
+    if (_session && !_session.promptIntegration) _session.atFreshPrompt = PROMPT_RE.test(chunk);
   });
+
+  // S5 (0408): node-pty keeps `pid` after exit and swallows ESRCH, so a later
+  // killShellSession() on a dead handle would SIGTERM whatever process now
+  // owns that (recycled) pid. Drop the singleton the moment the shell exits on
+  // its own; the next getShellSession() spawns a fresh one.
+  let _exitSub = null;
+  try {
+    _exitSub = pty.onExit(() => {
+      if (!_session || _session.pty !== pty) return;
+      try { _session._termDataSub?.dispose?.(); } catch {}
+      try { _session._exitSub?.dispose?.(); } catch {}
+      try { _session.term?.dispose(); } catch {}
+      dlog('shell', 'exited', { pid: pty.pid });
+      _session = null;
+    });
+  } catch { /* stub ptys without onExit keep the old lifecycle */ }
 
   // dlog: lifecycle metadata only — never PTY stdin bytes or buffer contents
   // (see overlay-terminal.md §2 — secrets in scope).
   dlog('shell', 'spawn', { pid: pty?.pid, shell, cwd, cols: 80, rows: 24, scrollback: TERM_SCROLLBACK });
 
-  _session = { pty, term, cell, atFreshPrompt: false, _termDataSub, error: null };
+  _session = { pty, term, cell, atFreshPrompt: false, promptIntegration: false, _termDataSub, _exitSub, error: null };
   return _session;
 }
 
@@ -182,13 +228,18 @@ export function cdToCwd(dir) {
 export function killShellSession() {
   if (!_session) return;
 
-  const { pty, term, _termDataSub } = _session;
+  const { pty, term, _termDataSub, _exitSub } = _session;
   const pid = pty?.pid;
 
   // Unsubscribe the onData IDisposable before killing the pty so the dying
-  // pty's output doesn't mutate a future session's atFreshPrompt.
+  // pty's output doesn't mutate a future session's atFreshPrompt. The onExit
+  // sub goes too (S5/0408) — this deliberate kill must not re-run the
+  // exited-on-its-own cleanup against a future session.
   if (_termDataSub) {
     try { _termDataSub.dispose?.(); } catch {}
+  }
+  if (_exitSub) {
+    try { _exitSub.dispose?.(); } catch {}
   }
   if (term) {
     try { term.dispose(); } catch {}

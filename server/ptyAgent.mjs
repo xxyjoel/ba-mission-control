@@ -26,7 +26,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { spawn as ptySpawn } from 'node-pty';
 import xterm from '@xterm/headless';
-import { MODELS } from '../tui/lib/models.js';
+import { MODELS, modelByCli } from '../tui/lib/models.js';
 import { fullStatus } from './git.mjs';
 import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
 import { startSubagentUsageTailer } from './subagentUsageTailer.mjs';
@@ -72,10 +72,23 @@ const SPARK_LEN = 15;
 //     unambiguous Enter. A bare `text\r` single write was being absorbed as
 //     paste, so the prompt never submitted until a manual zoom Enter (#24).
 // Exported for unit testing.
+//
+// S2 (0408): the content is SANITIZED before it goes anywhere near the PTY.
+// Bracketed paste is only as strong as the end marker — a literal ESC[201~
+// inside the content (a hostile .mc/MEMORY.md reaching send() via the
+// project-memory injection, a /compact-restart replay) ends the paste early
+// and everything after it is delivered as raw KEYSTROKES; `!cmd` then runs in
+// claude's bash mode with no prompt. Strip every C0 control except \n and \t,
+// plus DEL and the C1 range (U+0080-U+009F — 8-bit CSI/OSC introducers), so
+// no embedded byte can terminate the paste or start an escape sequence. The
+// raw (non-bracketed / slash) path gets the same scrub: there the bytes are
+// keystrokes by definition, which is strictly worse.
+const PASTE_CTRL_RX = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 export function pasteForSubmit(text, bracketed) {
-  const isSlash = text.trimStart().startsWith('/');
-  if (!isSlash && bracketed) return '\x1b[200~' + text + '\x1b[201~';
-  return text;
+  const clean = String(text ?? '').replace(PASTE_CTRL_RX, '');
+  const isSlash = clean.trimStart().startsWith('/');
+  if (!isSlash && bracketed) return '\x1b[200~' + clean + '\x1b[201~';
+  return clean;
 }
 
 // 0180: detect claude's interactive tool-permission prompt from the rendered
@@ -308,6 +321,10 @@ export class PtyAgent extends EventEmitter {
     // IDisposable from the term.write subscription. Kept so kill()
     // can unsubscribe cleanly.
     this._termDataSub = null;
+    // IDisposable from the pty.onExit subscription (P1/0408) — disposed in
+    // #teardownForRestart and kill() so a replaced PTY's late exit can never
+    // run #onExit against its successor.
+    this._exitSub = null;
     // True only while a zoom view is bound to this agent (attachZoomView →
     // dispose). Gates user-visible terminal side effects (the bell) so a
     // BACKGROUND agent can't blast the shared real terminal — every agent's
@@ -316,6 +333,10 @@ export class PtyAgent extends EventEmitter {
     // (visual-bell), reading as a random "screenshot" flash even from the
     // fleet grid. See #onBell gate below.
     this.zoomAttached = false;
+    // True while the process is SIGSTOPped via pause(). kill() reads it: a
+    // stopped process never handles a queued SIGTERM, so it must be SIGCONTed
+    // first or it survives the slot as an orphaned T-state process (P6/0408).
+    this.paused = false;
     this.killed = false;
     this.lastEventTs = Date.now();
     // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
@@ -370,7 +391,24 @@ export class PtyAgent extends EventEmitter {
   }
 
   start() {
-    const modelArg = MODEL_ARG[this.model] || this.model;
+    // P2 (0408): never spawn a sibling next to a live PTY. Every legitimate
+    // caller (launch, the restart timer, the send/zoom revive paths,
+    // changeModel/changePermissionMode after teardown) reaches here with
+    // this.pty null; a second start() while one is running would leave an
+    // unreachable claude writing into the same emulator.
+    if (this.pty) {
+      this.appendTail({ kind: 'sys', text: 'start ignored — PTY already running' });
+      return;
+    }
+    // M1 (0408): a `/model` switch typed inside claude lands only in
+    // resolvedModel (the connector reads it back from the JSONL); the launch
+    // model in this.model is otherwise re-passed on every relaunch and the
+    // switch is silently undone. When the resolved model is one the catalog
+    // knows, relaunch with IT. changeModel() nulls resolvedModel first, so a
+    // deliberate switch from mc still wins.
+    let modelArg = MODEL_ARG[this.model] || this.model;
+    const resolvedEntry = this.resolvedModel ? modelByCli(this.resolvedModel) : null;
+    if (resolvedEntry) modelArg = resolvedEntry.cliModel;
     const sessionFile = claudeSessionPath({ cwd: this.cwd, sessionId: this.sessionId });
     const args = [];
     // R14: --resume only works after claude flushed the session JSONL.
@@ -429,7 +467,18 @@ export class PtyAgent extends EventEmitter {
         // we register them here so they fire regardless of whether
         // a zoom view is currently mounted.
         try {
+          // S1 (0408): forward a clipboard write ONLY while this agent is the
+          // zoom-viewed one — same gate as the bell below. Un-gated, any text
+          // claude printed from ANY background slot (a file it read, a tool
+          // result) could silently overwrite the user's clipboard while they
+          // look at the fleet grid. And never forward a '?' payload: that is
+          // a clipboard READ request, which would make the host terminal
+          // answer with the user's clipboard contents.
           this.term.parser.registerOscHandler(52, (data) => {
+            if (!this.zoomAttached) return false;
+            const payload = String(data);
+            const body = payload.slice(payload.indexOf(';') + 1);
+            if (body.trim() === '?') return false;
             try { process.stdout.write(`\x1b]52;${data}\x07`); } catch {}
             return false;
           });
@@ -473,7 +522,15 @@ export class PtyAgent extends EventEmitter {
       });
     } catch {}
     try {
-      this.pty.onExit(({ exitCode, signal }) => this.#onExit(exitCode, signal));
+      // P1 (0408): keep the disposable AND stamp the callback with the pty it
+      // belongs to. node-pty delivers exit asynchronously — after a
+      // changeModel/changePermissionMode teardown the OLD pty's exit used to
+      // land ~100ms later and run #onExit against the NEW process (pty nulled,
+      // tailers stopped, readyTimer cleared; the next send spawned a THIRD
+      // claude). #teardownForRestart / kill() dispose this sub, and #onExit
+      // double-checks identity in case an exit was already queued.
+      const spawnedPty = this.pty;
+      this._exitSub = this.pty.onExit(({ exitCode, signal }) => this.#onExit(exitCode, signal, spawnedPty));
     } catch {}
 
     // JSONL tailer — single source of truth for status, tokens, cost,
@@ -507,6 +564,7 @@ export class PtyAgent extends EventEmitter {
     }
 
     // R1: queue any send()s that arrive during the banner-draw window.
+    this.paused = false; // fresh process is not stopped (P6/0408)
     this.ready = false;
     this.readyTimer = setTimeout(() => {
       this.readyTimer = null;
@@ -538,9 +596,15 @@ export class PtyAgent extends EventEmitter {
     this.emit('change');
   }
 
-  #onExit(code, signal) {
+  #onExit(code, signal, exitedPty = null) {
+    // P1 (0408): a late exit from a pty this agent no longer owns (replaced by
+    // changeModel/changePermissionMode, or already nulled) must not tear down
+    // the CURRENT process's state. The disposable is disposed on teardown too;
+    // this guard catches an exit that was already in flight.
+    if (exitedPty && exitedPty !== this.pty) return;
     dlog('pty', 'exit', { slot: this.slot, code, signal, killed: !!this.killed, restarts: this.restartCount || 0 });
     this.pty = null;
+    this._exitSub = null;
     if (this._termDataSub) {
       // PTY is gone; the subscription's underlying handle is gone
       // with it. Null the ref so kill() doesn't try to redispose.
@@ -605,6 +669,15 @@ export class PtyAgent extends EventEmitter {
     // underlying cause is transport/overload rather than a one-off crash.
     const RESTART_BACKOFF_MS = [2000, 5000, 15000];
     const transient = code !== 0 && code != null;
+    // P7 (0408): the restart budget used to be a lifetime counter — three
+    // transient crashes days apart permanently errored the slot. A process
+    // that stayed up this long before crashing is not flapping; its crash
+    // starts a fresh budget. Rapid crash loops (uptime under the window)
+    // still exhaust RESTART_MAX exactly as before.
+    const RESTART_STABLE_MS = 60_000;
+    if (transient && this.restartCount > 0 && Date.now() - (this._spawnTs || 0) >= RESTART_STABLE_MS) {
+      this.restartCount = 0;
+    }
     if (transient && this.restartCount < RESTART_MAX) {
       this.restartCount++;
       const backoffMs = RESTART_BACKOFF_MS[this.restartCount - 1] || RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
@@ -671,6 +744,14 @@ export class PtyAgent extends EventEmitter {
       });
       this.emit('change');
       if (!this.pty && !this.killed) {
+        // P2 (0408): reviving during the auto-restart backoff must cancel the
+        // scheduled restart, or the timer fires start() AGAIN and the second
+        // claude is orphaned (unreachable by kill(), writing into the same
+        // emulator). attachZoomView's revive already does this.
+        if (this.restartTimer) {
+          clearTimeout(this.restartTimer);
+          this.restartTimer = null;
+        }
         this.resuming = true;
         try { this.start(); } catch (e) {
           this.appendTail({ kind: 'err', text: `respawn failed: ${e.message}` });
@@ -739,6 +820,7 @@ export class PtyAgent extends EventEmitter {
     if (!this.pty) return false;
     try {
       this.pty.kill('SIGSTOP');
+      this.paused = true;
       this.status = 'paused';
       this.appendTail({ kind: 'sys', text: 'SIGSTOP — process frozen' });
       this.emit('change');
@@ -753,6 +835,7 @@ export class PtyAgent extends EventEmitter {
     if (!this.pty) return false;
     try {
       this.pty.kill('SIGCONT');
+      this.paused = false;
       this.status = 'working';
       this.appendTail({ kind: 'sys', text: 'SIGCONT — process resumed' });
       this.emit('change');
@@ -785,12 +868,23 @@ export class PtyAgent extends EventEmitter {
       try { this._termDataSub.dispose?.(); } catch {}
       this._termDataSub = null;
     }
+    if (this._exitSub) {
+      try { this._exitSub.dispose?.(); } catch {}
+      this._exitSub = null;
+    }
     if (this.term) {
       try { this.term.dispose(); } catch {}
       this.term = null;
       this.cell = null;
     }
     if (this.pty) {
+      // P6 (0408): a SIGSTOPped process never handles the SIGTERM — it stays
+      // frozen in T state with the signal pending, unreachable once the Fleet
+      // drops the agent from agents[]. Wake it first so the SIGTERM lands.
+      if (this.paused) {
+        try { this.pty.kill('SIGCONT'); } catch {}
+        this.paused = false;
+      }
       try { this.pty.kill('SIGTERM'); } catch {}
     }
   }
@@ -861,6 +955,20 @@ export class PtyAgent extends EventEmitter {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
     }
+    // P1 (0408): unsubscribe the old pty's data + exit listeners BEFORE
+    // killing it. node-pty delivers exit asynchronously, so without this the
+    // old exit landed ~100ms after start() and ran #onExit against the NEW
+    // process (pty nulled → next send spawned a third claude, both writing
+    // into one emulator). The old data sub likewise kept piping the dying
+    // process's bytes into the shared term.
+    if (this._termDataSub) {
+      try { this._termDataSub.dispose?.(); } catch {}
+      this._termDataSub = null;
+    }
+    if (this._exitSub) {
+      try { this._exitSub.dispose?.(); } catch {}
+      this._exitSub = null;
+    }
     if (this.pty) {
       const oldPty = this.pty;
       this.pty = null;
@@ -869,6 +977,12 @@ export class PtyAgent extends EventEmitter {
       // it back to false implicitly via constructor state.
       const wasKilled = this.killed;
       this.killed = true;
+      // P6 (0408): a paused (SIGSTOPped) process must be woken or the SIGTERM
+      // stays pending forever — same orphan shape kill() guards against.
+      if (this.paused) {
+        try { oldPty.kill('SIGCONT'); } catch {}
+        this.paused = false;
+      }
       try { oldPty.kill('SIGTERM'); } catch {}
       this.killed = wasKilled;
     }
@@ -935,11 +1049,9 @@ export class PtyAgent extends EventEmitter {
     // Mark this agent as the currently-viewed one so the bell forwards to the
     // real terminal (see #onBell gate in start()). Cleared in dispose().
     this.zoomAttached = true;
-    // TODO(clipboard-scope): the OSC 52 handler in start() forwards a background
-    // agent's clipboard writes to the user's real clipboard regardless of zoom —
-    // same "background agent hijacks the shared terminal" class as the bell.
-    // Gate it on this.zoomAttached too; left out here to keep this fix to the
-    // reported visual-bell flash.
+    // S1 (0408): the OSC 52 handler in start() is gated on this.zoomAttached
+    // (and drops '?' read requests), so a background agent can no longer reach
+    // the user's clipboard — same gate class as the bell.
     let disposed = false;
     return {
       pty: this.pty,
