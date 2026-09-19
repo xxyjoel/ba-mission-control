@@ -94,7 +94,7 @@ test('recipe: help — view="zoom" highlights ZOOM and SLASH sections', async ()
     component: Help,
     props: { onClose: noop, theme, width: 100, rows: 100, view: 'zoom' },
     steps: [
-      { expectFrame: [/▶ ZOOM.*CURRENT VIEW/, /▶ SLASH COMMANDS.*CURRENT VIEW/] },
+      { expectFrame: [/▶ ZOOM.*CURRENT VIEW/, /▶ ZOOM SLASH COMMANDS.*CURRENT VIEW/] },
     ],
   });
 });
@@ -104,7 +104,7 @@ test('recipe: help documents the new kill-twice-to-confirm behavior', async () =
     component: Help,
     props: { onClose: noop, theme, width: 100, rows: 100, view: 'main' },
     steps: [
-      { expectFrame: [/press K twice/, /3s arm/] },
+      { expectFrame: [/uppercase K twice/, /3s arm/] },
     ],
   });
 });

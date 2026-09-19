@@ -22,6 +22,7 @@
 // - R13: spawn is injectable for tests — defaults to node-pty.spawn.
 
 import { EventEmitter } from 'node:events';
+import { BG_SUB_ACTIVE_MS } from './bgSessions.mjs';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -1227,7 +1228,11 @@ export class PtyAgent extends EventEmitter {
     // Fall back to the hook clock when the transcript never showed the Task
     // (a background fork's sub events land in the status file with no matching
     // parent-transcript record — the gtm-gov-miner shape above).
-    if (bgCount === 0 && Date.now() - (this.lastSubHookTs || 0) < SUB_ACTIVE_MS) bgCount = 1;
+    // 0408/D1: the 15s SUB_ACTIVE_MS window dropped the bg chip 12-43% of
+    // fan-out time (sub-agent tool events arrive up to 166s apart, measured
+    // gtm-gov-miner 2026-09-16). Use bgSessions' 60s window for the chip;
+    // SUB_ACTIVE_MS still serves its other, tighter callers.
+    if (bgCount === 0 && Date.now() - (this.lastSubHookTs || 0) < BG_SUB_ACTIVE_MS) bgCount = 1;
     const bgStatus = bgCount > 0 ? 'working' : null;
     // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
     // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
