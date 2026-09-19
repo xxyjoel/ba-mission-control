@@ -31,6 +31,8 @@ import xterm from '@xterm/headless';
 import { MODELS, modelByCli } from '../tui/lib/models.js';
 import { fullStatus } from './git.mjs';
 import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
+import { pushTail } from './jsonlConnector.mjs';
+import { TAIL_SHIP } from '../tui/lib/settings.js';
 import { startSubagentUsageTailer } from './subagentUsageTailer.mjs';
 import { startStatusHookTailer } from './statusHookTailer.mjs';
 import { stableEmitterPath } from './hookInstall.mjs';
@@ -59,7 +61,6 @@ const { Terminal } = xterm.default || xterm;
 const TERM_SCROLLBACK = 5000;
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
-const TAIL_MAX = 40;
 const SPARK_LEN = 15;
 
 // pasteForSubmit — build the content chunk a programmatic send (broadcast /
@@ -706,9 +707,12 @@ export class PtyAgent extends EventEmitter {
     this.emit('change');
   }
 
+  // One append path with the connector (jsonlConnector.pushTail): same TAIL_MAX
+  // ring, same per-entry text ceiling, same per-agent char budget. This used to
+  // push raw — an unbounded stderr/error string landed in the ring at full
+  // length, which is exactly what a 5× larger ring cannot afford.
   appendTail(ln) {
-    this.tail.push({ ...ln, ts: Date.now() });
-    while (this.tail.length > TAIL_MAX) this.tail.shift();
+    pushTail(this, ln);
   }
 
   approve() {
@@ -1300,7 +1304,12 @@ export class PtyAgent extends EventEmitter {
       capReached: this.costCapUSD > 0 && this.costSession >= this.costCapUSD,
       apiErrorCount: this.apiErrorCount || 0,
       lastApiErrorTs: this.lastApiErrorTs || 0,
-      tail: this.tail.slice(-16),
+      // Ship the whole ring, not a hardcoded 16. The fleet log is derived
+      // ENTIRELY from what agents ship, and narrative mode discards ~80% of it
+      // — at 16 per agent, a `fleetLogLines: 32` setting could never be filled
+      // (6 sessions yielded 19 rows). TAIL_SHIP is sized off the schema's
+      // `fleetLogLines` max so one agent alone can fill the largest log.
+      tail: this.tail.slice(-TAIL_SHIP),
       todos: this.todos.slice(),
     };
   }

@@ -82,6 +82,15 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
   const rows = maxLines > 0 ? log.slice(-maxLines) : [];
   const textBudget = fleetLogTextBudget(width);
 
+  // WHICH limit is short? Two different causes used to look identical — a bare
+  // "19 events" when the setting said 32 — and the user read it as a bug both
+  // times. Name the binding one in the same single header row:
+  //   history — fewer events exist than the log is allowed to draw. The tighter
+  //             limit whenever it applies, so it is reported first.
+  //   height  — the terminal cannot give the log its Settings line count.
+  const historyBinds = requestedLines > 0 && rows.length < Math.min(maxLines, requestedLines);
+  const heightBinds  = requestedLines > maxLines;
+
   return (
     // 0388: no flexGrow/minHeight — the log takes exactly its rows so the
     // Settings line count is authoritative; App.jsx's spacer absorbs slack.
@@ -97,13 +106,16 @@ export default function FleetLog({ log, focusedId, theme, maxLines = 12, mode = 
           <Text color={theme.accent}>▸ FLEET LOG</Text>
         </Box>
         <Text color={theme.dim} wrap="truncate"> · {rows.length} events</Text>
-        {/* Say so when the terminal cannot honour the Settings line count.
-            The clamp was silent, which read as "I set 30 lines and get 8" —
-            the number in Settings is a ceiling, and the terminal's height is
-            what actually decides. */}
-        {requestedLines > maxLines && (
-          <Text color={theme.faint} wrap="truncate"> · {maxLines}/{requestedLines}</Text>
-        )}
+        {/* Say so when the log is short of its Settings line count, and say
+            WHICH limit did it. Silence read as "I set 32 lines and get 19" —
+            a bug report, twice over: the clamp case (terminal too short) and
+            the supply case (that much history does not exist yet). One short
+            tag either way; the row is pinned to height=1. */}
+        {historyBinds ? (
+          <Text color={theme.faint} wrap="truncate"> · {rows.length}/{requestedLines} history</Text>
+        ) : heightBinds ? (
+          <Text color={theme.faint} wrap="truncate"> · {maxLines}/{requestedLines} height</Text>
+        ) : null}
         {mode === 'narrative' && <Text color={theme.yellow} wrap="truncate"> · narrative</Text>}
         <Box flexGrow={1} />
         <Text color={theme.faint} wrap="truncate">[ tail -f mc://fleet ]</Text>

@@ -20,10 +20,11 @@ import { MODELS, estimatedPricingFor } from '../tui/lib/models.js';
 import { summarizeToolInput, SUBAGENT_TOOLS, subagentLabel } from './eventShapes.mjs';
 import { detectPrompt, promptFromToolUse } from './detectPrompt.mjs';
 import { updateSpark } from './spark.mjs';
-
-// Cap on tail length so memory stays flat across long sessions.
-// Mirrors `TAIL_MAX` in agent.mjs.
-const TAIL_MAX = 40;
+// Ring size + text ceilings are derived from SETTINGS_SCHEMA's `fleetLogLines`
+// max, so the log can always be supplied with as many lines as it may be set to
+// (see the FLEET-LOG SUPPLY BUDGET block in tui/lib/settings.js). This used to
+// be a `const TAIL_MAX = 40` copied into four modules.
+import { TAIL_MAX, TAIL_TEXT_MAX, TAIL_PREVIEW_MAX, TAIL_CHARS_MAX } from '../tui/lib/settings.js';
 
 // Memory-hygiene caps (found while investigating #18). Both maps grew unbounded
 // within a single no-/clear session. Sized so a normal session never reaches them.
@@ -47,14 +48,40 @@ function capMap(map, max) {
   }
 }
 
-// Push a tail entry without exceeding TAIL_MAX. We add ts here so
-// callers don't have to. Direct array mutation rather than
-// agent.appendTail() to keep this module pure (agent might be a
-// plain object in tests).
-function pushTail(agent, entry) {
+// entryChars — the characters one tail entry keeps alive. Only the string
+// fields; everything else in an entry is a number/short enum.
+function entryChars(e) {
+  if (!e) return 0;
+  return (e.text?.length || 0) + (e.preview?.length || 0) + (e.tool?.length || 0);
+}
+
+// pushTail — THE append path for every tail entry, from this connector and from
+// each agent class's appendTail(). Exported so all four share one set of caps;
+// it was duplicated per-class and only the connector ever bounded entry text.
+//
+// Adds `ts` so callers don't have to. Direct array mutation rather than
+// agent.appendTail() so this module stays usable with a plain-object agent
+// (tests, and mockAgent's replay harness).
+//
+// Two independent bounds, both required:
+//   • count  — TAIL_MAX entries, what the fleet log is supplied from.
+//   • chars  — TAIL_CHARS_MAX per agent. Without this, a 5× larger ring would
+//     be a 5× larger memory ceiling, and this project has a known long-uptime
+//     memory problem. The running total lives on the agent so eviction is O(1).
+export function pushTail(agent, entry) {
   if (!Array.isArray(agent.tail)) agent.tail = [];
-  agent.tail.push({ ...entry, ts: Date.now() });
-  while (agent.tail.length > TAIL_MAX) agent.tail.shift();
+  const e = { ...entry, ts: entry.ts ?? Date.now() };
+  if (typeof e.text === 'string' && e.text.length > TAIL_TEXT_MAX) e.text = e.text.slice(0, TAIL_TEXT_MAX);
+  if (typeof e.preview === 'string' && e.preview.length > TAIL_PREVIEW_MAX) e.preview = e.preview.slice(0, TAIL_PREVIEW_MAX);
+  agent.tail.push(e);
+  agent._tailChars = (agent._tailChars || 0) + entryChars(e);
+  while (agent.tail.length > TAIL_MAX
+    || (agent.tail.length > 1 && agent._tailChars > TAIL_CHARS_MAX)) {
+    // `length > 1` keeps the newest entry even when it alone blows the budget —
+    // dropping it would make the log lose the event it was just told about.
+    agent._tailChars -= entryChars(agent.tail.shift());
+  }
+  if (agent._tailChars < 0) agent._tailChars = 0;
 }
 
 // Track Task/Workflow tool_use → tool_result as a live pending map (NOT the

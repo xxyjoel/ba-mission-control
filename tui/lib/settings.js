@@ -170,6 +170,65 @@ export const SETTINGS_SCHEMA = [
   { id: 'notes', title: 'NOTES', items: [] },
 ];
 
+// ── Fleet-log SUPPLY budget — derived from the schema above ──────────────────
+//
+// The fleet log can only draw events the agents actually SHIP. Until now every
+// toJSON() shipped `tail.slice(-16)` over a 40-entry ring, so a
+// `fleetLogLines: 32` + `fleetLogMode: 'narrative'` setting was unreachable by
+// construction, not by budget: narrative keeps only asst/err/bcast rows with
+// non-empty text. Measured live (2026-09-18, 6 sessions): 19 narrative rows out
+// of 6 × 16 = 96 shipped entries — a ≈20% yield. 32 could never be filled.
+//
+// So both the ring and the shipped slice are sized off the schema's own ceiling
+// for `fleetLogLines` instead of a hardcoded 16/40. Raising the schema max lifts
+// them automatically; nothing else has to change.
+export function settingMax(key, fallback) {
+  for (const group of SETTINGS_SCHEMA) {
+    for (const item of group.items || []) {
+      if (item.key === key && Number.isFinite(item.max)) return item.max;
+    }
+  }
+  return fallback;
+}
+
+export const FLEET_LOG_LINES_MAX = settingMax('fleetLogLines', 40);
+
+// Fraction of tail entries that survive the narrative filter. Two data points:
+//   • live fleet, 6 sessions: 19 narrative rows / 96 shipped ≈ 0.20 (average).
+//   • ONE tool-using turn on the connector's own path: user + thinking +
+//     asst-text + 2 tool_use + 2 tool_result = 7 entries, exactly 1 narrative
+//     row ≈ 0.14. This is the shape to size for — a tool-heavy session is the
+//     realistic worst case, and the log has to hold up there too.
+// 1/8 takes the tool-heavy shape and adds a margin. The reciprocal is the
+// headroom the ring needs so a SINGLE agent can fill the largest log the
+// settings allow — the true worst case, since more sessions only add supply.
+export const FLEET_LOG_NARRATIVE_YIELD = 0.125;
+
+// Ring size == shipped slice: no point holding history that can never be
+// shipped, nor shipping rows the ring cannot hold. 40 / 0.125 = 320.
+export const TAIL_SHIP = Math.ceil(FLEET_LOG_LINES_MAX / FLEET_LOG_NARRATIVE_YIELD);
+export const TAIL_MAX = TAIL_SHIP;
+
+// Per-entry and per-ring text ceilings. An 8× bigger ring must not mean 8× the
+// memory, and this project has a known long-uptime memory problem — so the ring
+// is now bounded by CHARACTERS as well as by count. Before, only the connector
+// capped entry text; appendTail() pushed raw, so a single unbounded stderr
+// string could sit in the ring at any size (old bound: none).
+//   TAIL_TEXT_MAX    per-entry ceiling. 8000 matches the connector's existing
+//                    asst/user cap — `:compact-restart` re-injects a whole
+//                    assistant summary out of tail.text (App.jsx), so this must
+//                    stay well clear of a 3-5 paragraph reply.
+//   TAIL_PREVIEW_MAX the preview is only ever rendered into a ONE-row slot.
+//   TAIL_CHARS_MAX   hard per-agent ring budget; oldest entries evict first.
+//                    400k chars ≈ 0.4 MB (one-byte) / 0.8 MB (worst-case
+//                    two-byte) per agent — small next to the ~32 MB xterm
+//                    scrollback each slot already holds (ptyAgent
+//                    TERM_SCROLLBACK), and sized so a normal tool-heavy
+//                    session reaches the COUNT cap first, not this one.
+export const TAIL_TEXT_MAX = 8000;
+export const TAIL_PREVIEW_MAX = 400;
+export const TAIL_CHARS_MAX = 400_000;
+
 // One-shot migrations for keys that have changed IDs across versions.
 // Keeps settings files written by older versions usable.
 const MODEL_ID_MIGRATIONS = {

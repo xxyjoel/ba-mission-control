@@ -35,7 +35,7 @@ import { cdToCwd } from '../server/shellSession.mjs';
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS, resolveModelId } from './lib/models.js';
 import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
-import { loadSettings, saveSettings } from './lib/settings.js';
+import { loadSettings, saveSettings, FLEET_LOG_LINES_MAX } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows, MAX_TOAST_ROWS } from './lib/gridLayout.js';
 import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
@@ -587,10 +587,12 @@ export default function App({ fleet, auth: initialAuth }) {
   const threshold = settings.ctxThreshold;
   // NOTE: fleetLogLines passed here is the LOWER bound; the actual
   // render uses dynamicFleetLogLines computed below. We derive the
-  // largest plausible window here so the FleetLog has rows to draw
-  // from when the terminal is tall.
+  // largest window the SETTINGS SCHEMA allows here (was a hardcoded 40 —
+  // correct only by coincidence, and silently wrong the moment the schema
+  // max moves) so the FleetLog has rows to draw from when the terminal is
+  // tall. Supply comes from each agent's shipped tail (TAIL_SHIP).
   const fleetLog = useMemo(
-    () => deriveFleetLog(agents, Math.max(40, settings.fleetLogLines), settings.fleetLogMode),
+    () => deriveFleetLog(agents, Math.max(FLEET_LOG_LINES_MAX, settings.fleetLogLines), settings.fleetLogMode),
     [agents, settings.fleetLogLines, settings.fleetLogMode]
   );
   // Fleet tok/min = sum of each WORKING agent's true last-sample rate. Was a

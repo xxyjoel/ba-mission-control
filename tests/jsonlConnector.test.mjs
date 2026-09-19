@@ -11,6 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseEvent, deriveCost } from '../server/jsonlConnector.mjs';
 import { MODELS, modelByCli } from '../tui/lib/models.js';
+import { TAIL_MAX, TAIL_TEXT_MAX, TAIL_CHARS_MAX, FLEET_LOG_LINES_MAX } from '../tui/lib/settings.js';
 
 // Expected cost derived from the CATALOG (single source of truth) — mirrors
 // deriveCost's arithmetic but reads the rates from tui/lib/models.js, so a
@@ -503,13 +504,35 @@ test('parseEvent: material events bump lastEventTs; noise does NOT (0394)', () =
   assert.ok(a.lastConnectorTs > 0, 'material event bumps lastConnectorTs');
 });
 
-test('parseEvent: tail respects TAIL_MAX (40 entries)', () => {
+// The ring used to be a hardcoded 40 with only 16 entries ever SHIPPED to the
+// fleet log, which made a `fleetLogLines: 32` narrative setting unreachable by
+// construction (measured live: 19 rows from 6 sessions). Both numbers are now
+// derived from the schema's own ceiling, so this pins the DERIVED contract —
+// hardcoding 40 again is the defect returning.
+test('parseEvent: the tail ring is bounded by the derived TAIL_MAX', () => {
   const a = makeAgent();
-  for (let i = 0; i < 50; i++) {
+  const over = 10;
+  for (let i = 0; i < TAIL_MAX + over; i++) {
     parseEvent({ type: 'user', message: { content: `msg ${i}` } }, a);
   }
-  assert.equal(a.tail.length, 40, 'oldest entries dropped');
-  assert.equal(a.tail[0].text, 'msg 10', 'first surviving entry is the 11th');
+  assert.equal(a.tail.length, TAIL_MAX, 'oldest entries dropped at the count cap');
+  assert.equal(a.tail[0].text, `msg ${over}`, 'eviction is oldest-first');
+  assert.ok(TAIL_MAX >= FLEET_LOG_LINES_MAX,
+    'the ring must be able to back the largest fleet-log setting');
+});
+
+test('parseEvent: the tail ring is also bounded by characters', () => {
+  // A single unbounded stderr string used to be able to sit in the ring at any
+  // size — appendTail pushed raw. Long entries must evict on the char budget
+  // well before the count cap is reached.
+  const a = makeAgent();
+  const big = 'x'.repeat(TAIL_TEXT_MAX);
+  for (let i = 0; i < 200; i++) {
+    parseEvent({ type: 'user', message: { content: big } }, a);
+  }
+  const chars = a.tail.reduce((n, l) => n + (l.text || '').length + (l.preview || '').length, 0);
+  assert.ok(a.tail.length < TAIL_MAX, `char cap evicted first (${a.tail.length} entries)`);
+  assert.ok(chars <= TAIL_CHARS_MAX, `ring holds ${chars} chars, cap ${TAIL_CHARS_MAX}`);
 });
 
 // ─── deriveCost ────────────────────────────────────────────────────

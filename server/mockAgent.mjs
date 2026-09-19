@@ -40,10 +40,11 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pushTail } from './jsonlConnector.mjs';
+import { TAIL_SHIP } from '../tui/lib/settings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, 'fixtures');
-const TAIL_MAX = 40;
 const SPARK_LEN = 15;
 
 function loadFixture(name) {
@@ -251,8 +252,7 @@ export class MockAgent extends EventEmitter {
   }
 
   appendTail(ln) {
-    this.tail.push({ ...ln, ts: Date.now() });
-    while (this.tail.length > TAIL_MAX) this.tail.shift();
+    pushTail(this, ln);   // shared ring: count cap + char cap + entry text cap
   }
 
   // .send() — mirrors Agent.send. Records the user message in the tail
@@ -337,7 +337,7 @@ export class MockAgent extends EventEmitter {
       sessionId: this.sessionId,
       permissionMode: this.permissionMode,
       workingStartTs: this.workingStartTs,
-      tail: this.tail.slice(-16),
+      tail: this.tail.slice(-TAIL_SHIP),   // whole ring — see PtyAgent.toJSON
       mock: true,
     };
   }

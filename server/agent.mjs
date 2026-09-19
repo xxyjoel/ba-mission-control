@@ -22,9 +22,10 @@ import { claudeSessionPath } from './sessionFileTailer.mjs';
 import { MODELS } from '../tui/lib/models.js';
 import { detectPrompt } from './detectPrompt.mjs';
 import { updateSpark } from './spark.mjs';
+import { pushTail } from './jsonlConnector.mjs';
+import { TAIL_SHIP } from '../tui/lib/settings.js';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
-const TAIL_MAX = 40;
 const SPARK_LEN = 15;
 
 // On-disk transcript directory. Each session's raw event stream lands at
@@ -616,10 +617,11 @@ export class Agent extends EventEmitter {
     this.emit('change');
   }
 
-  // Append to tail with bounded length so memory stays flat.
+  // Append to tail with bounded length AND bounded characters so memory stays
+  // flat — one shared path with jsonlConnector.pushTail (this class's #handle
+  // pushed raw stderr in at full length).
   appendTail(ln) {
-    this.tail.push({ ...ln, ts: Date.now() });
-    while (this.tail.length > TAIL_MAX) this.tail.shift();
+    pushTail(this, ln);
   }
 
   // Update tok/min sparkline. Delegates to the shared normalizer in
@@ -922,9 +924,10 @@ export class Agent extends EventEmitter {
       // in the fleet header so it reads as "retrying", not "failed".
       apiErrorCount: this.apiErrorCount || 0,
       lastApiErrorTs: this.lastApiErrorTs || 0,
-      // Snapshot the last 16 entries. Cards/FleetLog render the short
-      // preview; Zoom needs more history to wrap multi-line responses.
-      tail: this.tail.slice(-16),
+      // Snapshot the ring, not a hardcoded 16 — the fleet log is derived
+      // entirely from what agents ship, and narrative mode discards ~80% of
+      // it. TAIL_SHIP comes off the SETTINGS_SCHEMA `fleetLogLines` max.
+      tail: this.tail.slice(-TAIL_SHIP),
       // Assistant's current to-do plan (from the latest TodoWrite). Empty
       // until claude calls TodoWrite at least once.
       todos: this.todos.slice(),
