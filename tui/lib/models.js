@@ -111,6 +111,34 @@ export function resolveModelId(id, kind = 'opus') {
   return newestModelId(kind) || modelIds()[0];
 }
 
+// kindFromModelId — infer the model FAMILY ('opus' | 'fable' | 'sonnet' |
+// 'haiku' | …) from either id form: the CLI name ('claude-fable-5-1') or the
+// friendly key ('fable-5.1'). Returns null when no family token is parseable.
+// Pure string work — no catalog lookup — so it works for models the catalog
+// has never heard of (the whole point: 0408-M2 pricing fallback).
+export function kindFromModelId(modelId) {
+  const s = String(modelId || '').toLowerCase();
+  const m = /^claude-([a-z]+)(?:-|$)/.exec(s) || /^([a-z]+)(?:-[\d.]|$)/.exec(s);
+  return m ? m[1] : null;
+}
+
+// estimatedPricingFor — pricing entry for a model the catalog does NOT know.
+// 0408-M2: an unknown model must never price at $0 — that silently disables
+// costSession, costCapUSD and dailyBudgetUSD for exactly the newest (most
+// expensive) models. Rule: inherit the NEWEST same-family rate, flagged
+// estimatedPricing (same contract a probe-discovered model gets). When even
+// the family is unknown, inherit the newest opus — the default family
+// everywhere else (resolveModelId) and a deliberate over- rather than
+// under-estimate. Returns { id-less entry, estimatedPricing: true,
+// estimatedFrom: <catalog id> } or null only when the catalog is empty.
+export function estimatedPricingFor(modelId) {
+  const kind = kindFromModelId(modelId);
+  const srcId = (kind && newestModelId(kind)) || newestModelId('opus') || modelIds()[0];
+  const src = srcId ? MODELS[srcId] : null;
+  if (!src) return null;
+  return { ...src, estimatedPricing: true, estimatedFrom: srcId };
+}
+
 // modelByCli — reverse-lookup a catalog entry by its CLI model name. claude
 // reports the resolved cli model in every assistant event (→ agent.resolvedModel),
 // and a mid-session `/model` switch lands there too — so this is how the UI

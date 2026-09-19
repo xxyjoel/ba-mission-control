@@ -16,7 +16,7 @@
 // returns true if anything changed. Callers decide when to
 // emit('change').
 
-import { MODELS } from '../tui/lib/models.js';
+import { MODELS, estimatedPricingFor } from '../tui/lib/models.js';
 import { summarizeToolInput, SUBAGENT_TOOLS, subagentLabel } from './eventShapes.mjs';
 import { detectPrompt, promptFromToolUse } from './detectPrompt.mjs';
 import { updateSpark } from './spark.mjs';
@@ -113,16 +113,21 @@ function firstLine(text, maxLen = 200) {
 // + outputPrice         × output_tokens
 // all divided by 1_000_000.
 //
-// Returns 0 (not null) when the model is unknown or usage is missing,
-// so the caller can do `agent.costSession += deriveCost(...)` without
-// guarding.
+// Returns 0 (not null) only when usage or modelId is missing, so the
+// caller can do `agent.costSession += deriveCost(...)` without guarding.
 //
 // modelId can be the friendly id ('opus-4.7') OR the CLI model name
 // ('claude-opus-4-7') — JSONL events carry the CLI form in
 // `message.model` so we accept both.
+//
+// 0408-M2: an UNKNOWN model no longer prices at $0. $0 silently disabled
+// costSession, costCapUSD and dailyBudgetUSD for exactly the newest (most
+// expensive) models (a Fable 5.1 turn on the 1.1.13 catalog: $0.00 shown,
+// ~$0.51 real). Fall back to the newest same-family rate, flagged
+// estimatedPricing (estimatedPricingFor in tui/lib/models.js).
 export function deriveCost(usage, modelId) {
   if (!usage || !modelId) return 0;
-  const m = MODELS[modelId] || lookupByCliModel(modelId);
+  const m = MODELS[modelId] || lookupByCliModel(modelId) || estimatedPricingFor(modelId);
   if (!m) return 0;
   const inTok = usage.input_tokens || 0;
   const ccTok = usage.cache_creation_input_tokens || 0;
@@ -213,12 +218,19 @@ function handleUser(ev, agent) {
   // 'sys' entries so Ctrl+T sees the round-trip.
   if (Array.isArray(content)) {
     let changed = false;
+    let interrupted = false;
     for (const p of content) {
       if (p?.type === 'tool_result') {
         trackSubagentEnd(agent, p.tool_use_id);
         const text = typeof p.content === 'string'
           ? p.content
           : Array.isArray(p.content) ? p.content.map(c => c.text || '').join('\n') : '';
+        // 0408-P4: an Esc interrupt is recorded as a tool_result whose content
+        // starts with '[Request interrupted by user' — and NO Stop hook ever
+        // fires for it (0 of 24 recorded interrupts saw a Stop within 10s).
+        // Without this the card read WORKING while claude sat idle until the
+        // next prompt or the 60s idle_prompt; un-hooked sessions went STUCK.
+        if (/^\s*\[Request interrupted by user/.test(text)) interrupted = true;
         pushTail(agent, {
           kind: 'sys',
           text: `← tool_result ${p.is_error ? '(error)' : ''}\n${text.slice(0, 4000)}`,
@@ -235,8 +247,20 @@ function handleUser(ev, agent) {
       // claude's NEXT assistant record landed — observed ~14s of stale "INPUT
       // shows after I already answered". Clearing awaitingPrompt drops the
       // chips at the same instant.
-      agent.status = 'working';
+      // 0408-P4 exception: an interrupt tool_result ENDS the turn — claude
+      // will not act on it; the session is back at the prompt.
+      agent.status = interrupted ? 'idle' : 'working';
       agent.awaitingPrompt = null;
+      if (interrupted && agent.hookStatus != null) {
+        // The interrupt is the Stop that never fires: no Stop hook followed
+        // any of the 24 recorded interrupts, so the hook channel stays
+        // sticky-'working' (PreToolUse with no Stop) and ptyAgent's merge
+        // keeps the card WORKING forever. Write the idle the missing Stop
+        // would have written. Guarded on hookStatus != null so an un-hooked
+        // session is never flipped into hooked mode by a transcript event.
+        agent.hookStatus = 'idle';
+        agent.hookStatusTs = Date.now();
+      }
     }
     return changed;
   }

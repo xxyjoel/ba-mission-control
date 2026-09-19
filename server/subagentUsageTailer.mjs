@@ -2,7 +2,7 @@
 // into the PARENT session's totals + tok/min.
 //
 // Why this exists: the main JSONL tailer reads exactly ONE file, the parent
-// `<sessionId>.jsonl`. Sub-agent (Task/Workflow) turns are written to a
+// `<sessionId>.jsonl`. Sub-agent (Task/Agent/Workflow) turns are written to a
 // SEPARATE tree:
 //   ~/.claude/projects/<encoded-cwd>/<parentSessionId>/subagents/agent-<id>.jsonl
 // Each line is `isSidechain:true` and carries a full `message.usage` block.
@@ -63,12 +63,15 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
   if (!agent) throw new Error('subagentUsageTailer: agent is required');
   const offsets = new Map(); // filename → byte offset
   // Completed sub-agent files stop growing once the sidechain finishes. Without
-  // this, scan() re-stats EVERY file the dir has ever held on every poll — O(all
-  // sub-agents) I/O forever, the dominant idle-energy cost on long sessions with
-  // heavy fan-out. Once a file is fully read AND its size hasn't changed for
-  // SETTLE_IDLE_MS we `settled` it and skip it (never evicted — re-reading from 0
-  // would double-count its usage). Per-poll cost then tracks ACTIVE files, not
-  // all-time. Time-based (not poll-count) so it's robust to any poll cadence.
+  // this, scan() re-opened and re-read EVERY file the dir has ever held on every
+  // poll — the dominant idle-energy cost on long sessions with heavy fan-out.
+  // Once a file is fully read AND its size hasn't changed for SETTLE_IDLE_MS we
+  // `settled` it: from then on it costs ONE cheap stat per scan (no open/read).
+  // 0408-F6: settled files keep their byte offset and un-settle the moment the
+  // stat sees growth — a resumed sub-agent (SendMessage continues a spawned
+  // agent) appends to the same file, and its new usage resumes from the kept
+  // offset with no re-read and no double count.
+  // Time-based (not poll-count) so it's robust to any poll cadence.
   // `settled` is reset on SID rotation (see scan()), which bounds its dominant
   // growth path — the old session's filenames no longer leak forever. The residual
   // (a single session that spawns thousands of sub-agents) is task 0350: an
@@ -169,9 +172,19 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
       let changed = false;
       for (const f of files) {
         if (!f.startsWith('agent-') || !f.endsWith('.jsonl')) continue;
-        if (settled.has(f)) continue; // completed sidechain — no more stat/read
         let size;
         try { size = (await fsp.stat(join(dir, f))).size; } catch { continue; }
+        // 0408-F6: a settled file is NOT dead — the parent can resume that
+        // sub-agent (Agent tool: SendMessage continues a spawned agent) and its
+        // new turns append to the SAME file. Settling used to drop the offset
+        // and skip the file forever, so every resumed sub-agent's usage
+        // vanished. Now a settled file costs exactly the one cheap stat above
+        // per scan; on growth it un-settles and resumes from its KEPT offset,
+        // so nothing is ever re-read or double-counted.
+        if (settled.has(f)) {
+          if (size === lastSize.get(f)) continue; // still settled — stat only
+          settled.delete(f);
+        }
         if (!offsets.has(f)) {
           // First sighting. Existing-at-prime files start at EOF; new files at 0.
           offsets.set(f, primed ? 0 : size);
@@ -182,7 +195,9 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
         if (lastSize.get(f) !== size) { lastSize.set(f, size); lastGrowTs.set(f, now); }
         if (await readNew(join(dir, f), f, size)) changed = true;
         if ((offsets.get(f) || 0) >= size && now - (lastGrowTs.get(f) || now) >= SETTLE_IDLE_MS) {
-          settled.add(f); offsets.delete(f); lastSize.delete(f); lastGrowTs.delete(f);
+          // Keep offsets + lastSize: the offset is where a resume continues
+          // from (no double count) and lastSize is the growth check above.
+          settled.add(f); lastGrowTs.delete(f);
         }
       }
       primed = true;

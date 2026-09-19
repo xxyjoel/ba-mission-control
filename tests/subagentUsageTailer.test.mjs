@@ -106,7 +106,13 @@ test('integration: files present BEFORE start are primed at EOF (resume-safe)', 
   }
 });
 
-test('settle: an idle, fully-read file drops out of the poll (late appends ignored)', async () => {
+// 0408-F6: this test USED to pin the opposite — "late appends ignored" — and
+// that pin was the defect: a parent can resume a settled sub-agent
+// (SendMessage) and its new turns append to the same file, so every resumed
+// sub-agent's usage vanished. The settled state now means stat-only (no
+// open/read) until growth, then the file un-settles and resumes from its kept
+// offset. Full resume contract: tests/subagentUsageTailer.resume.test.mjs.
+test('settle: an idle, fully-read file goes stat-only, but a late append still folds (resume)', async () => {
   const { agent, cwd, subDir } = setup();
   // settleIdleMs tiny so the file settles within the test window.
   const tailer = startSubagentUsageTailer({ agent, statPollMs: 20, settleIdleMs: 60 });
@@ -120,7 +126,8 @@ test('settle: an idle, fully-read file drops out of the poll (late appends ignor
     await sleep(140);
     appendFileSync(join(subDir, 'agent-done.jsonl'), usageLine({ input_tokens: 999, output_tokens: 999 }));
     await sleep(80);
-    assert.equal(agent.tokensIn, 10, 'settled file is skipped — late append not folded (energy: no re-stat)');
+    assert.equal(agent.tokensIn, 1009, '0408-F6: the resumed append folds from the kept offset');
+    assert.equal(agent.tokensOut, 1004, 'first line not re-counted (no double count)');
   } finally {
     tailer.stop();
     rmSync(cwd, { recursive: true, force: true });

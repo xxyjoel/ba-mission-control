@@ -158,7 +158,15 @@ export function bgStatusFromEvents(events, nowMs) {
     }
     // LAST NON-NULL mapping wins, never the last event: PostToolUse is
     // null-mapping by contract (0223-AC3) precisely so it cannot clear
-    // 'working'. Same rule doRead() applies when it writes agent.hookStatus.
+    // 'working'. Same rule doRead() applies when it writes agent.hookStatus —
+    // including doRead's one exception (0408-P3): a main-thread PostToolUse
+    // while the standing mapping is 'waiting' means the prompt was answered
+    // and the approved tool ran, so it resolves to 'working'.
+    if (e?.event === 'PostToolUse' && mapped === 'waiting') {
+      mapped = 'working';
+      if (typeof e?.ts === 'number') mappedTs = e.ts;
+      continue;
+    }
     const s = mapEventToStatus(e);
     if (s != null) { mapped = s; if (typeof e?.ts === 'number') mappedTs = e.ts; }
   }

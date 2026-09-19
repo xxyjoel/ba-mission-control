@@ -10,12 +10,16 @@
 // Tools that spawn a parallel sub-agent / fan-out we count on the card.
 // Shared by both pipelines (agent.mjs stream-json + jsonlConnector) so the
 // tracking stays identical. See tui/Card.jsx ⋔{n} indicator.
-export const SUBAGENT_TOOLS = new Set(['Task', 'Workflow']);
+// 0408-D1: the claude CLI renamed the sub-agent launch tool 'Task' → 'Agent'.
+// Verified on the 10 newest live transcripts 2026-09-18: 22 'Agent' and 45
+// 'Workflow' tool_use records, zero 'Task'. 'Task' stays for old transcripts
+// replayed on attach (--resume prime reads history written by older CLIs).
+export const SUBAGENT_TOOLS = new Set(['Task', 'Agent', 'Workflow']);
 
 // Human-readable label for an in-flight sub-agent, from its tool_use input.
 export function subagentLabel(name, input) {
   if (name === 'Workflow') return String(input?.name || 'workflow').slice(0, 40);
-  // Task: prefer the short description, fall back to the agent type.
+  // Task/Agent: prefer the short description, fall back to the agent type.
   return String(input?.description || input?.subagent_type || 'subagent').slice(0, 40);
 }
 

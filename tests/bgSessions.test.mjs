@@ -171,6 +171,22 @@ describe('0403: bgStatusFromEvents', () => {
     ), 'waiting');
   });
 
+  test('0408-P3 parity: a main-thread PostToolUse after the prompt reads working (answered)', () => {
+    // Mirrors doRead()'s one exception: the prompt was approved and the tool
+    // already ran — 'waiting' would report an ask that no longer exists.
+    assert.equal(bgStatusFromEvents(
+      [ev({ event: 'Notification', notification_type: 'permission_prompt' }),
+       ev({ event: 'PostToolUse', tool_name: 'Bash', ts: now - 1000 })], now,
+    ), 'working');
+  });
+
+  test('0408-P3 parity: a SUB PostToolUse never lifts waiting (0395 gate)', () => {
+    assert.equal(bgStatusFromEvents(
+      [ev({ event: 'Notification', notification_type: 'permission_prompt' }),
+       ev({ event: 'PostToolUse', tool_name: 'Bash', sub: true, ts: now - 1000 })], now,
+    ), 'waiting');
+  });
+
   test('the MEASURED finished tail — PostToolUse, Stop, idle_prompt — reads idle', () => {
     // 93c118d4 at 10:20. An mtime-freshness count would call this "1bg working".
     assert.equal(bgStatusFromEvents([ev({ event: 'PostToolUse', tool_name: 'Bash' }),

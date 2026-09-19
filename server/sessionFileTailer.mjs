@@ -26,6 +26,13 @@ import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseEvent } from './jsonlConnector.mjs';
+// 0408-F1/M6: the rotation hunt classifies every candidate transcript so a
+// BACKGROUND FORK (sessionKind:'bg') is never adopted as the slot's session.
+// This import closes the module cycle bgSessions.mjs documents (sessionFileTailer
+// → bgSessions → statusHookTailer → sessionFileTailer); it is safe because
+// nothing in the cycle runs at module-eval time — tests/bgSessions.test.mjs
+// pins the co-load.
+import { classifyTranscript } from './bgSessions.mjs';
 
 // claude's project-dir encoding: every character that isn't [a-zA-Z0-9-]
 // becomes '-'. That includes '/', '_', '.', '@', spaces, etc. The earlier
@@ -121,19 +128,33 @@ export function creationPollDelay(attempt, fastMs = 500, fastAttempts = 20, slow
 }
 
 export async function findRotatedSession(cwd, currentSid, minMtime = 0, excludeSids = []) {
+  const dir = claudeProjectDir(cwd);
   let entries;
-  try { entries = await fsp.readdir(claudeProjectDir(cwd)); } catch { return null; }
+  try { entries = await fsp.readdir(dir); } catch { return null; }
   const exclude = excludeSids instanceof Set ? excludeSids : new Set(excludeSids || []);
-  let bestSid = null, bestMtime = minMtime || 0;
+  const floor = minMtime || 0;
+  const candidates = [];
   for (const f of entries) {
     if (!f.endsWith('.jsonl')) continue;
     const sid = f.slice(0, -'.jsonl'.length);
     if (sid === currentSid || exclude.has(sid) || !UUID_SHAPE.test(sid)) continue;
     let mt;
-    try { mt = (await fsp.stat(join(claudeProjectDir(cwd), f))).mtimeMs; } catch { continue; }
-    if (mt > bestMtime) { bestMtime = mt; bestSid = sid; }
+    try { mt = (await fsp.stat(join(dir, f))).mtimeMs; } catch { continue; }
+    if (mt > floor) candidates.push({ sid, mt, path: join(dir, f) });
   }
-  return bestSid;
+  // Newest first, then take the first candidate that is NOT a background fork.
+  // 0408-F1: claude forks conversations into the background under a fresh sid
+  // in the SAME project dir; adopting one re-pointed the slot (and, via the
+  // store, `--resume`) onto a conversation the user never opened. classify-
+  // Transcript fails OPEN ('normal' on any read failure/ambiguity — see the
+  // FAIL-OPEN rule in bgSessions.mjs), so /clear rotations and zoomSession's
+  // minted sids still rotate exactly as before.
+  candidates.sort((a, b) => b.mt - a.mt);
+  for (const c of candidates) {
+    if (await classifyTranscript(c.path, c.sid) === 'bg') continue;
+    return c.sid;
+  }
+  return null;
 }
 
 // startSessionTailer — open a watcher on the claude session JSONL
@@ -358,6 +379,10 @@ export function startSessionTailer({
   async function maybeRepoint() {
     let size = -1, mtimeMs = 0;
     try { const st = await fsp.stat(path); size = st.size; mtimeMs = st.mtimeMs; } catch {}
+    // 0408-F7: stop() can land while any await above/below is in flight; without
+    // these gates the continuation kept mutating agent state (and init() kept
+    // arming timers) after the tailer was stopped.
+    if (stopped) return;
     if (size > lastSize) { lastSize = size; frozenPolls = 0; repointMissTicks = 0; return; }
     if (++frozenPolls < rotateAfterFrozenPolls) return;
     // Frozen: only run the expensive hunt on the backoff cadence (skips still
@@ -368,6 +393,7 @@ export function startSessionTailer({
     // fan-out when nothing in the dir has changed since our last hunt.
     let dirMt = 0;
     try { dirMt = (await fsp.stat(claudeProjectDir(agent.cwd))).mtimeMs; } catch {}
+    if (stopped) return; // 0408-F7
     if (!shouldHuntDirMtime(dirMt, lastHuntDirMtime, repointMissTicks)) { repointMissTicks++; return; }
     lastHuntDirMtime = dirMt;
     // Follow rotations FORWARD only: the replacement must be newer than the
@@ -377,6 +403,7 @@ export function startSessionTailer({
     let excl = [];
     try { excl = claimedSids() || []; } catch {}
     const sid = await findRotatedSession(agent.cwd, agent.sessionId, floor, excl);
+    if (stopped) return; // 0408-F7: never re-point (or mutate the agent) after stop()
     if (!sid) { repointMissTicks++; return; } // no replacement yet — back off the next polls
     try { agent.appendTail?.({ kind: 'sys', text: `tailer: session rotated ${String(agent.sessionId).slice(0, 8)} → ${sid.slice(0, 8)}` }); } catch {}
     agent.sessionId = sid;
@@ -386,6 +413,7 @@ export function startSessionTailer({
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
     offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0; lastHuntDirMtime = 0;
     const primedTo = await primeStatusFromDisk();
+    if (stopped) return; // 0408-F7: don't re-attach a watcher on a stopped tailer
     offset = primedTo != null ? primedTo : 0;
     attachWatcher();
     await readNew();
@@ -401,6 +429,9 @@ export function startSessionTailer({
       offset = 0;
     } else {
       const primedTo = await primeStatusFromDisk();
+      if (stopped) return; // 0408-F7: stop() during the prime read must not arm
+                           // the watcher, the creation poll, or the backstop
+                           // interval — they leaked for the life of the process.
       if (primedTo != null) {
         offset = primedTo;
       } else {
@@ -409,6 +440,7 @@ export function startSessionTailer({
         offset = 0;
       }
     }
+    if (stopped) return; // 0408-F7 (fromStart path reaches here without awaiting)
 
     if (!attachWatcher()) {
       // File not created yet — poll until it appears, then switch to fs.watch.

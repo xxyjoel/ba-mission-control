@@ -28,8 +28,9 @@ const STAT_POLL_MS = 1500;     // backstop for cloud-synced paths where fs.watch
 // drive: 'self' (default) owns its 1500ms backstop interval; 'external' creates
 // no timer — the caller (Fleet's single tailer driver, 0381) invokes tick().
 export function startStatusHookTailer({ agent, drive = 'self' }) {
-  const filePath = statusFilePath({ sessionId: agent.sessionId });
-  const core = createReadCore(filePath);
+  let filePath = statusFilePath({ sessionId: agent.sessionId });
+  let core = createReadCore(filePath);
+  let lastSid = agent.sessionId;
 
   let stopped = false;
   let watcher = null;
@@ -37,11 +38,33 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
   let statPollTimer = null;
   let readingLock = false;
 
+  // 0408-F3: the hook-file path used to be pinned at start. After a /clear
+  // rotation or a claude-minted sid the session tailer reassigns
+  // agent.sessionId, and every hook event (permission prompts, PostToolUse,
+  // sub-agent liveness) then landed in a file nobody read. Re-resolve the sid
+  // on every read pass — the same shape subagentUsageTailer uses per scan —
+  // and rebuild the read core + watcher when it changed. The stat-poll /
+  // tick() backstop keeps reading even when the new file doesn't exist yet
+  // (createReadCore.readNew returns [] on ENOENT).
+  function maybeRepoint() {
+    const sid = agent.sessionId;
+    if (sid === lastSid) return;
+    let nextPath;
+    try { nextPath = statusFilePath({ sessionId: sid }); } catch { return; } // garbage sid — keep the old feed
+    lastSid = sid;
+    filePath = nextPath;
+    core = createReadCore(filePath);
+    if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+    attachWatcher(); // failure is fine — the stat-poll backstop covers creation
+  }
+
   async function doRead() {
     if (stopped || readingLock) return;
     readingLock = true;
     try {
+      maybeRepoint();
       const events = await core.readNew();
+      if (stopped) return;
       for (const ev of events) {
         // 0395: a SUBAGENT's tool events (record.sub, from agent_id in the
         // hook payload) say nothing about the MAIN thread's state — a
@@ -68,6 +91,21 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
           && agent.awaitingPrompt) {
           agent.awaitingPrompt = null;
           agent.emit?.('change');
+        }
+        // 0408-P3: a MAIN-THREAD PostToolUse while hookStatus==='waiting' means
+        // the permission prompt was ANSWERED and the approved tool already ran —
+        // yet nothing status-bearing fires until the next PreToolUse or Stop, so
+        // the card sat on NEEDS INPUT while claude streamed (median 15.1s, p90
+        // 41.6s over 368 recorded prompts). Resolve it to 'working' here.
+        // PostToolUse stays NULL-MAPPING for every other prior state (0223-AC3
+        // contract, enforced in mapEventToStatus) — this branch only lifts a
+        // stale 'waiting'. Sub-tagged PostToolUse never reaches here (0395 gate
+        // above).
+        if (ev?.event === 'PostToolUse' && agent.hookStatus === 'waiting') {
+          agent.hookStatus = 'working';
+          agent.hookStatusTs = Date.now();
+          agent.emit?.('change');
+          continue;
         }
         const s = mapEventToStatus(ev);
         if (s != null) {

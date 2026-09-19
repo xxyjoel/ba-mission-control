@@ -540,8 +540,25 @@ test('deriveCost: friendly id also works', () => {
   assert.ok(Math.abs(cost - expectedCost(u, 'opus-4.7')) < 1e-9, `got ${cost}`);
 });
 
-test('deriveCost: unknown model → 0 (no crash)', () => {
-  assert.equal(deriveCost({ input_tokens: 100 }, 'made-up-model'), 0);
+// 0408-M2: this test USED to pin `unknown model → 0`, and that pin was the
+// defect — $0 silently disabled costSession, costCapUSD and dailyBudgetUSD for
+// exactly the newest (most expensive) models. Unknown models now price at the
+// newest same-family rate (estimatedPricingFor), flagged estimated; a model
+// with no recognizable family inherits the newest opus.
+test('deriveCost: unknown model of a KNOWN family prices at the newest family rate', () => {
+  const u = { input_tokens: 100, output_tokens: 50 };
+  const cost = deriveCost(u, 'claude-fable-9-9');
+  assert.ok(cost > 0, '0408-M2: never $0 for an unknown model');
+  const newestFable = expectedCost(u, 'fable-5.1');
+  assert.ok(Math.abs(cost - newestFable) < 1e-9,
+    `inherits the newest fable rate; got ${cost}, expected ${newestFable}`);
+});
+
+test('deriveCost: unknown model with no recognizable family inherits newest opus (never 0)', () => {
+  const u = { input_tokens: 100 };
+  const cost = deriveCost(u, 'made-up-model');
+  assert.ok(cost > 0, '0408-M2: never $0');
+  assert.ok(Math.abs(cost - expectedCost(u, 'opus-4.8')) < 1e-9, `got ${cost}`);
 });
 
 test('deriveCost: missing usage → 0', () => {
@@ -731,6 +748,23 @@ test('subagents: Workflow tool_use is tracked with a workflow label/type', () =>
   assert.equal(e.type, 'workflow');
 });
 
+// 0408-D1: the claude CLI renamed the sub-agent launch tool 'Task' → 'Agent'
+// (live transcripts 2026-09-18: 22 Agent / 45 Workflow / 0 Task). 'Task' above
+// stays covered for old transcripts; 'Agent' must track identically or
+// pendingSubagents never fills and the bg chip runs on the hook clock alone.
+test('subagents: Agent tool_use is tracked like Task (current CLI name)', () => {
+  const a = makeAgent();
+  parseEvent({ type: 'assistant', message: { content: [
+    { type: 'tool_use', id: 'toolu_ag', name: 'Agent', input: { description: 'fix the tailer', subagent_type: 'general-purpose' } },
+  ] } }, a);
+  assert.equal(a.pendingSubagents.size, 1);
+  const e = a.pendingSubagents.get('toolu_ag');
+  assert.equal(e.label, 'fix the tailer');
+  assert.equal(e.type, 'general-purpose');
+  parseEvent(toolResult('toolu_ag'), a);
+  assert.equal(a.pendingSubagents.size, 0, 'tool_result pairing ends it');
+});
+
 test('subagents: non-fan-out tools (Bash, Read) are not tracked', () => {
   const a = makeAgent();
   parseEvent({ type: 'assistant', message: { content: [
@@ -746,6 +780,63 @@ test('subagents: /clear clears the pending map', () => {
   parseEvent({ type: 'user', message: { role: 'user',
     content: '<command-name>/clear</command-name>' } }, a);
   assert.equal(a.pendingSubagents.size, 0);
+});
+
+// ─── 0408-P4: an Esc interrupt ends the turn ─────────────────────────────────
+// An interrupt is recorded as a tool_result whose content starts with
+// '[Request interrupted by user' and NO Stop hook ever fires for it (0/24
+// recorded interrupts). Before this fix both channels said WORKING while
+// claude sat idle at the prompt (STUCK after 5 min on un-hooked sessions).
+
+test('P4: an interrupt tool_result sets status idle and clears awaitingPrompt', () => {
+  const a = makeAgent();
+  a.status = 'working';
+  a.awaitingPrompt = { kind: 'binary' };
+  const changed = parseEvent({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'toolu_x', is_error: true, content: '[Request interrupted by user for tool use]' },
+  ] } }, a);
+  assert.equal(changed, true);
+  assert.equal(a.status, 'idle', '0408-P4: the turn is over — not working');
+  assert.equal(a.awaitingPrompt, null, 'no pending ask survives an interrupt');
+});
+
+test('P4: the plain-text interrupt variant (array content) also ends the turn', () => {
+  const a = makeAgent();
+  a.status = 'working';
+  const changed = parseEvent({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'toolu_y', content: [{ type: 'text', text: '[Request interrupted by user]' }] },
+  ] } }, a);
+  assert.equal(changed, true);
+  assert.equal(a.status, 'idle');
+});
+
+test('P4: a NORMAL tool_result still flips to working (existing contract intact)', () => {
+  const a = makeAgent();
+  a.status = 'waiting';
+  parseEvent({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'toolu_z', content: 'ok' },
+  ] } }, a);
+  assert.equal(a.status, 'working', 'non-interrupt results keep the working transition');
+});
+
+test('P4: on a HOOKED agent the interrupt writes the idle the missing Stop would have', () => {
+  const a = makeAgent();
+  a.status = 'working';
+  a.hookStatus = 'working'; // PreToolUse fired; no Stop will ever follow
+  parseEvent({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'toolu_i', is_error: true, content: '[Request interrupted by user for tool use]' },
+  ] } }, a);
+  assert.equal(a.hookStatus, 'idle', 'hook channel released — sticky-working cannot pin the card');
+  assert.ok(a.hookStatusTs > 0);
+});
+
+test('P4: an UN-hooked agent is not flipped into hooked mode by an interrupt', () => {
+  const a = makeAgent();
+  a.status = 'working';
+  parseEvent({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'toolu_j', is_error: true, content: '[Request interrupted by user for tool use]' },
+  ] } }, a);
+  assert.equal(a.hookStatus ?? null, null, 'hookStatus stays null — hooked-mode gate untouched');
 });
 
 // ─── 0399: client-side records are noise — no status, no clock ────
