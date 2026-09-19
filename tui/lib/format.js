@@ -15,6 +15,27 @@ const BLOCK = '█';
 const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
 const SPARK = '▁▂▃▄▅▆▇█';
 
+// 0409: the display layer's marker vocabulary. Every visual traces back to a
+// measured value from a live feed; where a value is genuinely unmeasured the
+// UI must SAY so, visibly different from a real zero.
+//
+//   UNKNOWN ('?')   — no measurement exists. NOT the same glyph as a real 0.
+//   ESTIMATED ('~') — a real number derived from an INHERITED input (already
+//                     in use for costs priced off an estimatedPricing row).
+//
+// One constant so Card / Header / Aggregate / StatusBar / Zoom cannot drift
+// into three different ways of spelling "we don't know". `?` was already the
+// house spelling (Aggregate's `↻{fmtReset(...) || '?'}`); this just names it.
+export const UNKNOWN = '?';
+export const ESTIMATED = '~';
+
+// unknownIf — pick the marker or the formatted value in one expression, so a
+// caller can't accidentally render `0` for a missing measurement:
+//   unknownIf(agent.spawnedAt == null, () => fmtDurShort(now - agent.spawnedAt))
+export function unknownIf(isUnknown, fmt) {
+  return isUnknown ? UNKNOWN : fmt();
+}
+
 // 0010: grapheme segmenter for trunc(). Cached at module scope — constructing
 // one per call would be costly on the hot render path. Falls back to a
 // codepoint spread (surrogate-pair safe, not ZWJ-cluster safe) where Intl

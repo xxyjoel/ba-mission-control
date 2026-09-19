@@ -27,8 +27,8 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { MODELS, modelColor, modelByCli } from './lib/models.js';
-import { barCells, sparkLine, fmtK, fmtMoney, fmtMem, trunc, humanize, fmtDurShort } from './lib/format.js';
-import { readProjectHealth, healthColor } from './lib/projectHealth.js';
+import { barCells, sparkLine, fmtK, fmtMoney, fmtMem, trunc, humanize, fmtDurShort, UNKNOWN } from './lib/format.js';
+import { readProjectHealth, healthColor, healthScoreText } from './lib/projectHealth.js';
 
 const STATUS_GLYPH = { working: '●', waiting: '◉', idle: '○', paused: '⏸', error: '✕', empty: '+' };
 
@@ -125,7 +125,15 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   const resolved = modelByCli(agent.resolvedModel);
   const model = resolved || MODELS[agent.model];
   const modelId = resolved ? resolved.id : agent.model;
-  const ctxPct = model ? (agent.context || 0) / model.maxCtx : 0;
+  // 0409: ctx% needs a DENOMINATOR, and the only source of one is the model's
+  // maxCtx. When claude reports a model the catalog has never heard of there is
+  // no denominator — the old `: 0` then rendered a confident `0%` beside a real
+  // 142k token count, and an empty 14-cell bar that read as "plenty of room".
+  // ctxKnown gates every ctx visual: the bar and the % are replaced by the
+  // unknown marker, and the measured token count (which IS a live figure) stays.
+  const ctxKnown = !!(model && Number.isFinite(model.maxCtx) && model.maxCtx > 0);
+  const ctxPct = ctxKnown ? (agent.context || 0) / model.maxCtx : 0;
+  const ctxPctText = ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
   const overT = (agent.context || 0) >= threshold;
   const nearT = (agent.context || 0) >= threshold * ((warnPct || 85) / 100);
 
@@ -145,8 +153,22 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // read IDLE while a fleet of background agents ran. Both are the same card
   // telling one truth where there are two. Suppressed while an approval is
   // pending — that needs the user now and must not share the row.
-  const bgTag = !approval && agent.bgCount > 0
-    ? ` · ${agent.bgCount}bg ${(agent.bgStatus || '').toUpperCase()}`
+  //
+  // 0409: the chip must not invent a COUNT. `bgCount` is a real tally of
+  // outstanding Task/Workflow calls, except on one path: ptyAgent's hook-clock
+  // fallback sets `bgCount = 1` when the transcript never showed the Task, so
+  // five running background agents rendered "1bg". The count there is genuinely
+  // unmeasured — one is a guess that happens to look like a measurement.
+  //
+  // So the chip reads the LIVENESS flag (bgStatus) and the COUNT separately:
+  // background work is shown whenever bgStatus says it is live, and the count
+  // is printed only when it is a real positive tally — otherwise `?bg`. That
+  // keeps a measured tally rendering exactly as before, and lets the server
+  // report "live, count unknown" (bgCount null) without the card lying.
+  const bgLive = !!agent.bgStatus || agent.bgCount > 0;
+  const bgCounted = Number.isFinite(agent.bgCount) && agent.bgCount > 0;
+  const bgTag = !approval && bgLive
+    ? ` · ${bgCounted ? agent.bgCount : UNKNOWN}bg ${(agent.bgStatus || '').toUpperCase()}`
     : '';
 
   // Branch row
@@ -160,10 +182,14 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
                     : '—';
   const mCol        = modelColor(modelId, theme);
 
-  // CTX bar — give it ~14 cells of room
+  // CTX bar — give it ~14 cells of room.
+  // 0409: threshFrac was `: 0.75` for an unknown model — a threshold marker
+  // drawn three-quarters along a bar whose scale nobody knows. It is omitted
+  // now (barCells skips the marker when threshFrac isn't a number), and the
+  // whole bar is suppressed when there's no denominator to plot against.
   const ctxBarW = 14;
-  const threshFrac = model ? (threshold / model.maxCtx) : 0.75;
-  const ctxCells = barCells({ value: ctxPct, width: ctxBarW, threshFrac });
+  const threshFrac = ctxKnown ? (threshold / model.maxCtx) : undefined;
+  const ctxCells = ctxKnown ? barCells({ value: ctxPct, width: ctxBarW, threshFrac }) : null;
   const ctxStatColor = overT ? theme.red : nearT ? theme.yellow : theme.fg;
 
   // Sparkline
@@ -206,9 +232,13 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
 
   // Session vitals — cheap counters already on the snapshot. Anchored to a
   // single `now` so uptime and time-in-state advance together each render.
+  // 0409: `(agent.spawnedAt || now)` made a MISSING spawn timestamp render as
+  // "0s" — a brand-new session and an unstamped one looked identical. A real
+  // agent always carries both (PtyAgent stamps them in its constructor), so
+  // these branches only fire on a snapshot that lost the field; say so.
   const now       = Date.now();
-  const uptime    = fmtDurShort(now - (agent.spawnedAt || now));
-  const stateAge  = fmtDurShort(now - (agent.stateSince || now));
+  const uptime    = agent.spawnedAt  ? fmtDurShort(now - agent.spawnedAt)  : UNKNOWN;
+  const stateAge  = agent.stateSince ? fmtDurShort(now - agent.stateSince) : UNKNOWN;
 
   // ── Triage line ──────────────────────────────────────────────
   // The operator scans 10 cards asking one prospective question: "does this
@@ -230,7 +260,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   } else if (agent.status === 'waiting') {
     action = approval ? 'needs approval · answer to proceed' : 'needs input · answer to continue';
     actionColor = approval ? theme.red : theme.yellow;
-  } else if (agent.status === 'idle' && agent.bgCount > 0) {
+  } else if (agent.status === 'idle' && bgLive) {
+    // 0409: reads the same liveness flag as the chip above, so the verb and the
+    // chip can never disagree — and so an unknown-but-live background count
+    // still suppresses "needs a nudge →" on a genuinely busy slot.
     // 0408/D2: background agents keep working while the foreground turn is
     // idle (e7e28fa keeps status 'idle' during fan-out). The triage verb must
     // read the WHOLE card's truth, not status alone — `IDLE · 3bg WORKING`
@@ -293,7 +326,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={sCol}>{statusGlyph} {statusWord}</Text>
         {bgTag && <Text color={theme.brBlue}>{bgTag}</Text>}
         {nearT && (
-          <Text color={overT ? theme.red : theme.yellow}> · {(ctxPct * 100).toFixed(0)}%</Text>
+          <Text color={overT ? theme.red : theme.yellow}> · {ctxPctText}</Text>
         )}
         {agent.stuckMin > 0 && (
           // Wired by stuck-detection (#25); only renders when the server
@@ -317,17 +350,22 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         {agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
       </Box>
 
-      {/* CTX bar */}
+      {/* CTX bar. 0409: with no known maxCtx the bar is SUPPRESSED rather than
+          drawn empty — 14 empty cells read as "0% used", which is exactly the
+          unknown-as-zero confusion this row is being cleared of. The measured
+          token count still shows; the ratio says `?`. One row either way. */}
       <Box>
         <Text color={theme.dim}>ctx </Text>
-        {ctxCells.map((c, i) => (
-          <Text key={i} color={
-            c.kind === 'thresh'  ? theme.yellow :
-            c.kind === 'full'    ? (overT ? theme.red : nearT ? theme.yellow : theme.accent) :
-            c.kind === 'partial' ? theme.brBlue : theme.faint
-          }>{c.char}</Text>
-        ))}
-        <Text color={ctxStatColor}> {fmtK(agent.context || 0)} {(ctxPct * 100).toFixed(0)}%</Text>
+        {ctxCells
+          ? ctxCells.map((c, i) => (
+              <Text key={i} color={
+                c.kind === 'thresh'  ? theme.yellow :
+                c.kind === 'full'    ? (overT ? theme.red : nearT ? theme.yellow : theme.accent) :
+                c.kind === 'partial' ? theme.brBlue : theme.faint
+              }>{c.char}</Text>
+            ))
+          : <Text color={theme.faint}>limit {UNKNOWN}</Text>}
+        <Text color={ctxStatColor}> {fmtK(agent.context || 0)} {ctxPctText}</Text>
       </Box>
 
       {/* Tok/min + sparkline · right side: subprocess CPU/RSS (0387).
@@ -393,7 +431,11 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           // glyph. Numeric score + fixed-set arrow only; the untrusted verdict
           // STRING is no longer rendered anywhere on the card, so its escape
           // surface is gone entirely (supersedes the 0181 humanize path).
-          <Text color={healthColor(health, theme)}>●{health.score.toFixed(0)}{health.arrow}  </Text>
+          // 0409: healthScoreText prints `?` for a reading whose composite was
+          // unusable — `score.toFixed(0)` on the old `|| 0` rendered `●0`, the
+          // worst possible health, for a score that was never measured. The
+          // arrow is '' until there are two readings to take a delta between.
+          <Text color={healthColor(health, theme)}>●{healthScoreText(health)}{health.arrow}  </Text>
         )}
         <Text color={theme.fg}>⟳{agent.turnCount || 0}</Text>
         {innerW >= 30 && <Text color={theme.dim}>  {agent.messageCount || 0}✉</Text>}

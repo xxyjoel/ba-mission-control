@@ -25,9 +25,9 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { MODELS, modelColor, modelByCli } from '../lib/models.js';
-import { barCells, fmtK, fmtMoney, fmtDuration, humanize, trunc } from '../lib/format.js';
+import { barCells, fmtK, fmtMoney, fmtDuration, humanize, trunc, UNKNOWN } from '../lib/format.js';
 import { zoomInnerWidth } from '../lib/zoomGeometry.js';
-import { readProjectHealth, healthColor } from '../lib/projectHealth.js';
+import { readProjectHealth, healthColor, healthScoreText } from '../lib/projectHealth.js';
 import PtyPane from '../zoom/PtyPane.jsx';
 import { classifyZoomKey } from '../zoom/zoomKeys.js';
 import { dlog } from '../lib/debugLog.js';
@@ -108,7 +108,14 @@ export default function Zoom({
   // genuine drift/unknown model, not an intentional in-catalog /model switch.
   const unknownResolved = agent.resolvedModel && !resolved
     && (!MODELS[agent.model] || agent.resolvedModel !== MODELS[agent.model].cliModel);
-  const ctxPct = model ? (agent.context || 0) / model.maxCtx : 0;
+  // 0409: an unknown model has no maxCtx, so there is no ctx DENOMINATOR. The
+  // old `: 0` rendered the compact stats line as `ctx 142k/0  0%` — a real
+  // token count over a fabricated limit, reported as 0% used. Gate every ctx
+  // ratio on ctxKnown and print the unknown marker instead.
+  const ctxKnown = !!(model && Number.isFinite(model.maxCtx) && model.maxCtx > 0);
+  const ctxPct = ctxKnown ? (agent.context || 0) / model.maxCtx : 0;
+  const ctxPctText = ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
+  const ctxMaxText = ctxKnown ? fmtK(model.maxCtx) : UNKNOWN;
   const overT = (agent.context || 0) >= threshold;
   const nearT = (agent.context || 0) >= threshold * 0.85;
 
@@ -127,8 +134,14 @@ export default function Zoom({
 
   // CONTEXT bar width — fits its half-width stats column even on a narrow
   // modal, so the bar can't wrap the panel's fixed-height rows.
+  // 0409: threshFrac was `: 0.75` with no known maxCtx — a threshold marker
+  // placed three-quarters along a bar with no scale. Omitted now, and the bar
+  // itself is suppressed (cells === null) rather than drawn empty, which would
+  // read as "0% of the context used".
   const barW = Math.max(10, Math.min(40, Math.floor(innerW / 2) - 4));
-  const cells = barCells({ value: ctxPct, width: barW, threshFrac: model ? threshold / model.maxCtx : 0.75 });
+  const cells = ctxKnown
+    ? barCells({ value: ctxPct, width: barW, threshFrac: threshold / model.maxCtx })
+    : null;
 
   const tools = useMemo(() => summariseTools(agent.tail), [agent.tail]);
   const todos = agent.todos || [];
@@ -154,7 +167,15 @@ export default function Zoom({
   // list also shrinks item-by-item to fit its leftover budget.
   const CHROME_ROWS = 9;
   const MIN_BODY_ROWS = 6;
-  const availableRows = height || Math.max(10, (stdout?.rows || 50) - 4);
+  // 0409: the fallback used to be `(stdout?.rows || 50) - 4` — it fabricated a
+  // 50-row terminal whenever the real height was unreadable (non-TTY, rows 0),
+  // and Ink cannot erase a frame taller than the screen, so a 50-row assumption
+  // on a 24-row terminal tears the whole UI. App.jsx always passes `height`, so
+  // this only fires on a non-TTY; degrade to the SMALLEST frame that still
+  // renders (chrome + PtyPane's minimum) rather than the roomiest guess. Under-
+  // filling a big terminal is recoverable; overflowing a small one is not.
+  const realRows = Number.isFinite(stdout?.rows) && stdout.rows > 0 ? stdout.rows - 4 : null;
+  const availableRows = height || realRows || (CHROME_ROWS + MIN_BODY_ROWS);
   let panelRoom = Math.max(0, availableRows - CHROME_ROWS - MIN_BODY_ROWS);
 
   // Stats panel (shed LAST): 1 marginTop + 9 USAGE rows (title + 8 stat rows)
@@ -280,8 +301,8 @@ export default function Zoom({
       <Box marginTop={1} height={1} overflow="hidden">
         <Text color={theme.dim}>ctx </Text>
         <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{fmtK(agent.context || 0)}</Text>
-        <Text color={theme.dim}>/{fmtK(model ? model.maxCtx : 0)}  </Text>
-        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{(ctxPct * 100).toFixed(0)}%</Text>
+        <Text color={theme.dim}>/{ctxMaxText}  </Text>
+        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxPctText}</Text>
         <Text color={theme.faint}>  ·  </Text>
         <Text color={theme.dim}>in </Text>
         <Text color={theme.fg}>{fmtK(agent.tokensIn || 0)}↓</Text>

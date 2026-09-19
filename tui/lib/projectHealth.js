@@ -65,10 +65,20 @@ export function readProjectHealth(cwd, now = Date.now()) {
     if (rows.length) {
       const last = rows[0];
       const prev = rows[1];
-      const score = Number(last.composite) || 0;
-      let arrow = '·';
-      if (prev && typeof prev.composite === 'number') {
-        const d = score - prev.composite;
+      // 0409: `Number(last.composite) || 0` reported an UNMEASURED score as 0,
+      // which the card renders as `●0` — the worst possible health, not
+      // "unknown". It also destroyed a legitimate composite of 0. Keep null for
+      // "the reading carries no usable composite" and let the renderers print
+      // the unknown marker; a real 0 stays 0.
+      const raw = Number(last.composite);
+      const score = Number.isFinite(raw) ? raw : null;
+      // Trend needs TWO readings. With only one, there is no measured delta —
+      // '·' would claim a flat trend we never measured, so the arrow is empty
+      // and the chip renders as a bare score. '·' now means exactly one thing:
+      // measured, and flat within ±0.5.
+      let arrow = '';
+      if (score != null && prev && Number.isFinite(Number(prev.composite))) {
+        const d = score - Number(prev.composite);
         arrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '·';
       }
       data = {
@@ -94,9 +104,21 @@ export function healthColor(h, theme) {
   if (w === 'HEALTHY') return theme.green;
   if (w === 'STABLE')  return theme.cyan;
   if (w === 'DEGRADED' || w === 'CRITICAL') return theme.red;
-  if ((h?.score ?? 0) >= 80) return theme.green;
-  if ((h?.score ?? 100) < 50) return theme.red;
+  // 0409: the score fallbacks used to be `?? 0` (→ red) and `?? 100` (→ green),
+  // so a reading with NO composite got a confident color off a fabricated
+  // number. An unmeasured score gets a neutral color instead; only a real
+  // number picks a tier.
+  const s = h?.score;
+  if (!Number.isFinite(s)) return theme.dim;
+  if (s >= 80) return theme.green;
+  if (s < 50)  return theme.red;
   return theme.yellow;
+}
+
+// healthScoreText — the `78` / `?` half of the `●78↑` chip. Shared by the Card
+// chip and the Zoom stats line so the two cannot spell "unknown" differently.
+export function healthScoreText(h) {
+  return Number.isFinite(h?.score) ? h.score.toFixed(0) : '?';
 }
 
 // Test helper — drop the memoized state so a test can re-read a rewritten file.
