@@ -22,6 +22,7 @@
 // - R13: spawn is injectable for tests — defaults to node-pty.spawn.
 
 import { EventEmitter } from 'node:events';
+import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { spawn as ptySpawn } from 'node-pty';
@@ -369,8 +370,7 @@ export class PtyAgent extends EventEmitter {
     // into pendingSends until ready flips true, then drains.
     this.ready = false;
     this.readyTimer = null;
-    this.cols = Math.max(20, (cols | 0) || DEFAULT_COLS);
-    this.rows = Math.max(5, (rows | 0) || DEFAULT_ROWS);
+    ({ cols: this.cols, rows: this.rows } = clampPtyDims(cols, rows, DEFAULT_COLS, DEFAULT_ROWS));
   }
 
   // status accessor anchors workingStartTs on transition into 'working'
@@ -996,8 +996,7 @@ export class PtyAgent extends EventEmitter {
   // so every resize appended a duplicate (narrow) copy of the conversation.
   // Returns true when the dimensions actually changed.
   resize(cols, rows) {
-    const nextCols = Math.max(20, (cols | 0) || DEFAULT_COLS);
-    const nextRows = Math.max(5, (rows | 0) || DEFAULT_ROWS);
+    const { cols: nextCols, rows: nextRows } = clampPtyDims(cols, rows, DEFAULT_COLS, DEFAULT_ROWS);
     if (nextCols === this.cols && nextRows === this.rows) return false;
     this.cols = nextCols;
     this.rows = nextRows;

@@ -48,6 +48,19 @@ export const ZOOM_CHROME_COLS = 6;
 // = 14. Keep in step with Zoom.jsx's fixedRows and App.jsx's zoomHeight.
 export const ZOOM_CHROME_ROWS = 14;
 
+// The ONE minimum size for a session's claude PTY. Every layer that clamps a
+// PTY dimension (Fleet.setViewport, PtyAgent's constructor and resize, the
+// zoom pane, zoomBodyDims below) imports these, so the floor cannot drift
+// between layers again — it was 6 in two places and 5 in three.
+export const PTY_MIN_COLS = 20;
+export const PTY_MIN_ROWS = 6;
+export function clampPtyDims(cols, rows, fallbackCols = PTY_MIN_COLS, fallbackRows = PTY_MIN_ROWS) {
+  return {
+    cols: Math.max(PTY_MIN_COLS, (cols | 0) || fallbackCols),
+    rows: Math.max(PTY_MIN_ROWS, (rows | 0) || fallbackRows),
+  };
+}
+
 // The width the zoom modal renders at, for a given terminal width: the
 // terminal minus App.jsx's own paddingX (4), clamped to [MIN, MAX]. Never
 // wider than the terminal can actually show (0408/R3).
@@ -61,7 +74,7 @@ export function zoomModalWidth(termCols) {
 // the modal chrome and the PTY can never disagree about the body width —
 // that disagreement was the double-truncation on narrow terminals (0408/R3).
 export function zoomInnerWidth(modalWidth) {
-  return Math.max(20, (modalWidth || 0) - ZOOM_CHROME_COLS);
+  return Math.max(PTY_MIN_COLS, (modalWidth || 0) - ZOOM_CHROME_COLS);
 }
 
 // The PTY geometry for every agent in the fleet: the largest zoom body this
@@ -70,6 +83,6 @@ export function zoomInnerWidth(modalWidth) {
 export function zoomBodyDims(termCols, termRows) {
   return {
     cols: zoomInnerWidth(zoomModalWidth(termCols)),
-    rows: Math.max(6, (termRows | 0) - ZOOM_CHROME_ROWS),
+    rows: Math.max(PTY_MIN_ROWS, (termRows | 0) - ZOOM_CHROME_ROWS),
   };
 }

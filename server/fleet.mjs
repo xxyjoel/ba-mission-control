@@ -9,6 +9,7 @@
 // never a live agent (so the floor is the highest occupied slot).
 
 import { EventEmitter } from 'node:events';
+import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { Agent } from './agent.mjs';
 import { MockAgent } from './mockAgent.mjs';
 import { PtyAgent } from './ptyAgent.mjs';
@@ -149,11 +150,11 @@ export class Fleet extends EventEmitter {
     // Garbage in (a non-TTY reporting 0, an undefined dimension) must leave the
     // fleet on whatever geometry it already had — never shrink it to a floor.
     if (!(cols > 0 && rows > 0)) return 0;
-    const next = { cols: Math.max(20, cols | 0), rows: Math.max(6, rows | 0) };
+    const next = clampPtyDims(cols, rows);
     if (this.viewport && this.viewport.cols === next.cols && this.viewport.rows === next.rows) return 0;
     this.viewport = next;
     let resized = 0;
-    for (const a of this.agents || []) {
+    for (const a of this.agents) {
       if (!a || typeof a.resize !== 'function') continue;
       try { if (a.resize(next.cols, next.rows) !== false) resized++; } catch {}
     }

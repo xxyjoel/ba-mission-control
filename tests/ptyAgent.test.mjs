@@ -320,7 +320,7 @@ test('PtyAgent.resize: enforces minimum cols/rows', () => {
   p.start();
   p.resize(1, 1);
   assert.equal(p.cols, 20);
-  assert.equal(p.rows, 5);
+  assert.equal(p.rows, 6); // PTY_MIN_ROWS — one floor for every layer
   p.kill();
 });
 

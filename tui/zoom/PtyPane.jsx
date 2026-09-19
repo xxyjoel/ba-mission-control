@@ -17,6 +17,7 @@
 //      Zoom modal owns — toggle tools, toggle stats, cycle perm, exit)
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { clampPtyDims } from '../lib/zoomGeometry.js';
 import { Box, Text, useInput } from 'ink';
 import xterm from '@xterm/headless';
 import { startZoomSession } from '../../server/zoomSession.mjs';
@@ -143,8 +144,7 @@ export default function PtyPane({
 
   // Clamp width/height to sensible minimums. xterm-headless requires
   // cols ≥ 1, rows ≥ 1; claude's UI looks broken below ~30 cols.
-  const cols = Math.max(20, Math.floor(width  || 80));
-  const rows = Math.max(5,  Math.floor(height || 24));
+  const { cols, rows } = clampPtyDims(Math.floor(width || 80), Math.floor(height || 24));
 
   // 0404: the scroll-mode hint and the "(claude exited)" notice are children of
   // the SAME fixed-height box as the terminal rows. Rendering `rows` rows plus
