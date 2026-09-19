@@ -212,6 +212,7 @@ const shutdown = () => {
   try { releaseInstanceLock(); } catch {}
   try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
+  try { fleet.stopPolling(); } catch {}
   try { fleet.killAll(); } catch {}
   try { app.unmount(); } catch {}
   // 0408/P5: escalate instead of exiting immediately. `process.exit(0)` right
@@ -292,6 +293,7 @@ process.on('unhandledRejection', (err) => crashBail('rejection', err));
 process.on('exit', () => {
   persistOpenSet();          // safety net for paths that bypass shutdown()
   try { killShellSession(); } catch {}
+  try { fleet.stopPolling(); } catch {}
   try { fleet.killAll(); } catch {}
   // 0408/P5: 'exit' is synchronous — no timer can run after it — so escalate
   // to SIGKILL immediately. A child that ignores SIGTERM must not outlive mc

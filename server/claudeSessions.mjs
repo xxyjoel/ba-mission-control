@@ -45,6 +45,7 @@ export function parseAgentsJson(raw) {
 
   const attached = [];
   const background = [];
+  let unknownKind = 0;
   for (const r of rows) {
     if (!r || typeof r !== 'object') continue;
     const sessionId = typeof r.sessionId === 'string' ? r.sessionId : null;
@@ -65,7 +66,14 @@ export function parseAgentsJson(raw) {
     };
     if (r.kind === 'background') background.push(entry);
     else if (r.kind === 'interactive') attached.push(entry);
+    else unknownKind++;
   }
+  // If claude listed sessions but we recognised the kind of NONE of them, its
+  // vocabulary has moved and we are not reading this list correctly. Report
+  // unknown. Returning an empty list here would tell the user "no background
+  // sessions" on exactly the day the format changed — which is how the
+  // refusal-wording defect this module exists to fix got through.
+  if (rows.length > 0 && attached.length === 0 && background.length === 0 && unknownKind > 0) return null;
   return { attached, background };
 }
 
@@ -101,7 +109,7 @@ export async function listClaudeSessions({
       );
       // Never hold mc's exit open on an opportunistic listing.
       child?.unref?.();
-    } catch { finish(null); }
+    } catch { queueMicrotask(() => finish(null)); }
   });
   return cache.inFlight;
 }
@@ -134,20 +142,30 @@ export function staleBackgroundSessions(list, { days = 1, now = Date.now() } = {
   ));
 }
 
-// removeSession — delete one background session with `claude agents rm <id>`.
+// removeSession — delete one background session.
+//
+// The command is `claude rm <id>`, at the ROOT, and it takes the SHORT id that
+// `claude agents` lists — not `claude agents rm`, and not the 36-character
+// session id. Both were wrong when this first shipped, so deleting never
+// worked. Read out of the CLI on 2026-09-19:
+//
+//   Usage: claude rm <id> [--discard-unpushed <commit>@<worktree-id>]
+//   Delete a background session and its worktree.
+//
 // This DELETES A CONVERSATION, so no caller may invoke it without the user
-// having confirmed that specific id. Argv form only; the id is validated here
-// as a last line of defence even though the caller picked it from our own list.
-export async function removeSession(sessionId, { claudeBin = CLAUDE_BIN, timeoutMs = 15_000 } = {}) {
-  if (typeof sessionId !== 'string' || !/^[0-9a-f-]{8,36}$/i.test(sessionId)) {
-    return { ok: false, error: 'refusing to remove a session id of an unexpected shape' };
+// having confirmed that specific row. Argv form only. The id must be exactly
+// eight hex characters: anything else — a path, a flag, a full session id —
+// is refused here rather than handed to the CLI.
+export async function removeSession(shortId, { claudeBin = CLAUDE_BIN, timeoutMs = 15_000 } = {}) {
+  if (typeof shortId !== 'string' || !/^[0-9a-f]{8}$/i.test(shortId)) {
+    return { ok: false, error: `expected the 8-character id claude lists, got ${JSON.stringify(String(shortId).slice(0, 24))}` };
   }
   return new Promise((resolve) => {
     try {
-      execFile(claudeBin, ['agents', 'rm', sessionId], { timeout: timeoutMs }, (err, stdout, stderr) => {
-        if (err) return resolve({ ok: false, error: String(stderr || err.message).slice(0, 200) });
+      execFile(claudeBin, ['rm', shortId], { timeout: timeoutMs }, (err, stdout, stderr) => {
+        if (err) return resolve({ ok: false, error: String(stderr || err.message).trim().slice(0, 200) });
         cache = { at: 0, value: null, inFlight: null };   // the list just changed
-        resolve({ ok: true, output: String(stdout).slice(0, 200) });
+        resolve({ ok: true, output: String(stdout).trim().slice(0, 200) });
       });
     } catch (e) { resolve({ ok: false, error: e?.message || 'spawn failed' }); }
   });

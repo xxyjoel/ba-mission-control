@@ -1981,11 +1981,12 @@ export default function App({ fleet, auth: initialAuth }) {
             background={snapshot.background}
             theme={theme}
             width={modalWidth(90, 200)}
+            height={termRows}
             onClose={() => setModal(null)}
-            onRemove={async (sessionId) => {
-              const r = await removeSession(sessionId);
-              if (r.ok) pushToast(`removed background session ${String(sessionId).slice(0, 8)}`, 'ok');
-              else pushToast(`could not remove ${String(sessionId).slice(0, 8)} — ${r.error}`, 'err');
+            onRemove={async (shortId) => {
+              const r = await removeSession(shortId);
+              if (r.ok) pushToast(`removed background session ${shortId}`, 'ok');
+              else pushToast(`could not remove ${shortId} — ${r.error}`, 'err');
             }}
           />
         </Box>

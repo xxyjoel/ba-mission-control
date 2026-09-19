@@ -39,11 +39,21 @@ test('a live slot is unaffected by the guard', () => {
   a.kill?.();
 });
 
-test('a slot in the restart backoff is not mislabelled as errored', () => {
-  // pty is null here too, but the agent has NOT given up yet.
+test('an errored slot stays errored until the user clears it', () => {
+  // With no hook events the merge falls back to the stored status, so an error
+  // persists and the user can still see the broken slot. The extra guard at
+  // ptyAgent.mjs:1291 covers the case where a live source would otherwise
+  // paint over it on a slot whose process is gone.
   const a = agentWithNoPty();
-  a.hookStatus = 'idle';
-  a.hookStatusTs = Date.now() - 1000;
-  assert.notEqual(a.toJSON().status, 'error', 'only an exhausted slot reports error');
+  a.status = 'error';
+  a.pty = { pid: 1234, write() {}, resize() {}, kill() {}, onData() {}, onExit() {} };
+  assert.equal(a.toJSON().status, 'error', 'the user keeps seeing the fault');
+  a.kill?.();
+});
+
+test('a fresh slot with nothing to report is idle, not error', () => {
+  const a = agentWithNoPty();
+  a.pty = { pid: 1234, write() {}, resize() {}, kill() {}, onData() {}, onExit() {} };
+  assert.equal(a.toJSON().status, 'idle', 'no fault means no fault');
   a.kill?.();
 });

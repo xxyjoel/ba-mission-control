@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'node:events';
 import { listClaudeSessions, backgroundSessionCount } from './claudeSessions.mjs';
+import { isSandboxed } from '../tui/lib/configDir.js';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { Agent } from './agent.mjs';
 import { MockAgent } from './mockAgent.mjs';
@@ -63,6 +64,7 @@ function emptySlot(slot) {
 export class Fleet extends EventEmitter {
   #tailerTimer = null;
   #sessionTimer = null;
+  #sessionPollEnabled = false;
 
   constructor({ slots = DEFAULT_SLOTS, viewport = null } = {}) {
     super();
@@ -88,7 +90,13 @@ export class Fleet extends EventEmitter {
     // null = we have not been able to read the list, which is NOT the same as
     // "there are none" and must never render as a zero.
     this.claudeSessions = null;
-    this.#scheduleSessionPoll(0);
+    // Reading the list forks the real claude binary. Mock mode promises "no
+    // real claude subprocess will spawn", and a sandboxed run must not touch
+    // the user's live sessions either — the verification pass caught this
+    // returning the user's real session data inside a test that had stubbed
+    // the binary. Same gate the model probes use at boot.
+    this.#sessionPollEnabled = !MOCK_FIXTURE && !isSandboxed();
+    if (this.#sessionPollEnabled) this.#scheduleSessionPoll(0);
     this.#scheduleTailerPoll(TAILER_POLL_MS);
   }
 
@@ -101,9 +109,12 @@ export class Fleet extends EventEmitter {
       try {
         const next = await listClaudeSessions();
         if (next) {
-          const before = backgroundSessionCount(this.claudeSessions);
+          // Any change matters, not just the count: a session going from
+          // blocked to working, or crossing the one-day staleness line, must
+          // wake the UI too.
+          const before = JSON.stringify(this.claudeSessions?.background ?? null);
           this.claudeSessions = next;
-          if (before !== backgroundSessionCount(next)) this.emit('change');
+          if (before !== JSON.stringify(next.background)) this.emit('change');
         }
       } catch { /* a listing failure leaves the previous answer in place */ }
       this.#scheduleSessionPoll(SESSION_POLL_MS);

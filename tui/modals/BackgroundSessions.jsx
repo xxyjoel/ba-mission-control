@@ -15,12 +15,20 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { trunc, humanize } from '../lib/format.js';
 
-const MAX_ROWS = 12;
+// Rows are capped so the modal can never out-grow a short terminal — Ink
+// cannot erase a frame taller than the screen, and the whole UI tears. The cap
+// follows the terminal instead of being a fixed 12, and when it bites the list
+// says so rather than silently hiding sessions.
+function maxRowsFor(height) {
+  const CHROME = 10;                       // title, header, name line, footer, padding
+  return Math.max(3, Math.min(20, (Number.isFinite(height) ? height : 40) - CHROME));
+}
 
 // How long ago, in the coarsest unit that is still honest.
 function ageText(startedAt) {
   if (!Number.isFinite(startedAt)) return '?';
   const ms = Date.now() - startedAt;
+  if (ms < 0) return '?';          // a timestamp in the future is not an age
   const days = ms / 86400000;
   if (days >= 1) return `${days.toFixed(days < 10 ? 1 : 0)}d`;
   const hours = ms / 3600000;
@@ -34,21 +42,28 @@ function stateColor(state, theme) {
   return theme.dim;
 }
 
-export default function BackgroundSessions({ background, theme, width = 100, onClose, onRemove }) {
+export default function BackgroundSessions({ background, theme, width = 100, height = 40, onClose, onRemove }) {
   const [idx, setIdx] = useState(0);
   const [armed, setArmed] = useState(null);   // sessionId awaiting a second key
   const [note, setNote] = useState('');
 
   // null means we could not read claude's list. That is not the same as none.
   const unknown = background == null;
-  const rows = unknown ? [] : background.slice(0, MAX_ROWS);
-  const sel = rows[Math.min(idx, Math.max(0, rows.length - 1))] || null;
+  const maxRows = maxRowsFor(height);
+  const all = unknown ? [] : background;
+  const rows = all.slice(0, maxRows);
+  const hidden = all.length - rows.length;
+  // Clamp ONCE and use the SAME index everywhere. Clamping only for `sel` let
+  // the list shrink under the selection, leaving no row marked while the
+  // delete gesture stayed live on the last one.
+  const cur = Math.min(idx, Math.max(0, rows.length - 1));
+  const sel = rows[cur] || null;
 
   useInput((input, key) => {
     if (key.escape || input === 'q') { onClose?.(); return; }
     if (rows.length === 0) return;
-    if (key.upArrow   || input === 'k') { setArmed(null); setIdx((i) => Math.max(0, i - 1)); return; }
-    if (key.downArrow || input === 'j') { setArmed(null); setIdx((i) => Math.min(rows.length - 1, i + 1)); return; }
+    if (key.upArrow   || input === 'k') { setArmed(null); setNote(''); setIdx(Math.max(0, cur - 1)); return; }
+    if (key.downArrow || input === 'j') { setArmed(null); setNote(''); setIdx(Math.min(rows.length - 1, cur + 1)); return; }
     // Two deliberate presses of X on the SAME row, because this deletes a
     // conversation. Moving the selection disarms, above.
     if (input === 'X') {
@@ -56,7 +71,7 @@ export default function BackgroundSessions({ background, theme, width = 100, onC
       if (armed === sel.sessionId) {
         setArmed(null);
         setNote(`removing ${sel.shortId}…`);
-        onRemove?.(sel.sessionId);
+        onRemove?.(sel.shortId);
       } else {
         setArmed(sel.sessionId);
         setNote('');
@@ -88,7 +103,7 @@ export default function BackgroundSessions({ background, theme, width = 100, onC
             <Text color={theme.faint}>{'  id        age    state     project'}</Text>
           </Box>
           {rows.map((e, i) => {
-            const on = i === idx;
+            const on = i === cur;
             const isArmed = armed === e.sessionId;
             const proj = (e.cwd || '').split('/').filter(Boolean).pop() || '—';
             return (
@@ -120,6 +135,10 @@ export default function BackgroundSessions({ background, theme, width = 100, onC
 
       {note !== '' && (
         <Box><Text color={theme.yellow}>{note}</Text></Box>
+      )}
+
+      {hidden > 0 && (
+        <Box><Text color={theme.yellow}>{`  … ${hidden} more not shown — this terminal fits ${maxRows}`}</Text></Box>
       )}
 
       <Box height={1} />

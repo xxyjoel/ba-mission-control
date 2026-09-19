@@ -703,6 +703,23 @@ export class PtyAgent extends EventEmitter {
         text: `auto-restart exhausted (${RESTART_MAX} attempts) — leaving slot errored · K clears`,
       });
       this.status = 'error';
+    } else {
+      // 0412: every OTHER way the process can end used to leave the card
+      // reporting a healthy session over a process that no longer exists.
+      // `transient` is `code !== 0 && code != null`, and node-pty reports a
+      // signal death as exit code ZERO with the signal as a number, so a
+      // claude killed by the system running out of memory, by Activity
+      // Monitor, or by `killall` took this path — as did a user typing /exit.
+      // Measured: code=0 -> idle, code=0 signal=9 -> idle, code=null -> idle.
+      // A deliberate kill returns long before here, so reaching this point
+      // means the process died on its own and nothing is going to restart it.
+      this.appendTail({
+        kind: 'err',
+        text: signal
+          ? `session ended (signal ${signal}) — K clears the slot`
+          : 'session ended — K clears the slot',
+      });
+      this.status = 'error';
     }
     this.emit('change');
   }

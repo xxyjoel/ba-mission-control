@@ -50,7 +50,8 @@ test('one X arms, a second X on the SAME row removes', async () => {
   stdin.write('X');
   await new Promise((r) => setTimeout(r, 40));
   assert.equal(removed.length, 1, 'the second press removes');
-  assert.equal(removed[0], bg().sessionId);
+  // The CLI takes the SHORT id, so that is what the modal hands out.
+  assert.equal(removed[0], bg().shortId);
 });
 
 test('moving off the row disarms, so a stray X cannot delete', async () => {
@@ -99,8 +100,33 @@ test('staleBackgroundSessions returns null for an unknown list', () => {
   assert.equal(staleBackgroundSessions(null), null);
 });
 
-test('removeSession refuses an id of an unexpected shape, spawning nothing', async () => {
-  const r = await removeSession('../../etc/passwd');
-  assert.equal(r.ok, false);
-  assert.match(r.error, /unexpected shape/);
+// The CLI takes the 8-character id it lists, at the root: `claude rm <id>`.
+// The first version of this sent `claude agents rm <full-session-id>` — a
+// command that does not exist, with an id form it does not take — so deleting
+// never worked. These pin both halves.
+test('removeSession refuses anything that is not the 8-character id', async () => {
+  for (const bad of ['../../etc/passwd', '; rm -rf /', '$(id)', '--deadbeef', '-fedcbaaa',
+                     '3a1d168c-7b90-4221-ab14-e6afb5d56f74', '', 'zzzzzzzz']) {
+    const r = await removeSession(bad);
+    assert.equal(r.ok, false, `${JSON.stringify(bad)} must be refused`);
+    assert.match(r.error, /8-character id/);
+  }
+});
+
+test('removeSession runs `claude rm <id>` in argv form, never a shell string', async () => {
+  const seen = [];
+  // A stand-in binary that records its arguments and exits cleanly.
+  const { writeFileSync, chmodSync, mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(join(tmpdir(), 'mc-rm-'));
+  const out = join(dir, 'argv.txt');
+  const bin = join(dir, 'fake-claude.sh');
+  writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${out}\nexit 0\n`);
+  chmodSync(bin, 0o755);
+  const r = await removeSession('3a1d168c', { claudeBin: bin });
+  assert.equal(r.ok, true, 'a well-formed id is accepted');
+  const argv = (await import('node:fs')).readFileSync(out, 'utf8').trim().split('\n');
+  assert.deepEqual(argv, ['rm', '3a1d168c'], 'exactly the two arguments the CLI takes');
+  seen.push(argv);
 });
