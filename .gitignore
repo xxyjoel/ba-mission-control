@@ -2,11 +2,7 @@ node_modules/
 .DS_Store
 *.log
 
-# Forge — locally-installed git hooks (point to absolute paths in ~/.claude/forge/).
-# Each clone runs `~/.claude/forge/install.sh --project .` to re-symlink.
-.githooks/
-
-# Forge bookkeeping — local state, never tracked.
+# Local dev state, never tracked.
 tasks/.events/
 tasks/.telemetry/
 tasks/.cost/
@@ -34,7 +30,6 @@ templates.json
 # Local plan scratch (project-scoped plans live here but are not shipped).
 .claude/plans/
 
-# Forge task registry — internal dev state, not part of the public product.
+# Task registry — internal dev state, not part of the public product.
 tasks/
 tasks/.cache/
-.forge/plugin-precedence.yml
