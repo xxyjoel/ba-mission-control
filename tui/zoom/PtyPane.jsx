@@ -355,9 +355,18 @@ export default function PtyPane({
   // The LEGACY (startZoomSession / MockAgent) path still owns its own local
   // Terminal for the life of the zoom, so it resizes here as before.
   //
-  // scrollToBottom is a defensive nudge: on a mid-stream size change the
-  // viewport can drift above the live cursor row; snapping back to bottom
-  // keeps the cursor visible without prodding claude.
+  // scrollToBottom is a defensive nudge for a reader who is NOT scrolling: on a
+  // mid-stream size change the viewport can drift above the live cursor row,
+  // and snapping back keeps the cursor visible without prodding claude.
+  //
+  // 0416: it used to run unconditionally, which threw a scrolled-back reader to
+  // the bottom — and `rows` moves in normal use, since Zoom recomputes bodyRows
+  // whenever a toast lands or the stats/todos panel opens. xterm's own reflow
+  // already holds the offset across a resize (measured: parked at viewportY 256
+  // with baseY 278, a 30->29 height change left it at 257/279), so this call was
+  // the only thing destroying the position. Skip it in scroll mode; when it does
+  // run, reset all three of view, skipBack and scrollOffset the way toBottom()
+  // does, so the indicator can't claim an offset the window isn't showing.
   useEffect(() => {
     const pty = ptyRef.current, term = termRef.current;
     if (!pty || !term) return;
@@ -365,8 +374,17 @@ export default function PtyPane({
       try { term.resize(cols, rows); } catch {}
       try { pty.resize(cols, rows); } catch {}
     }
-    try { term.scrollToBottom(); } catch {}
+    if (!scrollMode) {
+      try { term.scrollToBottom(); } catch {}
+      skipBackRef.current = 0;
+      setScrollOffset(0);
+    }
+    // The repaint is NOT part of that branch: a parked reader still needs the
+    // window redrawn at the new height.
     setTick(n => (n + 1) | 0);
+    // scrollMode is read, not tracked — this effect is the RESIZE path, and
+    // entering or leaving scroll mode must not re-run it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cols, rows]);
 
   // ── Key forwarding ──────────────────────────────────────────────
