@@ -40,8 +40,9 @@ const PAGER_H = 1;                // "pane 2/3 · [ ] to switch" strip
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 
 // computeGridLayout — given terminal size, column preference, live-card count,
-// the fleet-log line budget, the per-pane cap, and the focused card's index,
-// return the geometry needed to render one pane of the grid.
+// the fleet-log line budget, whether the log pane is shown at all, the
+// per-pane cap, and the focused card's index, return the geometry needed to
+// render one pane of the grid.
 //
 // Returns:
 //   effectiveCols  — columns actually used (auto-reduced on narrow terminals)
@@ -51,13 +52,16 @@ const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 //   pageIndex      — active pane (0-based), derived from focusedIndex
 //   pageStart/pageEnd — slice bounds into the visible-agent list for this pane
 //   rowsInPage     — grid rows rendered in the active pane
-//   dynamicFleetLogLines — the fleetLogLines setting, clamped to what fits
+//   dynamicFleetLogLines — the fleetLogLines setting clamped to what fits, or
+//                    0 when showFleetLog is off
 export function computeGridLayout({
   termCols,
   termRows,
   gridCols,
   count,
   fleetLogLines,
+  // Defaults to shown: callers that predate the setting keep their geometry.
+  showFleetLog = true,
   windowsPerPane = 0,
   focusedIndex = 0,
 }) {
@@ -77,7 +81,13 @@ export function computeGridLayout({
 
   // Vertical budget — reserve the pager strip unconditionally so single-page
   // vs. multi-page don't reflow the fleet log when a pane boundary is crossed.
-  const chromeH = HEADER_H + AGG_H + FEEDBACK_H + STATUS_H + FLEETLOG_HEAD_H + fleetLogLines + PAGER_H;
+  // The log costs nothing when it is switched off — header included, since the
+  // header is a row of the pane and not a separate piece of chrome. Before
+  // this, turning the log off still billed FLEETLOG_HEAD_H + fleetLogLines,
+  // and the settings-page minimum of 4 lines held the bill at 5 rows the grid
+  // could not have; App's flex spacer drew them as blank screen.
+  const fleetLogH = showFleetLog ? FLEETLOG_HEAD_H + fleetLogLines : 0;
+  const chromeH = HEADER_H + AGG_H + FEEDBACK_H + STATUS_H + fleetLogH + PAGER_H;
   const gridBudgetH = Math.max(CARD_H, trows - chromeH);
   const rowsThatFit = Math.max(1, Math.floor(gridBudgetH / CARD_H));
 
@@ -102,13 +112,15 @@ export function computeGridLayout({
   // the status bar stays pinned to the terminal's bottom edge.
   const pagerActual = pageCount > 1 ? PAGER_H : 0;
   const fixedH = HEADER_H + AGG_H + (rowsInPage * CARD_H) + pagerActual
-    + FEEDBACK_H + STATUS_H + FLEETLOG_HEAD_H;
+    + FEEDBACK_H + STATUS_H + (showFleetLog ? FLEETLOG_HEAD_H : 0);
   const remainingH = Math.max(0, trows - fixedH);
   // No floor. This was Math.max(4, remainingH), which kept four log lines even
   // when the terminal had room for none — the last row of overflow on a short
   // terminal (56/440 combinations at 24 rows survived the FEEDBACK_H fix purely
   // because of this floor). A log that tears the layout is worse than no log.
-  const dynamicFleetLogLines = Math.min(fleetLogLines, remainingH);
+  // Hidden means zero, not "clamped": on a roomy terminal the clamp alone
+  // would still hand back the full setting for a pane nobody renders.
+  const dynamicFleetLogLines = showFleetLog ? Math.min(fleetLogLines, remainingH) : 0;
 
   return {
     effectiveCols,

@@ -1569,6 +1569,7 @@ export default function App({ fleet, auth: initialAuth }) {
           gridCols: settings.gridCols,
           count: visList.length,
           fleetLogLines: settings.fleetLogLines,
+          showFleetLog: settings.showFleetLog,
           windowsPerPane: settings.windowsPerPane,
           focusedIndex: curIdx,
         });
@@ -1902,6 +1903,10 @@ export default function App({ fleet, auth: initialAuth }) {
     gridCols: settings.gridCols,
     count: visibleAgents.length,
     fleetLogLines: settings.fleetLogLines,
+    // Both call sites must pass this or they disagree about perPage: the
+    // pane-switch handler above would step [ / ] by a stride the grid never
+    // renders.
+    showFleetLog: settings.showFleetLog,
     windowsPerPane: settings.windowsPerPane,
     focusedIndex: focusedGridIdx,
   });
