@@ -179,6 +179,15 @@ card's corners), the **current item** (`↳ <in-progress todo>`), session vitals
 a cost + tokens foot. It intentionally shows **no session text** — read the
 running conversation by zooming (`↵`) or in the fleet log.
 
+**Which conversation a card is showing.** The model row carries the first eight
+characters of the session id — the same eight `:bg` and `claude agents` print —
+so a card can be matched against them by eye. A yellow `!N` beside it means
+claude is holding **N other live conversations in the same folder**. That is a
+warning, not an error: your typing goes to the session the card names, and the
+others cannot see it. Open `:bg` to look at them. No mark is drawn when the
+count is zero, and none is drawn when claude's session list could not be read —
+an absent mark never claims there is only one conversation.
+
 The triage row answers the scan-10-cards question "does this need me, when, and
 what next": `check back` (working), `ready to review →` (idle, plan complete),
 `needs a nudge →` (idle, plan unfinished), `needs input · answer to continue`

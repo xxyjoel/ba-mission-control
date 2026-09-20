@@ -182,6 +182,24 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
                     : '—';
   const mCol        = modelColor(modelId, theme);
 
+  // 0414: WHICH conversation is this card showing? A user sent a long list of
+  // requirements to one stonks session at 20:42:40 on 2026-09-19; Mission
+  // Control started 39 seconds later on a different, older session in the same
+  // folder, and every message typed afterwards went to the second conversation.
+  // Three live sessions sat in that one folder. Nothing on the card said which.
+  //
+  // The short id is the same eight characters `:bg` and `claude agents` print,
+  // so a card can be matched against them by eye.
+  const sidTag = agent.sessionId ? ` ${String(agent.sessionId).slice(0, 8)}` : '';
+  // How many OTHER conversations claude holds in this folder. Undefined or null
+  // means we could not read claude's list — unknown, and it must not draw a
+  // mark that says "none". Only a real positive count draws one.
+  // Plain `!` and not a warning sign: the budget below measures with .length,
+  // and U+26A0 is an ambiguous-width glyph that over-runs the row on some
+  // terminals. Every chip on this row is deliberately narrow.
+  const otherSessions = agent.otherSessions;
+  const othersTag = Number.isFinite(otherSessions) && otherSessions > 0 ? ` !${otherSessions}` : '';
+
   // CTX bar — give it ~14 cells of room.
   // 0409: threshFrac was `: 0.75` for an unknown model — a threshold marker
   // drawn three-quarters along a bar whose scale nobody knows. It is omitted
@@ -298,7 +316,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   const gitChipsW = (branchClean ? 1 : `+${agent.dirty}`.length)
     + (agent.ahead  > 0 ? ` ↑${agent.ahead}`.length : 0)
     + (agent.behind > 0 ? ` ↓${agent.behind}`.length : 0);
-  const branchStr = trunc(humanize(agent.branch || '—'), Math.max(3, innerW - `${modelLabel}  ⎇ `.length - gitChipsW - 1));
+  const branchStr = trunc(humanize(agent.branch || '—'), Math.max(3, innerW - `${modelLabel}${sidTag}${othersTag}  ⎇ `.length - gitChipsW - 1));
 
   return (
     <Box
@@ -338,6 +356,8 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
       {/* Meta row: model + branch + git */}
       <Box>
         <Text color={mCol}>{modelLabel}</Text>
+        {sidTag && <Text color={theme.dim}>{sidTag}</Text>}
+        {othersTag && <Text color={theme.yellow}>{othersTag}</Text>}
         <Text color={theme.dim}>  ⎇ </Text>
         {/* branchStr pre-truncated to fit (above) — one-line plain Text; spacer
             right-aligns the git chips. e.g. ops/db-recovery-incident-20 → … */}
