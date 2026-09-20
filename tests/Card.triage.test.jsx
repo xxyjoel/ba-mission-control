@@ -1,7 +1,7 @@
 // tests/Card.triage.test.jsx — 0408 D2/M4 on the fleet card.
 //
 //   D2: the triage verb read `agent.status` alone, so a slot showing
-//       `IDLE · 3bg WORKING` (background agents fanned out, foreground turn
+//       `IDLE · bg WORKING` (background agents fanned out, foreground turn
 //       idle — e7e28fa keeps status idle during fan-out) told the operator
 //       `needs a nudge →`. Nudging a busy slot interrupts it; the verb must be
 //       the working-branch `check back`.
@@ -46,7 +46,8 @@ function frameFor(a) {
 
 test('D2: idle with background agents running reads "check back", not "needs a nudge"', () => {
   const f = frameFor(agent({ bgCount: 3, bgStatus: 'working' }));
-  assert.match(f, /3bg WORKING/, 'bg tag renders beside the status');
+  assert.match(f, /· bg WORKING/, 'bg tag renders beside the status');
+  assert.doesNotMatch(f, /3bg/, '0416: the tally is not duplicated from the agents-running row');
   assert.match(f, /check back/, 'the working-branch verb');
   assert.doesNotMatch(f, /needs a nudge/, 'must not tell the operator to interrupt a busy slot');
 });

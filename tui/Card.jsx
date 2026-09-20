@@ -165,10 +165,25 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // is printed only when it is a real positive tally — otherwise `?bg`. That
   // keeps a measured tally rendering exactly as before, and lets the server
   // report "live, count unknown" (bgCount null) without the card lying.
+  //
+  // 0416: the COUNT is now gone from the chip — reported as a duplicate, and it
+  // is one. Whenever the server can count, the SAME number already renders
+  // below as `⋔N agents running` off the SAME array: ptyAgent.mjs:1271 sets
+  // `bgCount = liveSubFiles.length` and :1312-1320 maps that identical array
+  // into activeSubagents, so `bgCount === activeSubagents.length` there by
+  // construction. `?bg` was worse than useless — an unknown tally printed where
+  // a tally was never the point.
+  //
+  // The WORD stays. On the hook-clock path (ptyAgent.mjs:1276-1277) bgStatus is
+  // live while activeSubagents is empty, so the ↳ row falls back to `—` and the
+  // chip is the only thing on the card saying background work is running. The
+  // main status still reads IDLE there (0403 superseded the 0398 override,
+  // ptyAgent.mjs:1230-1244), and `IDLE · WORKING` — two status words on one row
+  // separated only by colour — reads as a contradiction, not as two facts. Two
+  // letters buy that disambiguation; the tally bought nothing.
   const bgLive = !!agent.bgStatus || agent.bgCount > 0;
-  const bgCounted = Number.isFinite(agent.bgCount) && agent.bgCount > 0;
   const bgTag = !approval && bgLive
-    ? ` · ${bgCounted ? agent.bgCount : UNKNOWN}bg ${(agent.bgStatus || '').toUpperCase()}`
+    ? ` · bg ${(agent.bgStatus || '').toUpperCase()}`
     : '';
 
   // Branch row
