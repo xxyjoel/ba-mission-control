@@ -173,3 +173,35 @@ export async function removeSession(shortId, { claudeBin = CLAUDE_BIN, timeoutMs
 
 // Test seam: drop the cache so a test never sees another test's answer.
 export function _resetSessionCache() { cache = { at: 0, value: null, inFlight: null }; }
+
+// otherLiveSessionsInRepo — the conversations claude is holding for this folder
+// that are NOT the one this slot is attached to.
+//
+// 0414: three live sessions sat in bluearch/stonks on 2026-09-19 and the card
+// showed one of them with nothing on screen to say which. The user typed a long
+// list of requirements into a second one, then asked the card about it and was
+// honestly told it had never seen it.
+//
+// Both lists are searched, and the result is deduplicated by session id,
+// because `kind` is a REGISTRATION record and not an answer about liveness.
+// Measured the same day: session 9ca62749 appears twice in one listing, once as
+// background/blocked and once as interactive/idle, and add052b8 is listed
+// background/`done` while Mission Control has a live terminal on it writing
+// user messages. So neither `kind` nor `state` may be used to filter here.
+//
+// Returns null when the list itself is null. null means we could not look, and
+// a caller must render it as unknown — an empty array would claim "no other
+// conversations" on exactly the day the listing broke.
+export function otherLiveSessionsInRepo(list, { cwd, sessionId } = {}) {
+  if (!list || !cwd) return null;
+  const seen = new Set();
+  const out = [];
+  for (const e of [...list.background, ...list.attached]) {
+    if (!e || e.cwd !== cwd) continue;
+    if (!e.sessionId || e.sessionId === sessionId) continue;
+    if (seen.has(e.sessionId)) continue;
+    seen.add(e.sessionId);
+    out.push(e);
+  }
+  return out;
+}

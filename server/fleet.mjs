@@ -9,7 +9,7 @@
 // never a live agent (so the floor is the highest occupied slot).
 
 import { EventEmitter } from 'node:events';
-import { listClaudeSessions, backgroundSessionCount } from './claudeSessions.mjs';
+import { listClaudeSessions, backgroundSessionCount, otherLiveSessionsInRepo } from './claudeSessions.mjs';
 import { isSandboxed } from '../tui/lib/configDir.js';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { Agent } from './agent.mjs';
@@ -173,7 +173,17 @@ export class Fleet extends EventEmitter {
       sessionStart: this.sessionStart,
       now: Date.now(),
       slots: this.slots,
-      agents: this.agents.map((a, i) => a ? a.toJSON() : emptySlot(i + 1)),
+      // 0414: each live slot also carries how many OTHER conversations claude
+      // holds in the same folder. A card that shows one of three sessions with
+      // nothing to say which is how a user lost track of a long requirements
+      // list on 2026-09-19. null = the listing could not be read, never 0.
+      agents: this.agents.map((a, i) => {
+        if (!a) return emptySlot(i + 1);
+        const j = a.toJSON();
+        const others = otherLiveSessionsInRepo(this.claudeSessions, { cwd: a.cwd, sessionId: a.sessionId });
+        j.otherSessions = others ? others.length : null;
+        return j;
+      }),
       // claude's own view of what is running. `background` is null when the
       // list could not be read — unknown, not none.
       background: this.claudeSessions ? this.claudeSessions.background : null,
