@@ -3,7 +3,9 @@
 // Attaches a VIEW to the keep-warm singleton (server/shellSession.mjs).
 // Never owns the PTY — unmounting only detaches the render subscriptions.
 // Chrome: bordered box matching Zoom; header `shell · <shell> · <cwd>`;
-// footer `⌃Q close · all other keys → shell`.
+// footer `⌃Q close · PgUp/PgDn scroll history · other keys → shell`, where
+// the middle field reads `PgUp/PgDn → app` while the child holds the
+// alternate screen and that key belongs to the child (see the key handler).
 //
 // Reuses:
 //   - tui/zoom/ptyCells.js rowToRuns (cell → Ink <Text> runs)
@@ -151,13 +153,23 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     // viewport and the file's own note said the history was "inaccessible".
     // Scrolling is the emulator's job: it holds a scrolled position across new
     // output and across scrollback eviction, which hand-rolled arithmetic in
-    // the zoom pane got wrong twice. Ctrl+Y up, Ctrl+E down, matching less.
-    // PageUp / PageDown, and NOT a Ctrl chord: Ctrl+Y, Ctrl+E, Ctrl+U and
-    // Ctrl+D are all readline bindings (yank, end-of-line, kill-line-backward,
-    // end-of-file) and must reach the shell. An existing test caught this
-    // exact mistake when Ctrl+U was taken for page-up.
+    // the zoom pane got wrong twice. PageUp / PageDown, and NOT a Ctrl chord:
+    // Ctrl+Y, Ctrl+E, Ctrl+U and Ctrl+D are all readline bindings (yank,
+    // end-of-line, kill-line-backward, end-of-file) and must reach the shell.
+    // An existing test caught this exact mistake when Ctrl+U was taken for
+    // page-up, so there is deliberately no Ctrl+Y / Ctrl+E binding here.
+    //
+    // 0416: scroll ONLY while the child is on the normal buffer. xterm's
+    // alternate buffer has no scrollback — scrollLines() is a no-op there and
+    // baseY - viewportY is identically 0 — but 0413 returned anyway, so inside
+    // less, man, vim or htop the key reached neither the emulator nor the
+    // child. Measured with a spy on pty.write: on the alternate buffer the
+    // child received [] where before 0413 it received CSI 5~ / CSI 6~ (the []
+    // on the normal buffer is correct — the emulator scrolls there instead).
+    // On the alternate buffer the key now falls through to keyToBytes.
     const termNow = termRef.current;
-    if (termNow && (key.pageUp || key.pageDown)) {
+    const onAlt = termNow?.buffer?.active?.type === 'alternate';
+    if (termNow && !onAlt && (key.pageUp || key.pageDown)) {
       const page = Math.max(1, Math.floor(rows / 2));
       termNow.scrollLines(key.pageUp ? -page : page);
       const b = termNow.buffer.active;
@@ -167,8 +179,12 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
 
     const pty = ptyRef.current;
     if (!pty) return;
-    // Typing snaps back to the live output, like a real terminal.
-    if (scrollBack > 0 && termNow) { termNow.scrollToBottom(); setScrollBack(0); }
+    // Typing snaps back to the live output, like a real terminal — but not
+    // while the child is on the alternate buffer. scrollToBottom() there moves
+    // a buffer that cannot scroll, while the normal buffer keeps its position
+    // across the ?1049h/?1049l round trip; zeroing the count would leave the
+    // indicator disagreeing with the view the moment the pager exits.
+    if (scrollBack > 0 && termNow && !onAlt) { termNow.scrollToBottom(); setScrollBack(0); }
 
     // Bracketed-paste guard (mirrors PtyPane.jsx:361-374).
     if (
@@ -203,23 +219,35 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
     const cell = cellRef.current;
     if (!term || !cell) return null;
     const buf = term.buffer.active;
-    const cursorY = buf.cursorY;
     const cursorX = buf.cursorX;
-    // TODO(shell-scroll): buf.viewportY is pinned to the live viewport; the
-    // TERM_SCROLLBACK rows in the buffer are inaccessible to the user. Add a
-    // scroll offset state + Ctrl+Y / Ctrl+E bindings to let the user page
-    // through history without leaving the overlay (see overlay-terminal.md §key-risk).
     // The emulator owns the scroll position; render whatever it is showing.
     const startY  = buf.viewportY;
+    // 0416: buf.cursorY is relative to baseY (the top of the LIVE viewport),
+    // while y indexes the rendered window, whose buffer row is viewportY + y.
+    // Comparing the two directly painted the cursor block on an arbitrary row
+    // as soon as the view was scrolled back — measured at baseY=188,
+    // viewportY=182, cursorY=0 the block landed on L182 instead of L188. Put
+    // the cursor in the window's own coordinates; one that has scrolled out
+    // falls outside 0..rows and simply does not paint.
+    const cursorRow = Number.isInteger(buf.cursorY) ? (buf.baseY + buf.cursorY) - startY : -1;
     const out = [];
     for (let y = 0; y < rows; y++) {
       const line = buf.getLine(startY + y);
-      const cxForRow = (Number.isInteger(cursorY) && y === cursorY) ? cursorX : -1;
+      const cxForRow = (y === cursorRow) ? cursorX : -1;
       out.push(rowToRuns(line, cell, cols, cxForRow, cursorStyle));
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick, cols, rows, cursorStyle, scrollBack]);
+
+  // Which buffer the child is on decides where PgUp/PgDn goes (see the key
+  // handler), so the footer has to read it to stay honest. tick drives the
+  // re-render — the alt-screen switch arrives as term output like any other.
+  const altScreen = useMemo(
+    () => termRef.current?.buffer?.active?.type === 'alternate',
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tick],
+  );
 
   // Header: `shell · <shell-basename> · <spawn-cwd>`
   const shellName = basename(process.env.SHELL || '/bin/bash');
@@ -287,8 +315,8 @@ export default function ShellOverlay({ onClose, theme, width, height }) {
         <Text color={theme?.accent} bold>⌃Q</Text>
         <Text color={theme?.dim}> close  ·  </Text>
         <Text color={theme?.accent} bold>PgUp/PgDn</Text>
-        <Text color={theme?.dim}> scroll history  ·  other keys → shell</Text>
-        {scrollBack > 0 && <Text color={theme?.yellow}>  ▲ {scrollBack} back · type to return</Text>}
+        <Text color={theme?.dim}>{altScreen ? ' → app' : ' scroll history'}  ·  other keys → shell</Text>
+        {scrollBack > 0 && !altScreen && <Text color={theme?.yellow}>  ▲ {scrollBack} back · type to return</Text>}
       </Box>
     </Box>
   );
