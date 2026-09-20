@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.16] — 2026-09-20
+
+1.1.15 never published. Its release failed on two tests that pass on a
+developer machine and cannot pass on a headless runner.
+
+### Fixed
+- **Colour-dependent assertions no longer depend on the environment.** The
+  ShellOverlay tests locate the cursor by the background colour it is painted
+  in. chalk picks its colour level once, at import, from the environment:
+  truecolor on a terminal, and none at all on a CI runner with no TTY — so a
+  correct frame carried no escape to match and the assertion failed. The fix
+  pins the level inside the test rather than widening what it matches. A first
+  attempt widened the matcher to the 16-colour palette and appeared to work,
+  because the author's shell exports FORCE_COLOR=3 and the simulated CI run
+  therefore still had colour. Verified with FORCE_COLOR unset: 156 files, 1096
+  tests, 0 failures.
+
 ## [1.1.15] — 2026-09-20
 
 Correctness pass on the things the fleet view was quietly getting wrong, and an

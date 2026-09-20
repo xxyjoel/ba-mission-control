@@ -12,6 +12,8 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+// Must precede every ink/chalk import — see the file for why.
+import './lib/force-color.js';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { _resetForTest, getShellSession } from '../server/shellSession.mjs';
