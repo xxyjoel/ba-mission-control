@@ -25,7 +25,8 @@
 import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { parseEvent } from './jsonlConnector.mjs';
+import { StringDecoder } from 'node:string_decoder';
+import { parseEvent, pushTail } from './jsonlConnector.mjs';
 // 0408-F1/M6: the rotation hunt classifies every candidate transcript so a
 // BACKGROUND FORK (sessionKind:'bg') is never adopted as the slot's session.
 // This import closes the module cycle bgSessions.mjs documents (sessionFileTailer
@@ -187,6 +188,16 @@ const REPLAY_BYTES = 256 * 1024;
 // 0179: stat-poll backstop interval. fs.watch is unreliable on cloud-synced
 // (GoogleDrive/CloudStorage) paths, so we also poll for growth this often.
 const STAT_POLL_MS = 1500;
+// 0416/6: how much of the HEAD to read for the conversation's start time.
+// Claude writes a metadata preamble — `mode`, `ai-title`, `permission-mode`,
+// `file-history-snapshot` — before the first record that carries a `timestamp`.
+// Surveyed 20 real transcripts: only 4 had a timestamp on line 1; the rest
+// needed 319 B to 402 KiB of head, and in one file the first timestamped
+// record was itself a 65 KB `user` line. So read the head in CHUNKS and stop
+// at the first timestamp; HEAD_MAX bounds the worst case so a multi-MB
+// transcript is never read end to end.
+const HEAD_CHUNK = 64 * 1024;
+const HEAD_MAX = 1024 * 1024;
 
 export function startSessionTailer({
   agent,
@@ -246,6 +257,99 @@ export function startSessionTailer({
     if (changed) {
       try { agent.emit('change'); } catch {}
     }
+  }
+
+  // 0416/1: the primed window is HISTORY, not a counter. The scratch object in
+  // primeStatusFromDisk absorbs the ADDITIVE fields (tokens/cost/spark); its
+  // `tail` was absorbed too and thrown away, which is why the fleet log was
+  // empty after every resume and every mc restart. Measured against a real
+  // 24-record transcript: after prime, agent.tail.length === 0; after one live
+  // event, 1.
+  //
+  // Appending it blind is wrong. PtyAgent.start() also runs on auto-restart,
+  // changeModel and changePermissionMode, where the ring ALREADY holds these
+  // entries — and start() pushes its own `spawn/resume pid=` sys line BEFORE it
+  // builds the tailer, so "agent.tail is empty" cannot stand in for "fresh
+  // attach": it never is. Key each replayed entry by its content instead and
+  // keep only what the ring does not hold. That also covers the rotation
+  // repoint below, where claude's new transcript can be a --resume copy of the
+  // old one.
+  //
+  // Everything goes back through pushTail, so TAIL_MAX and the _tailChars
+  // budget stay exact (jsonlConnector:71-84) and both production classes
+  // account the same way (agent.mjs / ptyAgent.mjs appendTail are pushTail).
+  // Its front-eviction is also what makes a full-ring re-attach a no-op:
+  // replayed entries go in FRONT, so a full ring drops them again.
+  //
+  // TODO(tail-clock): front placement fixes the RING's order, not the rendered
+  // one — pushTail stamps each replayed entry ts=now and deriveFleetLog sorts
+  // rows by ts (FleetLog.jsx:62), so a restored row shows the attach-time clock.
+  // Carrying ev.timestamp through parseEvent into pushTail is the real fix;
+  // scratch's own front-eviction makes index arithmetic over the 256 KiB
+  // window unreliable from out here.
+  function tailKey(e) {
+    return `${e?.kind || ''}\u0000${e?.tool || ''}\u0000${e?.text || ''}`;
+  }
+  function mergeReplayedTail(replayed) {
+    if (!Array.isArray(replayed) || !replayed.length) return;
+    if (!Array.isArray(agent.tail)) agent.tail = [];
+    const held = new Set(agent.tail.map(tailKey));
+    const fresh = replayed.filter((e) => !held.has(tailKey(e)));
+    if (!fresh.length) return;
+    // splice, not reassign: FleetLog and toJSON read agent.tail by reference.
+    const existing = agent.tail.splice(0, agent.tail.length);
+    agent._tailChars = 0;
+    for (const e of fresh) pushTail(agent, e);
+    for (const e of existing) pushTail(agent, e);
+  }
+
+  // 0416/6: the conversation's true age. Both card clocks were anchored to the
+  // moment mc constructed the agent object, so seven slots launched together
+  // all read the same hourglass and a conversation whose first record is dated
+  // 2026-08-30 rendered as `46m`. primeStatusFromDisk can never supply this —
+  // it seeks to (size - REPLAY_BYTES) and drops the partial first line, so it
+  // has never seen record 0. Read the head instead. Returns epoch ms, or null
+  // when the file is missing, empty, or carries no timestamp in HEAD_MAX.
+  async function readSessionStartedAt() {
+    let fh;
+    try { fh = await fsp.open(path, 'r'); } catch { return null; }
+    try {
+      const buf = Buffer.alloc(HEAD_CHUNK);
+      // StringDecoder, not buf.toString(): a multi-byte character straddling a
+      // chunk boundary would otherwise decode to U+FFFD on both sides and could
+      // cost us the record we came for.
+      const decoder = new StringDecoder('utf8');
+      let pos = 0;
+      let rest = '';
+      while (pos < HEAD_MAX) {
+        const { bytesRead } = await fh.read(buf, 0, HEAD_CHUNK, pos);
+        if (!bytesRead) return null;
+        pos += bytesRead;
+        rest += decoder.write(buf.subarray(0, bytesRead));
+        let nl;
+        while ((nl = rest.indexOf('\n')) >= 0) {
+          const line = rest.slice(0, nl);
+          rest = rest.slice(nl + 1);
+          if (!line.trim()) continue;
+          let ms;
+          // Preamble records (mode/ai-title/permission-mode/file-history-
+          // snapshot) parse fine and simply have no timestamp — keep scanning.
+          try { ms = Date.parse(JSON.parse(line)?.timestamp ?? ''); } catch { continue; }
+          if (Number.isFinite(ms)) return ms;
+        }
+        if (bytesRead < HEAD_CHUNK) return null;   // EOF, nothing timestamped
+      }
+      return null;
+    } catch { return null; } finally { try { await fh.close(); } catch {} }
+  }
+
+  // Set the shared-contract field. Never clobbers a known start with null: a
+  // transient read failure on re-attach must not blank a card's age.
+  async function primeSessionStartedAt() {
+    const ms = await readSessionStartedAt();
+    if (stopped) return;              // 0408-F7: no agent mutation after stop()
+    if (ms != null) agent.sessionStartedAt = ms;
+    else agent.sessionStartedAt ??= null;
   }
 
   // 0178: derive the session's CURRENT status from a bounded tail of the JSONL
@@ -317,6 +421,7 @@ export function startSessionTailer({
         agent.context = scratch.context;
       }
       if (scratch.resolvedModel) agent.resolvedModel = scratch.resolvedModel;
+      mergeReplayedTail(scratch.tail);
       try { agent.emit('change'); } catch {}
     }
     return stats.size;
@@ -412,6 +517,7 @@ export function startSessionTailer({
     path = nextPath;
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
     offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0; lastHuntDirMtime = 0;
+    await primeSessionStartedAt();   // 0416/6: new transcript, new record 0
     const primedTo = await primeStatusFromDisk();
     if (stopped) return; // 0408-F7: don't re-attach a watcher on a stopped tailer
     offset = primedTo != null ? primedTo : 0;
@@ -420,6 +526,10 @@ export function startSessionTailer({
   }
 
   async function init() {
+    // 0416/6: conversation age comes from the HEAD of the transcript; the status
+    // prime below only ever sees its tail. Both attach paths need it.
+    await primeSessionStartedAt();
+    if (stopped) return;
     // Default attach: prime the CURRENT status from the tail of the file
     // (0178), then continue from exactly the EOF we read to. When the tailer is
     // rebuilt after a sid rotation (zoomSession detected claude minted its own
@@ -440,7 +550,7 @@ export function startSessionTailer({
         offset = 0;
       }
     }
-    if (stopped) return; // 0408-F7 (fromStart path reaches here without awaiting)
+    if (stopped) return; // 0408-F7 (the fromStart path only awaits the head read)
 
     if (!attachWatcher()) {
       // File not created yet — poll until it appears, then switch to fs.watch.
@@ -452,6 +562,9 @@ export function startSessionTailer({
         if (stopped) return;
         if (attachWatcher()) {
           pollTimer = null;
+          // The file did not exist at attach, so the head read returned null.
+          // It exists now — read record 0 or the slot stays ageless for life.
+          primeSessionStartedAt();
           readNew();
           return;
         }
