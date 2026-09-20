@@ -4,6 +4,57 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.15] — 2026-09-20
+
+Correctness pass on the things the fleet view was quietly getting wrong, and an
+audit of the npm page against the code.
+
+Entries for 1.1.2 through 1.1.14 were never written; the git log is the record
+for those.
+
+### Fixed
+- **The fleet log was empty after every resume or restart.** Attaching to a
+  session replayed the last 256 KiB of its transcript into a scratch object and
+  threw the parsed tail away, then moved the read offset past it. Four earlier
+  commits enlarged the ring buffer from 16 entries to 320; the ring they
+  enlarged was empty.
+- **Background agents started by a workflow were never counted.** The usage scan
+  listed one directory. Claude Code writes workflow sub-agents to
+  `subagents/workflows/<runId>/`, one level deeper. Measured on a live session:
+  20 files seen, 60 skipped. Their token spend was never folded into the parent
+  either, so fan-out sessions under-reported their cost.
+- **A restart destroyed the terminal scrollback,** so the zoom view had nothing
+  to scroll. `start()` disposed the emulator and built a new one every time it
+  ran, including on auto-restart, model change and permission change.
+- **PageUp and PageDown stopped reaching a pager** in the `!` shell overlay. The
+  keys were intercepted and never forwarded, and on the alternate screen there
+  is no scrollback to move, so inside `less`, `man` or `vim` they did nothing at
+  all. Neither view checked which buffer the child was on.
+- **A resize threw a scrolled-back reader to the bottom** of the zoom view. The
+  row count changes whenever a panel opens, so reading history was interrupted
+  by an unrelated toast.
+- **The card's session clock measured the wrong thing.** It read how long
+  Mission Control had held the agent object, so sessions launched together all
+  showed the same value and a conversation days old rendered as minutes. It now
+  reads the first timestamp in the session transcript.
+- **Hiding the fleet log did not return its rows to the grid.** The
+  `showFleetLog` setting never reached the layout, which charged its full line
+  count either way. The `[` and `]` pane keys read the same wrong page size.
+- **The cursor painted on the wrong row** when the shell overlay was scrolled
+  back, comparing a window index against a buffer-relative row.
+
+### Changed
+- The background chip on the card no longer repeats the agent count that the row
+  below it already shows. The label stays, because it is the only thing on the
+  card that distinguishes background work when the count is unknown.
+- README and package metadata corrected against the code. Costs are computed
+  from token counts against a rate table, not read from a field the default path
+  does not emit; the fleet ceiling is 64, not 10; the architecture section
+  described a rollback path as if it were the default. Seven palettes, not six.
+
+### Removed
+- forge is no longer wired into this repository.
+
 ## [1.1.1] — 2026-07-27
 
 Stability + release-integrity patch.
