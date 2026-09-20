@@ -3,8 +3,10 @@
 //
 // Why this exists: the main JSONL tailer reads exactly ONE file, the parent
 // `<sessionId>.jsonl`. Sub-agent (Task/Agent/Workflow) turns are written to a
-// SEPARATE tree:
-//   ~/.claude/projects/<encoded-cwd>/<parentSessionId>/subagents/agent-<id>.jsonl
+// SEPARATE tree, rooted at
+// ~/.claude/projects/<encoded-cwd>/<parentSessionId>/subagents/ :
+//   agent-<id>.jsonl                     — Task/Agent sub-agents
+//   workflows/<runId>/agent-<id>.jsonl   — Workflow sub-agents (one level down)
 // Each line is `isSidechain:true` and carries a full `message.usage` block.
 // Because the tailer never opens those files, every sub-agent's token +
 // cost consumption was invisible — a fan-out session read near-zero tok/min
@@ -48,6 +50,46 @@ export function applySidechainUsage(agent, usage, modelId) {
   return true;
 }
 
+// List every agent-*.jsonl under subagents/, as paths RELATIVE to that dir.
+//
+// Claude Code writes Task sub-agents flat and Workflow sub-agents one level
+// deeper, under workflows/<runId>/. The old scan was a name-only readdir of the
+// top dir, so "workflows" failed the agent-*.jsonl filter and every workflow
+// agent was dropped: measured on the stonks slot (add052b8) 2026-09-19 22:40,
+// 20 files scanned / 60 skipped, and inside the 60s liveAgents window 0 scanned
+// vs 4 skipped (the newest written 1s earlier). The card read zero background
+// agents while workflows ran, and their tokens never reached the parent.
+//
+// Bounded at exactly that one extra level — not a general tree walk. Every
+// agent-*.jsonl on this machine sits at depth 1 or depth 3 (across all
+// ~/.claude/projects sessions: 1271 flat, 624 under workflows/<runId>/).
+// Cost is 1 + <run dirs> readdirs per poll; a session's run dirs go away with
+// the rest of the per-file state on SID rotation.
+//
+// Relative path, not basename: two runs can hold the same agent-<id>.jsonl, and
+// a shared state key makes the second file look like it is already at EOF.
+const WORKFLOWS_DIR = 'workflows';
+const isAgentFile = (e) => !e.isDirectory() && e.name.startsWith('agent-') && e.name.endsWith('.jsonl');
+
+async function listAgentFiles(dir) {
+  const out = [];
+  // The top-level readdir is deliberately NOT caught here — scan() reads its
+  // throw as "dir absent" and drives the backoff off it.
+  for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
+    if (isAgentFile(e)) { out.push(e.name); continue; }
+    if (e.name !== WORKFLOWS_DIR || !e.isDirectory()) continue;
+    let runs;
+    try { runs = await fsp.readdir(join(dir, WORKFLOWS_DIR), { withFileTypes: true }); } catch { continue; }
+    for (const r of runs) {
+      if (!r.isDirectory()) continue;
+      let files;
+      try { files = await fsp.readdir(join(dir, WORKFLOWS_DIR, r.name), { withFileTypes: true }); } catch { continue; }
+      for (const f of files) if (isAgentFile(f)) out.push(`${WORKFLOWS_DIR}/${r.name}/${f.name}`);
+    }
+  }
+  return out;
+}
+
 // startSubagentUsageTailer — poll <parentSessionId>/subagents/ and fold each
 // agent-*.jsonl file's new usage lines into the parent.
 //
@@ -61,7 +103,9 @@ export function applySidechainUsage(agent, usage, modelId) {
 // (last '\n'), so a partial trailing line is re-read once it's finished.
 export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleIdleMs = 30_000, autoStart = true } = {}) {
   if (!agent) throw new Error('subagentUsageTailer: agent is required');
-  const offsets = new Map(); // filename → byte offset
+  // Keyed by the path relative to subagentsDir() — a bare filename is ambiguous
+  // now that workflows/<runId>/ can repeat an agent-<id>.jsonl basename.
+  const offsets = new Map(); // relative path → byte offset
   // Completed sub-agent files stop growing once the sidechain finishes. Without
   // this, scan() re-opened and re-read EVERY file the dir has ever held on every
   // poll — the dominant idle-energy cost on long sessions with heavy fan-out.
@@ -79,8 +123,8 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
   // from offset 0 would double-count its usage — deferred there with a before-fix
   // fixture rather than risk corrupting cost/token totals here.
   const settled = new Set();
-  const lastSize = new Map();     // filename → last observed size
-  const lastGrowTs = new Map();   // filename → last time the size changed
+  const lastSize = new Map();     // relative path → last observed size
+  const lastGrowTs = new Map();   // relative path → last time the size changed
   const SETTLE_IDLE_MS = settleIdleMs;
   let stopped = false;
   let primed = false;
@@ -162,7 +206,7 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
       // fresh fan-out) and back off. Present → resume full cadence.
       let files;
       try {
-        files = await fsp.readdir(dir);
+        files = await listAgentFiles(dir);
         absentTicks = 0;
       } catch {
         absentTicks++;
@@ -170,8 +214,7 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
         return;
       }
       let changed = false;
-      for (const f of files) {
-        if (!f.startsWith('agent-') || !f.endsWith('.jsonl')) continue;
+      for (const f of files) {   // f is relative to `dir` — bare name, or workflows/<runId>/<name>
         let size;
         let st;
         try { st = await fsp.stat(join(dir, f)); size = st.size; } catch { continue; }
@@ -224,6 +267,11 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
   // slots from ENOENT-readdir'ing every tick. A promptness-oriented fs.watch (mirror
   // statusHookTailer's watch+creation-poll) is a possible follow-up, not needed for
   // the idle-battery fix. `autoStart:false` lets tests drive scan() deterministically.
+  // Workflow files under workflows/<runId>/ ride this same stat-poll. There is no
+  // watch here to make recursive, and adding one for the nested dirs would need a
+  // watch per run dir that is created and torn down as runs come and go — the poll
+  // already finds a new run dir on the next tick (≤1.5s), which is the same
+  // promptness the flat files get.
   if (autoStart) {
     timer = setInterval(scan, statPollMs);
     scan();
@@ -251,9 +299,11 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
     // card hardcoded "1bg" for any fan-out of any size.
     liveAgents({ withinMs = 60_000, now = Date.now() } = {}) {
       const out = [];
-      for (const [name, ts] of lastGrowTs) {
+      for (const [rel, ts] of lastGrowTs) {
         if (now - ts > withinMs) continue;
-        const id = name.replace(/^agent-/, '').replace(/\.jsonl$/, '');
+        // rel may be workflows/<runId>/agent-<id>.jsonl — the id lives in the basename.
+        const base = rel.slice(rel.lastIndexOf('/') + 1);
+        const id = base.replace(/^agent-/, '').replace(/\.jsonl$/, '');
         out.push({ id, lastGrowTs: ts });
       }
       return out.sort((a, b) => a.lastGrowTs - b.lastGrowTs);
