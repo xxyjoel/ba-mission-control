@@ -2,10 +2,13 @@
   "name": "@bluearch/mission-control",
   "version": "1.1.14",
   "type": "module",
-  "description": "BlueArch Mission Control — keyboard-first terminal TUI to monitor & run dozens of Claude Code agents: 10 live at once, every session saved and resumable.",
+  "description": "BlueArch Mission Control — keyboard-first terminal TUI for real Claude Code agents. Up to 64 live at once, every conversation restored with one command, per-session cost measured and hard spend caps that refuse to go past them. By BlueArch, a cloud governance and efficiency company.",
   "license": "AGPL-3.0-only",
-  "author": "BlueArch",
-  "homepage": "https://xxyjoel.github.io/ba-mission-control",
+  "author": {
+    "name": "BlueArch",
+    "url": "https://www.bluearch.io"
+  },
+  "homepage": "https://www.bluearch.io",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/xxyjoel/ba-mission-control.git"
@@ -22,7 +25,13 @@
     "agents",
     "ai-agents",
     "tmux-alternative",
-    "self-hosted"
+    "self-hosted",
+    "ai-cost",
+    "cost-tracking",
+    "finops",
+    "cloud-governance",
+    "session-manager",
+    "bluearch"
   ],
   "bin": {
     "mc": "bin/mc.mjs"

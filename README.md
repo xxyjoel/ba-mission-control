@@ -1,14 +1,17 @@
 <h1 align="center">BlueArch Mission Control</h1>
 
 <p align="center">
-  <strong>Fleet command for your Claude Code agents.</strong><br>
-  A keyboard-first terminal TUI to monitor &amp; run dozens of <strong>real</strong> <code>claude</code> CLI agents —
-  10 live at once, every session saved and instantly resumable — with live cost,
-  context, and sub-agent tracking. No GUI. No Electron. No prefix keys.
+  <strong>Run a fleet of Claude Code agents. Know what every one of them costs.</strong><br>
+  A keyboard-first terminal TUI for <strong>real</strong> <code>claude</code> CLI agents —
+  10 live by default and up to 64, every conversation saved and brought back with one command,
+  with spend measured per session and hard limits that refuse to go past them.<br>
+  No GUI. No Electron. No prefix keys.
 </p>
 
 <p align="center">
-  <em>Dozens of agents, one keyboard. Open source, self-hosted, and made in the USA. 🇺🇸</em>
+  Designed and built by <a href="https://www.bluearch.io"><strong>BlueArch</strong></a>,
+  a cloud governance and efficiency company.<br>
+  <em>We make the cost of running software visible and controllable. This is that, for AI development.</em>
 </p>
 
 <p align="center">
@@ -24,11 +27,47 @@
   <img alt="Mission Control demo" src="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/hero.gif" width="800">
 </p>
 
-This is not a mockup. Every session is a real `claude` CLI subprocess — tokens,
-costs, context, and git status are all measured, not simulated. It runs entirely
-on your machine: **no telemetry, no network service, no account beyond your own
-Claude login.** `btop` × `lazygit` aesthetic, built on
+This is not a mockup. Every session is a real `claude` CLI process in its own
+pseudo-terminal. Tokens, context and git status are read from claude's own session
+files and from `git` itself; cost is computed from those measured token counts against
+a published per-model rate table, and a rate we have not verified is marked as an
+estimate on the card rather than quietly presented as fact. Mission Control stores
+nothing off your machine and reports nothing to us: **no telemetry, no analytics, no
+BlueArch account, and nothing listening on a port.** `btop` × `lazygit` aesthetic, built on
 [Ink](https://github.com/vadimdemedes/ink) (React for terminals) with **no build step**.
+
+## What it does
+
+**Bring the whole fleet back.** Close the terminal, reboot, come back tomorrow —
+`:resume-all` restarts every session that was open, each one reattached to its own
+conversation through `claude --resume`, in its own folder and branch, on the model it
+was using, with the tokens and dollars it had already spent carried forward. Not empty
+terminals in the right directories. The actual conversations.
+
+**See the bill while it runs.** Every session shows its own token counts, context
+pressure and running cost, derived from the usage claude records for each turn and
+priced against a per-model rate table. Sub-agent and workflow fan-out is attributed
+back to the session that spawned it, so one agent spawning five still gives you one
+honest number.
+
+**Stop a runaway agent, don't just watch it.** `:cap <slot> <usd>` refuses to send
+another message once a session passes its limit. `:budget <usd>` refuses to launch
+anything new once the fleet passes its daily figure. These are enforcement, not a
+dashboard that tells you afterwards.
+
+**Never hunt for the stuck one.** Status comes from Claude Code's own lifecycle
+hooks, not from watching a pane go quiet, so a session blocked on a permission prompt
+reads as needing you rather than as idle. Answer it with one key from the grid.
+
+**Find the agents you forgot you were paying for.** `:bg` lists the conversations
+claude is running outside your fleet — the ones a force-closed terminal left behind,
+still open, still holding a session id you cannot resume. Measured on one machine:
+six of them, the oldest blocked for 9.8 days, together holding 1875 MB across 13
+processes. Two keystrokes clears one.
+
+**Nothing leaves your machine.** No analytics, no account with us, no service
+listening on a port. The tool ships five runtime dependencies and none of them is an
+HTTP client or an analytics SDK.
 
 ## Who this is for
 
@@ -38,13 +77,16 @@ Claude login.** `btop` × `lazygit` aesthetic, built on
   fan-out, stuck detection, approval prompts — without babysitting each tab.
 - Terminal-first, keyboard-first users who'd rather not run a GUI app or Electron.
 - Anyone who wants their agent tooling to be **open source and self-hosted** —
-  auditable, local-only, and yours to theme.
+  auditable, local-first, and yours to theme.
 
 ## Why not tmux or cmux?
 
 Mission Control isn't a generic multiplexer or a native app — it's a purpose-built
 TUI that *understands* Claude Code agents. It happily runs **alongside** tmux and
 over SSH.
+
+Each row below describes what the three tools document about themselves; the
+Mission Control column is the one we can prove from this repository.
 
 | | **tmux** | **[cmux](https://github.com/manaflow-ai/cmux)** | **Mission Control** |
 |---|:---:|:---:|:---:|
@@ -93,7 +135,7 @@ Prefer to hack on it? See [From source](#from-source) below and
   <img alt="Cycling themes live — Tokyo Night, Gruvbox, Catppuccin, Amber, Matrix" src="https://raw.githubusercontent.com/xxyjoel/ba-mission-control/main/assets/themes.gif" width="800">
 </p>
 
-Six built-in palettes ship out of the box — **BlueArch** (default), Tokyo Night,
+Seven built-in palettes ship out of the box — **BlueArch** (default), Tokyo Night,
 Gruvbox Dark, Catppuccin Mocha, Solarized Dark, Amber (CRT), and the
 green-phosphor **Matrix** theme. Switch live with `:theme <name>` (e.g.
 `:theme matrix`) or in Settings → Colors. Self-hosted means it's yours to
@@ -201,12 +243,20 @@ pane follows the focused card.
 
 ## What's actually running
 
-Each launched session is a long-lived `claude --print --input-format stream-json
---output-format stream-json` subprocess pinned to one slot. The fleet manager
-writes user prompts as JSON-lines to stdin, reads JSON-line events from
-stdout, and maps them onto UI state:
+Each slot runs a real interactive `claude` in its own pseudo-terminal — the same
+binary and the same interface you get in a normal shell — spawned with
+`--session-id`, `--model`, `--permission-mode` and a status hook Mission Control
+installs for that session. It does not drive claude through a wire protocol. It
+reads what claude already writes: the session JSONL under `~/.claude/projects/`
+for tokens, cost and tool activity, and the hook's own status stream for whether
+a session is working, idle, or blocked on a prompt.
 
-| stream-json event | UI effect |
+A legacy path still exists behind `FLEET_USE_PTY=0`. It drives
+`claude --print --input-format stream-json --output-format stream-json` over
+stdin and stdout and maps those events onto the same UI state. It is kept as a
+rollback and is not what you get by default. The table below describes that path:
+
+| stream-json event (legacy path only) | UI effect |
 | --- | --- |
 | `system.init` | session attached; appended to tail |
 | `stream_event.content_block_delta` (text) | live activity line during a turn |
@@ -224,8 +274,12 @@ Verifiability — every action is observable:
 - The **fleet log pane** at the bottom is a chronological merge of all live
   agents' tails — like `tail -f` over the whole fleet. Its height is exactly
   the *Fleet log lines* setting (clamped only on terminals too short to fit).
-- **Costs** are summed from the `total_cost_usd` field claude emits at the
-  end of each turn — not estimated client-side.
+- **Costs** are computed from the `usage` token counts claude records for each
+  assistant message, priced against the per-model rate table in `tui/lib/models.js`
+  and deduplicated by message id. They are an accurate estimate at published rates,
+  not a copy of your invoice. A model whose rate we have not verified inherits the
+  newest rate in its family and is marked `~` on the card, and an unknown model is
+  never priced at $0.
 - **Context window** (`ctx`) tracks the *main thread* only: sub-agent (Task)
   turns carry `isSidechain` and are excluded so the gauge never dips to a
   sub-agent's smaller context mid-turn. `in` / `out` / `cost` are cumulative
@@ -460,8 +514,10 @@ book** — models are never hand-added to it. Each entry maps a friendly id
 colour). Every selector (Settings → GENERAL, the NewSession `←/→` cycler,
 `:model` validation) reads the **live** catalog via `modelIds()`, so models
 discovered at runtime are immediately selectable. The default for new
-sessions is **`opus-4.8`** (1M-token context); change it in Settings →
-GENERAL or with `:model default <id>`.
+sessions is **`auto`** — the newest Opus in the live catalog, today `opus-4.8`
+(1M-token context), so a newly released model becomes the default the moment it
+is discovered. Pin an explicit id in Settings → GENERAL or with
+`:model default <id>`.
 
 ### Automatic discovery
 
@@ -593,7 +649,7 @@ tui/
     Zoom.jsx          Single-session detail (full tail + ctx bar + msg input)
     RepoPicker.jsx    Filesystem browser to choose the repo scan folder (:repos)
   lib/
-    themes.js         6 palettes (BlueArch / Tokyo Night / Gruvbox / Catppuccin / Solarized / Amber)
+    themes.js         7 palettes (BlueArch / Tokyo Night / Gruvbox / Catppuccin / Solarized / Amber / Matrix)
     format.js         bar / sparkline / fmtK / fmtMoney / trunc / fmtClock
     models.js         Claude model metadata (label, maxCtx, kind, costs)
     settings.js       Schema + defaults + on-disk persistence
@@ -783,22 +839,27 @@ These guard against the failure modes that hit hardest at fleet scale.
   context fires a yellow / red toast (`slot N · context 80% · consider
   /compact`). Each crossing is fired exactly once; the trigger re-arms
   when the slot drops back under the threshold (post-compaction).
-- **Title-row context chip.** When the slot's context is above the warn
-  threshold, the status pill on the card title gets a `· 89%` chip in the
-  appropriate urgency color (yellow near, red over). Pairs with the toast
-  but stays visible at-a-glance.
-- **Per-session transcript on disk.** Every inbound `claude` event and
-  every outbound user message is appended as a JSONL line to:
+- **Title-row context chip.** When a slot's context passes `warnPct` of the
+  `ctxThreshold` setting (defaults: 85% of 150k tokens), the status pill on the
+  card title gets a `· 89%` chip in the matching urgency color — yellow near the
+  threshold, red past it. Both values are in Settings → GENERAL. Pairs with the
+  toast but stays visible at-a-glance.
+- **Per-session status stream on disk.** Every lifecycle event the status hook
+  emits for a session is appended as NDJSON to:
 
   ```
-  $XDG_STATE_HOME/claude-mc/sessions/<sessionId>.jsonl
+  $XDG_STATE_HOME/claude-mc/status/<sessionId>.ndjson
   ```
 
-  (defaults to `~/.local/state/claude-mc/sessions/`). Survives across
-  process restarts, slot reassignments, and reboots — useful for audit,
-  replay, post-hoc grep, and forensics when something looks wrong. Each
-  line is `{ ts, source: 'inbound'|'outbound'|'local', ... }`. Set
-  `MC_NO_TRANSCRIPT=1` to disable.
+  (defaults to `~/.local/state/claude-mc/status/`). It survives process
+  restarts, slot reassignments and reboots, and it is what to grep when a card
+  showed something you did not expect. The conversation itself is not copied
+  here — claude keeps that in its own session JSONL under `~/.claude/projects/`,
+  and `:transcript` prints the path to it for the focused slot.
+
+  The legacy `FLEET_USE_PTY=0` path additionally writes a combined
+  inbound/outbound transcript to `.../claude-mc/sessions/<sessionId>.jsonl`,
+  disabled with `MC_NO_TRANSCRIPT=1`. The default PTY path does not write it.
 
 ## Known caveats
 
@@ -916,13 +977,13 @@ The suite uses Node's built-in `node:test` runner plus
   `Ctrl+S` toggles; PgUp pins the log and shows the "↓ N below"
   indicator; `Ctrl+G` snaps back to live; `↑`/`↓` walk through
   composer history.
-- `tests/slashCommands.test.mjs` — prefix matcher behind the dropdown:
-  bare `/` returns full catalog, `/p` narrows to /perm /pause /etc.,
-  matching is case-insensitive and ignores args after the first token.
-- `tests/Zoom.slash.test.jsx` — typing `/` surfaces the autocomplete
-  dropdown; `/cost` routes via `onSlashCommand` (not `onSendMessage`);
-  `/quit` closes the modal locally; `Tab` fills the highlighted name;
-  a non-slash message still sends through to claude.
+- `tests/agent.costCap.test.mjs` — a per-slot cap refuses the send that
+  would cross it, in both agent classes, and a respawn cannot tunnel past it.
+- `tests/costStore.twoInstances.test.mjs` — two running copies of mc cannot
+  corrupt each other's spend ledger.
+- `tests/status.replay.test.mjs` — every status misreport ever filed is
+  checked in as a recording and replayed through the live pipeline, so a
+  status bug that is fixed stays fixed.
 - `tests/recipes/zoom.recipes.test.jsx`,
   `tests/recipes/newsession.recipes.test.jsx`,
   `tests/recipes/repopicker.recipes.test.jsx`,
@@ -1023,3 +1084,24 @@ MC_MOCK=approval-request npm start
 
 …to exercise the structured-prompt + APPROVE? marker flow against the
 canned fixture instead of a real `claude` session.
+
+---
+
+## About BlueArch
+
+Mission Control is designed and built by **[BlueArch](https://www.bluearch.io)**, a
+cloud governance and efficiency company.
+
+Our work is about the same problem in two places. In the cloud it is idle capacity,
+oversized instances and spend nobody attributed. In AI development it is agents left
+running in a closed terminal, fan-out whose cost lands on no session, and a bill that
+arrives a month after the decision that caused it.
+
+Mission Control answers that for Claude Code: measure the spend per session while it
+happens, attribute the sub-agents back to the run that spawned them, surface the
+sessions you forgot were open, and let you set a figure the fleet is not allowed to
+pass. Governance you can act on at the moment it matters, not a report afterwards.
+
+- Website — **[bluearch.io](https://www.bluearch.io)**
+- Issues and source — [github.com/xxyjoel/ba-mission-control](https://github.com/xxyjoel/ba-mission-control)
+- Licensed AGPL-3.0-only. Open source, self-hosted, yours to audit.
