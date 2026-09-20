@@ -269,8 +269,17 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // "0s" — a brand-new session and an unstamped one looked identical. A real
   // agent always carries both (PtyAgent stamps them in its constructor), so
   // these branches only fire on a snapshot that lost the field; say so.
+  //
+  // 0409: the ⧗ hourglass answers "how old is this CONVERSATION", so it reads
+  // sessionStartedAt — the first record in the session transcript. spawnedAt
+  // measures the agent OBJECT's life, which a resume or a Mission Control
+  // restart re-stamps: seven slots relaunched from a saved set all showed the
+  // same one-second uptime for conversations days apart. spawnedAt stays as
+  // the fallback for the legacy Agent path and for a session whose transcript
+  // isn't readable yet; neither present still renders UNKNOWN, never 0s.
   const now       = Date.now();
-  const uptime    = agent.spawnedAt  ? fmtDurShort(now - agent.spawnedAt)  : UNKNOWN;
+  const convoFrom = agent.sessionStartedAt || agent.spawnedAt || null;
+  const uptime    = convoFrom ? fmtDurShort(now - convoFrom) : UNKNOWN;
   const stateAge  = agent.stateSince ? fmtDurShort(now - agent.stateSince) : UNKNOWN;
 
   // ── Triage line ──────────────────────────────────────────────

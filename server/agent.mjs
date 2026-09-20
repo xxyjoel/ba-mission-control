@@ -111,6 +111,14 @@ export class Agent extends EventEmitter {
     // intentionally NOT reset on auto-restart / respawn so per-agent
     // session lifetime stays continuous from the user's perspective.
     this.spawnedAt = Date.now();
+    // sessionStartedAt: epoch ms of the FIRST record in the session
+    // transcript — the true age of the CONVERSATION. spawnedAt only measures
+    // this object's life and is re-stamped by every `new Agent(...)`, so a
+    // resume or a Mission Control restart resets it. Declared here so both
+    // agent classes ship one snapshot shape (tests/ptyAgent.test.mjs pins
+    // PtyAgent.toJSON as a superset of this one). The legacy stream-json path
+    // has no transcript tailer, so it stays null and the Card falls back.
+    this.sessionStartedAt = null;
     // Session-wide counters. turnCount increments on each `result` event
     // (one per user → claude round trip). messageCount increments on each
     // user message actually written to claude's stdin. Both survive
@@ -901,6 +909,9 @@ export class Agent extends EventEmitter {
       // absolute timestamps; the TUI derives elapsed time on render so
       // counters stay live without snapshot churn.
       spawnedAt: this.spawnedAt,
+      // 0409: true conversation age. null on this path — nothing reads the
+      // transcript here — so the Card falls back to spawnedAt.
+      sessionStartedAt: this.sessionStartedAt ?? null,
       claudeVersion: this.claudeVersion || null, // 0333 parity
       stateSince: this.stateSince,
       turnCount: this.turnCount,

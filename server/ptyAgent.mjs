@@ -285,6 +285,13 @@ export class PtyAgent extends EventEmitter {
     // Per-agent session metrics (#12) — see agent.mjs for semantics.
     this.stateSince = Date.now();
     this.spawnedAt = Date.now();
+    // 0409: epoch ms of the FIRST record in the session transcript — the true
+    // age of the CONVERSATION, set by sessionFileTailer once it reads the
+    // file. spawnedAt only measures this JS object's life: `new PtyAgent(...)`
+    // runs again on every resume and on every Mission Control restart, so
+    // seven slots relaunched from a saved set all read one second old. null
+    // until the transcript is readable (a brand-new session has none yet).
+    this.sessionStartedAt = null;
     this.turnCount = 0;
     this.messageCount = 0;
     this.status = 'idle';
@@ -449,14 +456,38 @@ export class PtyAgent extends EventEmitter {
       text: `${kind} pid=${this.pty.pid} model=${modelArg} cwd=${this.cwd}${this.resuming ? ` session=${this.sessionId.slice(0, 8)}` : ''}`,
     });
 
-    // Construct (or reconstruct on restart) the persistent emulator.
-    // Every byte claude writes lands here for the agent's lifetime,
-    // not just while zoom is open — that's what gives the user "no
-    // lost state" on re-zoom. Only built when Terminal is available
-    // (skipped in unit tests using the spawn stub).
-    if (Terminal && typeof Terminal === 'function') {
+    // Construct the persistent emulator ONCE per agent. Every byte claude
+    // writes lands here for the agent's lifetime, not just while zoom is
+    // open — that's what gives the user "no lost state" on re-zoom. Only
+    // built when Terminal is available (skipped in unit tests using the
+    // spawn stub).
+    //
+    // 0402: start() used to dispose and rebuild the Terminal on EVERY spawn,
+    // so a restart threw the whole scrollback away. Measured on a live agent
+    // at rows=50, one start() call: buffer len 226 → 27, maxOffset 176 → 0.
+    // PtyPane computes maxOffset = max(0, length - rows), so every scroll key
+    // clamped to 0 and Ctrl+Y entered a mode that could not move. start() is
+    // reached from auto-restart, the send/zoom revives, changePermissionMode
+    // and changeModel — the user hits the last two on purpose. Reuse the
+    // emulator instead, and resize it only when the geometry actually moved.
+    const canEmulate = Terminal && typeof Terminal === 'function';
+    if (canEmulate && this.term) {
+      // Reuse path — the buffer IS the user's history, keep it. Resizing is
+      // the only adjustment a restart can need (Fleet.setViewport can have
+      // changed cols/rows while this agent had no live PTY).
+      if (this.term.cols !== this.cols || this.term.rows !== this.rows) {
+        try { this.term.resize(this.cols, this.rows); } catch {}
+      }
+      // Seam marker: --resume reprints context, so without a break the
+      // replayed transcript reads as the old conversation continuing.
+      // It lands in the VIEWPORT, and claude's post---resume repaint (measured
+      // in 0402: EL 2K x98 + CUU x50) erases the viewport, so the marker
+      // usually survives only until claude's first repaint. Kept because it is
+      // free and it does hold on the auto-restart paths that don't repaint —
+      // the scrollback above the viewport survives either way (ED J x0).
+      try { this.term.write('\r\n── session restarted ──\r\n'); } catch {}
+    } else if (canEmulate) {
       try {
-        if (this.term) { try { this.term.dispose(); } catch {} }
         this.term = new Terminal({
           cols: this.cols,
           rows: this.rows,
@@ -468,6 +499,11 @@ export class PtyAgent extends EventEmitter {
         // that PtyPane used to handle; with term owned by the agent
         // we register them here so they fire regardless of whether
         // a zoom view is currently mounted.
+        //
+        // 0402: these MUST stay inside the build-once branch. The term now
+        // outlives a restart, so registering per spawn would stack a second
+        // handler on the same emulator and every clipboard write / bell would
+        // fire twice after one changeModel.
         try {
           // S1 (0408): forward a clipboard write ONLY while this agent is the
           // zoom-viewed one — same gate as the bell below. Un-gated, any text
@@ -1351,6 +1387,10 @@ export class PtyAgent extends EventEmitter {
       permissionMode: this.permissionMode,
       workingStartTs: this.workingStartTs,
       spawnedAt: this.spawnedAt,
+      // 0409: true conversation age (first transcript record), null when the
+      // transcript hasn't been read yet. Card prefers it over spawnedAt, which
+      // restarts with the agent object on every resume.
+      sessionStartedAt: this.sessionStartedAt ?? null,
       claudeVersion: this.claudeVersion || null, // 0333: version this process launched on
       stateSince: this.stateSince,
       turnCount: this.turnCount,
