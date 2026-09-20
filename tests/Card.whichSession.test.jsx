@@ -20,6 +20,12 @@ const base = {
 };
 // cardWidth is the prop Card actually budgets against; `width` is ignored.
 const W = 64;
+// A rendered frame carries SGR colour bytes. Measuring a row with them included
+// counts an escape sequence as if the terminal drew it — this theme's truecolor
+// codes are 14+ bytes a row, so a row that fits exactly reads as 85 wide and the
+// width assertion fails on a card that is correct. Strip before measuring, the
+// same way every other Card test does.
+const strip = (s) => (s || '').replace(/\x1b\[[0-9;]*m/g, '');
 const draw = (agent) => render(
   <Box width={W}><Card agent={{ ...base, ...agent }} cardWidth={W} theme={theme} threshold={100000} now={Date.now()} /></Box>,
 ).lastFrame();
@@ -46,6 +52,7 @@ test('an unreadable session list draws no mark rather than claiming none', () =>
 test('the id and the mark do not push the row past the card width', () => {
   const f = draw({ otherSessions: 3, branch: 'ops/db-recovery-incident-2026' });
   for (const line of f.split('\n')) {
-    assert.ok(line.length <= W, `row overflows the card: ${JSON.stringify(line)}`);
+    const visible = strip(line);
+    assert.ok(visible.length <= W, `row overflows the card: ${JSON.stringify(visible)}`);
   }
 });

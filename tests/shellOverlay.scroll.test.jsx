@@ -37,11 +37,18 @@ const lines = (from, to) => {
 const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 // ShellOverlay paints the cursor as a hard background run in the theme accent
-// (cursorStyle). The border carries the SAME rgb as a FOREGROUND, so match on
-// the 48;2 (background) introducer or every border row is a false positive.
-const CURSOR_BG = '\x1b[48;2;25;212;212m';
+// (cursorStyle). The border carries the SAME colour as a FOREGROUND, so match
+// on a BACKGROUND introducer only, or every border row is a false positive.
+//
+// Match every background form, not the truecolor one alone. chalk picks its
+// level from the environment: truecolor here, but the basic 16-colour palette
+// on a headless CI runner, where the same cursor arrives as `ESC[46m`. Pinning
+// `48;2` made this test pass locally and fail in CI on a frame that was
+// correct. 40-47 and 100-107 are background colours; 49 is the background
+// reset and must not match.
+const CURSOR_BG_RE = /\x1b\[(?:4[0-7]|10[0-7]|48;[25];[0-9;]+)m/;
 const cursorRow = (frame) => {
-  const row = frame.split('\n').find((l) => l.includes(CURSOR_BG));
+  const row = frame.split('\n').find((l) => CURSOR_BG_RE.test(l));
   return row === undefined ? undefined : plain(row);
 };
 
