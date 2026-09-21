@@ -49,13 +49,51 @@ if (skipRealTerminal) {
 }
 
 let failed = 0;
+// Per-FILE wall clock. `--test-timeout` bounds an individual test, not the
+// process around it: a file that wedges before any test registers, or one whose
+// process never exits after its tests pass, is not covered by it. spawnSync
+// with no timeout then waits for that forever, and because this loop is
+// sequential the whole suite stops with it.
+//
+// That is not hypothetical. The v1.1.16 release hung on macOS/node20 at
+// 2026-09-20T22:37:13Z, printed nothing for the next six hours, and was killed
+// by GitHub's job limit — "Terminate orphan process: pid (87158) (node)". The
+// run is charged as cancelled, not failed, so it reads as infrastructure
+// trouble rather than a test defect and names no file.
+//
+// 5 minutes is far above any file here (the whole suite runs in ~3 min) and far
+// below the 6-hour job cap. A file that exceeds it is reported by NAME and the
+// suite carries on, so one wedged file costs one failure instead of the release.
+const FILE_TIMEOUT_MS = 5 * 60 * 1000;
+const timedOut = [];
+
 for (const f of files) {
   const r = spawnSync(
     'node',
     ['--import', 'tsx', '--test', '--test-timeout=30000', '--test-force-exit', f],
-    { stdio: 'inherit', env: { ...process.env, MC_NO_TRANSCRIPT: '1' } },
+    {
+      stdio: 'inherit',
+      env: { ...process.env, MC_NO_TRANSCRIPT: '1' },
+      timeout: FILE_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+    },
   );
+  // spawnSync reports a timeout as error.code ETIMEDOUT, and leaves status null
+  // because the child was signalled rather than exiting on its own.
+  if (r.error?.code === 'ETIMEDOUT' || (r.status === null && r.signal)) {
+    timedOut.push(f);
+    console.error(
+      `run-tests: TIMEOUT after ${FILE_TIMEOUT_MS / 1000}s — ${f} ` +
+      `(killed with ${r.signal || 'SIGKILL'}; it wedged rather than failing)`,
+    );
+    failed++;
+    continue;
+  }
   if (r.status !== 0) failed++;
+}
+
+if (timedOut.length) {
+  console.error(`run-tests: ${timedOut.length} file(s) timed out: ${timedOut.join(', ')}`);
 }
 
 if (failed) {
