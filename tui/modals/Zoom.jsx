@@ -63,7 +63,7 @@ function shortToolName(name) {
 }
 
 export default function Zoom({
-  agent, threshold, onClose, onCyclePerm,
+  agent, derived, threshold, onClose, onCyclePerm,
   theme, width = 104, height, usage, fmtReset, weekCost = 0,
   hideUpdateBanner = true,
 }) {
@@ -119,11 +119,18 @@ export default function Zoom({
   const overT = (agent.context || 0) >= threshold;
   const nearT = (agent.context || 0) >= threshold * 0.85;
 
-  const sCol = agent.status === 'working' ? theme.accent
-             : agent.status === 'waiting' ? theme.yellow
-             : agent.status === 'error'   ? theme.red : theme.dim;
-  const statusWord  = agent.status === 'waiting' ? 'NEEDS INPUT' : (agent.status || '').toUpperCase();
-  const statusGlyph = STATUS_GLYPH[agent.status] || '·';
+  // 0417: read the DERIVED status, the same value the card shows. `agent` is
+  // the live PtyAgent when zoom is opened from the grid, and its `.status` is
+  // only the connector's opinion — the hook feed, the approval scrape and the
+  // freshness gates are applied in toJSON() and never written back. Falling
+  // back to `agent.status` keeps the legacy Agent and the tests working, both
+  // of which pass a plain snapshot object as `agent`.
+  const status      = derived?.status ?? agent.status;
+  const sCol = status === 'working' ? theme.accent
+             : status === 'waiting' ? theme.yellow
+             : status === 'error'   ? theme.red : theme.dim;
+  const statusWord  = status === 'waiting' ? 'NEEDS INPUT' : (status || '').toUpperCase();
+  const statusGlyph = STATUS_GLYPH[status] || '·';
   // Session Health for this project (cached read; null until first scored turn).
   const health = readProjectHealth(agent.cwd);
 
@@ -472,7 +479,7 @@ export default function Zoom({
               <Text color={theme.dim}> · {agent.messageCount || 0} msg</Text>
             </Box>
             <Box>
-              <Text color={theme.dim}>in {agent.status || 'idle'}     </Text>
+              <Text color={theme.dim}>in {status || 'idle'}     </Text>
               <Box flexGrow={1} />
               <Text color={theme.fg}>{agent.stateSince ? fmtDuration(Date.now() - agent.stateSince) : '00:00:00'}</Text>
             </Box>

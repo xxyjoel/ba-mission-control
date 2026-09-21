@@ -571,8 +571,23 @@ export default function App({ fleet, auth: initialAuth }) {
   // The legacy stream-json Agent path (FLEET_USE_PTY=0) is ALSO
   // happier with the live instance because startZoomSession reads
   // agent.proc / mutates agent.sessionId — both no-ops on a snapshot.
+  // 0417: the zoom view and the card must not read status from different
+  // places. `fleet.agentById()` hands back the LIVE PtyAgent, and on that
+  // object `.status` is only the connector's opinion — ptyAgent.mjs:1161
+  // passes it into the derivation as `connectorStatus`, one input among
+  // several. The status a reader is meant to see is computed in toJSON()
+  // from the hook feed, the approval scrape and the freshness gates, and it
+  // is never written back to the instance. The card renders the derived
+  // value and zoom rendered the raw one, so the two disagreed exactly when
+  // the derivation overrode the connector — which is the whole point of it.
+  // Reported repeatedly as "zoom says WORKING, the card says IDLE".
+  //
+  // Zoom still needs the live instance for its methods (attachZoomView,
+  // markUserSubmitted, the pty handle), so the snapshot travels beside it
+  // and Zoom reads its displayed status from there.
+  const zoomedSnap   = zoomedId ? agents.find(a => a.id === zoomedId) || null : null;
   const zoomedAgent  = zoomedId
-    ? (fleet.agentById(zoomedId) || agents.find(a => a.id === zoomedId))
+    ? (fleet.agentById(zoomedId) || zoomedSnap)
     : null;
 
   // If the focused slot is empty (e.g., the user just killed it) and
@@ -2103,6 +2118,7 @@ export default function App({ fleet, auth: initialAuth }) {
         <Box flexShrink={0} paddingX={2} paddingY={1}>
           <Zoom
             agent={zoomedAgent}
+            derived={zoomedSnap}
             threshold={threshold}
             onClose={() => { setModal(null); setZoomedId(null); }}
             onCyclePerm={() => cyclePerm(zoomedAgent)}
