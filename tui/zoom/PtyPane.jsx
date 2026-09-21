@@ -423,9 +423,42 @@ export default function PtyPane({
       // in the opposite order. The emulator clamps its own end; we clamp ours.
       const moveBy = (lines) => {
         if (!term) return;
+        // 0419: movement must obey the same two rules the renderer does, or a
+        // keypress is spent on a region the window is not showing.
+        //
+        // 0416 stopped the resize effect resetting the view while the reader is
+        // scrolling — correct, it was throwing them to the bottom — but that
+        // left skipBackRef carrying a value denominated in the OLD geometry.
+        // `skip` is recomputed from the pane height on every render (:561), so
+        // shrinking the pane by N rows RAISES skip by N and opens N units of
+        // phantom `room` below. moveBy spends that room first and only calls
+        // scrollLines with the remainder, while the view memo refuses to apply
+        // the skip at all once the emulator is scrolled back (:590,
+        // `scrolledBack > 0 ? 0 : effSkip`). So N presses moved the SCROLL
+        // counter and zero rendered rows. Measured at HEAD, parked at back=19
+        // with the pane going 20->12: eight presses all rendered the same top
+        // row while the footer counted 41 through 48.
+        //
+        // In the app the trigger needs no keystroke: App.jsx:2111 recomputes
+        // the zoom height from the toast count, and Zoom.jsx:214 subtracts the
+        // todo panel, so a toast landing or claude editing its todo list
+        // resizes the pane under a parked reader.
+        //
+        // Do NOT fix this by restoring the unconditional reset — that brings
+        // back the snap-to-bottom 0416 removed.
+        const bNow = term.buffer.active;
+        const backNow = Math.max(0, bNow.baseY - bNow.viewportY);
+        // Rule 1: skipBack can never exceed the skip region that exists now.
+        // Covers the mirror case, where the pane GAINS rows and skip falls
+        // below a surviving skipBack, stranding the downward path.
+        skipBackRef.current = Math.min(skipBackRef.current || 0, skipRef.current || 0);
         let n = Math.abs(lines);
         if (lines < 0) {
-          const room = Math.max(0, (skipRef.current || 0) - (skipBackRef.current || 0));
+          // Rule 2: while scrolled back the renderer ignores the skip, so there
+          // is no skip room to spend — every press must reach the emulator.
+          const room = backNow > 0
+            ? 0
+            : Math.max(0, (skipRef.current || 0) - (skipBackRef.current || 0));
           const take = Math.min(room, n);
           if (take > 0) { skipBackRef.current = (skipBackRef.current || 0) + take; n -= take; }
           if (n > 0) term.scrollLines(-n);

@@ -146,3 +146,47 @@ test('a resize still snaps a drifted viewport back to the live output', async ()
     'the resize must put a non-scrolling reader back on the live row ' + live);
   unmount();
 });
+
+// 0419: the gap that let the regression through. The two resize tests above
+// stop AT the resize and never scroll again, so neither noticed that the next
+// N presses had gone dead. N is exactly the number of rows the pane lost:
+// shrinking raises the anchor-skip region, which opened phantom room that
+// moveBy spent on presses the renderer could not act on, because it drops the
+// skip entirely once the emulator is scrolled back. Measured before the fix,
+// parked deep with the pane going 20 -> 12: eight presses left the top row
+// unchanged while the footer counted 41 through 48.
+test('a resize does not stop the reader scrolling further', async () => {
+  // The emulator must be TALLER than the pane, or maxSkip is 0 and there is no
+  // skip region to strand — an equal-height stub reproduces nothing.
+  const stub = makeStubAgent({ cols: 80, rows: 40 });
+  for (let i = 0; i < 400; i++) await writeLine(stub.term, 'L' + String(i).padStart(3, '0'));
+  const { stdin, lastFrame, rerender, unmount } = render(
+    <PtyPane agent={stub.agent} width={80} height={20} theme={THEME} />,
+  );
+  await wait(60);
+  stdin.write(CTRL_Y);
+  await wait(60);
+  // Park well inside the emulator's scrollback, past the skip region.
+  for (let i = 0; i < 25; i++) { stdin.write('w'); await wait(8); }
+  await wait(60);
+  // The freeze shows in the TOP row: a dead press leaves the window where it
+  // is while the footer counter still climbs. The bottom row is the live edge
+  // and is a poor probe here.
+  const topRow = (f) => markers(f)[0];
+  const parked = topRow(lastFrame());
+
+  // The pane loses 8 rows — a toast landing, or claude writing a todo list.
+  rerender(<PtyPane agent={stub.agent} width={80} height={12} theme={THEME} />);
+  await wait(80);
+
+  // Every press from here must move the window. Before the fix the first eight
+  // moved nothing at all.
+  const seen = [];
+  for (let i = 0; i < 8; i++) { stdin.write('w'); await wait(20); seen.push(topRow(lastFrame())); }
+  unmount();
+
+  const dead = seen.filter((b) => b === parked).length;
+  assert.equal(dead, 0,
+    `every press must move the window; ${dead} of 8 were dead (parked ${parked}, saw ${seen.join(' ')})`);
+  assert.notEqual(seen[seen.length - 1], parked, 'the window ended where it started');
+});
