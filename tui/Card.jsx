@@ -182,9 +182,18 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // separated only by colour — reads as a contradiction, not as two facts. Two
   // letters buy that disambiguation; the tally bought nothing.
   const bgLive = !!agent.bgStatus || agent.bgCount > 0;
-  const bgTag = !approval && bgLive
-    ? ` · bg ${(agent.bgStatus || '').toUpperCase()}`
-    : '';
+  // 0418: the status row says the SESSION's status and nothing else. It used
+  // to carry a second status word for background work — `3bg WORKING`, later
+  // `bg WORKING` — in a different colour beside the real one. Two status words
+  // on one row is not a summary, it is a question: a reader saw teal WORKING
+  // and light-blue `bg WORKING` flip between each other and could not tell
+  // which one described the session. Background work is work the card should
+  // list, not a modifier on the session's own state, so it moved to the body
+  // row below with the sub-agents.
+  //
+  // bgLive stays. It is not only the chip's gate — Card.jsx:281 uses it to turn
+  // the triage verb from `needs a nudge →` into `check back`, so an idle slot
+  // with background work running is never advertised as safe to interrupt.
 
   // Branch row
   const branchClean = (agent.dirty || 0) === 0;
@@ -333,7 +342,6 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   const innerW = Math.max(16, (cardWidth || 56) - 4);
   const slotTagW = `[${agent.slot}] `.length;
   const statusTagW = `${statusGlyph} ${statusWord}`.length
-    + bgTag.length
     + (nearT ? ` · ${(ctxPct * 100).toFixed(0)}%`.length : 0)
     + (agent.stuckMin > 0 ? ` · STUCK ${agent.stuckMin}m`.length : 0);
   const nameStr = trunc(agent.name || '—', Math.max(3, innerW - slotTagW - statusTagW - 1));
@@ -366,7 +374,6 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={focused ? theme.accent : theme.fg}>{nameStr}</Text>
         <Box flexGrow={1} />
         <Text color={sCol}>{statusGlyph} {statusWord}</Text>
-        {bgTag && <Text color={theme.brBlue}>{bgTag}</Text>}
         {nearT && (
           <Text color={overT ? theme.red : theme.yellow}> · {ctxPctText}</Text>
         )}
@@ -462,7 +469,15 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Box flexGrow={1} flexShrink={1} overflow="hidden">
           {subCount > 0
             ? <Text color={theme.accent} wrap="truncate">{subLabel}</Text>
-            : <Text color={todoCurrent ? theme.dim : theme.faint} wrap="truncate">{todoCurrent || '—'}</Text>}
+            : bgLive
+              /* 0418: background work the server can see but cannot count —
+                 the hook-clock path sets bgStatus live with an empty
+                 activeSubagents array (server/ptyAgent.mjs:1276). Before this
+                 row existed that case showed only in the header chip; with the
+                 chip gone it would have shown nowhere at all. No invented
+                 number: say that it is running, not how many. */
+              ? <Text color={theme.accent} wrap="truncate">⋔ background agents running</Text>
+              : <Text color={todoCurrent ? theme.dim : theme.faint} wrap="truncate">{todoCurrent || '—'}</Text>}
         </Box>
       </Box>
 

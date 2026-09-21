@@ -46,8 +46,13 @@ function frameFor(a) {
 
 test('D2: idle with background agents running reads "check back", not "needs a nudge"', () => {
   const f = frameFor(agent({ bgCount: 3, bgStatus: 'working' }));
-  assert.match(f, /· bg WORKING/, 'bg tag renders beside the status');
-  assert.doesNotMatch(f, /3bg/, '0416: the tally is not duplicated from the agents-running row');
+  // 0418: the status row carries ONE status word. Background work is listed in
+  // the body row instead, so nothing named "bg" appears beside the status.
+  assert.doesNotMatch(f, /bg/i, 'no second status word on the title row');
+  // This fixture sets bgCount/bgStatus but no activeSubagents — the
+  // hook-clock shape, where the server knows work is live but cannot count it.
+  // The body says so without inventing a number.
+  assert.match(f, /⋔ background agents running/, 'background work is listed in the body');
   assert.match(f, /check back/, 'the working-branch verb');
   assert.doesNotMatch(f, /needs a nudge/, 'must not tell the operator to interrupt a busy slot');
 });
