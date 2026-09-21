@@ -4,6 +4,46 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.17] — 2026-09-21
+
+1.1.16 never published either — its macOS job wedged and GitHub killed it at the
+six-hour cap, so the run is recorded as cancelled and named no file.
+
+### Fixed
+- **The zoom view and the card showed different status for one session.** The
+  card renders the DERIVED status from the fleet snapshot; zoom rendered the
+  live agent instance, where `.status` is only the connector's opinion and the
+  hook feed, approval scrape and freshness gates have not been applied. They
+  disagreed exactly when the derivation overrode the connector, which is the
+  reason the derivation exists. Reported four times as "says WORKING in zoom,
+  says IDLE in the fleet view".
+- **Scrolling back in the zoom view went dead after the pane changed height.**
+  1.1.15 stopped a resize throwing a scrolled-back reader to the bottom, but
+  left the scroll-back counter measured in the old geometry. Shrinking the pane
+  opened phantom room that key presses were spent on, while the renderer
+  ignores that region once you are scrolled back — so N presses moved the
+  counter and no rows, where N is the number of rows the pane lost. The trigger
+  needs no keystroke: a toast landing or claude editing its todo list resizes
+  the pane under you.
+- **A wedged test file could burn a whole release.** The runner used a
+  sequential `spawnSync` with no timeout, so one file that never exits stopped
+  the suite indefinitely. Each file now gets a five minute wall clock and a
+  timeout is reported by name.
+
+### Changed
+- **The card's title row shows one status word.** It used to carry a second one
+  for background work, in a different colour, which left a reader unable to tell
+  which described the session. Background work is now listed in the body row
+  with the sub-agents: `⋔3 agents running`, or `⋔ background agents running`
+  when the server can see work it cannot count.
+
+### Known
+- Scrolling back through history is still limited by what the terminal emulator
+  retains, and claude repaints its frame in place rather than letting lines
+  scroll off, so little accumulates during normal operation. Measured: 120 lines
+  of output left the buffer at its starting size. Sourcing history from the
+  session transcript instead is a design change, not a patch.
+
 ## [1.1.16] — 2026-09-20
 
 1.1.15 never published. Its release failed on two tests that pass on a
