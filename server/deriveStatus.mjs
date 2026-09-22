@@ -58,14 +58,17 @@ function tryBool(fn) {
 }
 
 export function deriveStatus(signals, now) {
+  // Clocks are NOT defaulted: an absent clock must compare exactly as the raw
+  // agent field did (undefined > x is false, now - undefined is NaN → not
+  // fresh / not stuck), which a 0 default would silently change.
   const {
     hookStatus = null,
-    hookStatusTs = 0,
+    hookStatusTs,
     connectorStatus = 'idle',
-    lastConnectorTs = 0,
-    lastPtyTs = 0,
-    lastEventTs = 0,
-    lastSubHookTs = 0,
+    lastConnectorTs,
+    lastPtyTs,
+    lastEventTs,
+    lastSubHookTs,
     awaitingPrompt = null,
     pendingSubagents = new Map(),
     hasPty = false,
