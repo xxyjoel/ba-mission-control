@@ -30,8 +30,11 @@ import Settings    from './modals/Settings.jsx';
 import Zoom        from './modals/Zoom.jsx';
 import RepoPicker  from './modals/RepoPicker.jsx';
 import ShellOverlay from './modals/ShellOverlay.jsx';
+import SubscriptionLogin from './modals/SubscriptionLogin.jsx';
 
 import { cdToCwd } from '../server/shellSession.mjs';
+import { listProviders, enabledProviders, getProvider } from '../server/providers/index.mjs';
+import { modelIds } from './lib/models.js';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS, resolveModelId } from './lib/models.js';
@@ -138,7 +141,22 @@ export function overlayHeight(termRows, toastCount) {
   return Math.max(1, termRows - (3 + feedbackRows));
 }
 
-export default function App({ fleet, auth: initialAuth }) {
+// Model ids New Session cycles for a provider. Claude keeps the live catalog;
+// other providers only see their own namespaced (`<id>:…`) entries.
+// TODO(provider-models): simplify once models.js ships modelIds(provider).
+function modelsForProvider(id) {
+  if (id === 'claude') return modelIds();
+  try { return (modelIds(id) || []).filter(k => typeof k === 'string' && k.startsWith(`${id}:`)); } catch { return []; }
+}
+const providerModelLabel = (id) => MODELS[id]?.label || String(id).replace(/^[a-z]+:/, '');
+
+// `providers`, `loginSpawn` and the onProvider* callbacks are test seams;
+// main.jsx passes none of them.
+export default function App({
+  fleet, auth: initialAuth,
+  providers: providerList = listProviders(), loginSpawn,
+  onProviderConnected: onProviderConnectedProp, onProviderDisconnected: onProviderDisconnectedProp,
+}) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -160,7 +178,7 @@ export default function App({ fleet, auth: initialAuth }) {
   const [usage, setUsage] = useState(() => readUsage());
 
   const [focusedSlot, setFocusedSlot] = useState(1);
-  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom' | 'shell'
+  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom' | 'shell' | 'login'
   const [helpView, setHelpView] = useState('main'); // which section Help should highlight
   const [newSlot, setNewSlot] = useState(null);
   const [zoomedId, setZoomedId] = useState(null);
@@ -334,6 +352,54 @@ export default function App({ fleet, auth: initialAuth }) {
   };
   useEffect(() => { refreshRepos(); }, []);
   useEffect(() => { if (modal === 'new') refreshRepos(); }, [modal]);
+
+  // ── Subscriptions (0420) ────────────────────────────────
+  // New Session offers a provider only when it is enabled in settings AND its
+  // last known auth probe was ok. Claude is the baseline and is always offered.
+  // Probes are lazy: Settings → SUBSCRIPTIONS reports what it learns, and the
+  // first New Session open probes any enabled provider still unknown. Until a
+  // result lands the provider is treated as unavailable.
+  const [providerAuth, setProviderAuth] = useState({}); // id → { ok }
+  const [loginProviderId, setLoginProviderId] = useState(null);
+  const [settingsTab, setSettingsTab] = useState(null);
+  const lastProviderRef = useRef(null);   // last provider launched this run
+  const pendingConnectRef = useRef(null); // provider whose login PTY ran
+  const probingRef = useRef(new Set());
+  const enabledIds = new Set(enabledProviders(settings).map(p => p.id));
+  const enabledList = providerList.filter(p => enabledIds.has(p.id));
+  const usableProviders = enabledList.filter(p => p.id === 'claude' || providerAuth[p.id]?.ok);
+  useEffect(() => {
+    if (modal !== 'new') return;
+    for (const p of enabledList) {
+      if (p.id === 'claude' || providerAuth[p.id] || probingRef.current.has(p.id)) continue;
+      probingRef.current.add(p.id);
+      Promise.resolve()
+        .then(() => p.probeAuth())
+        .then((r) => ({ ok: !!r?.ok }), () => ({ ok: false }))
+        .then((r) => { probingRef.current.delete(p.id); setProviderAuth(a => ({ ...a, [p.id]: r })); });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal]);
+  const providerLabel = (id) => providerList.find(p => p.id === id)?.label || id;
+  const onSubscriptionProbed = (id, st) => {
+    const ok = st?.state === 'connected';
+    setProviderAuth(a => ({ ...a, [id]: { ok } }));
+    if (pendingConnectRef.current !== id) return;
+    pendingConnectRef.current = null;
+    if (!ok) return;
+    // TODO(cursor-hooks): install the MC entry in ~/.cursor/hooks.json here when settings.cursorStatusHooks is on (Phase 5).
+    if (id === 'claude') setAuth(probeAuth());
+    pushToast(`${providerLabel(id)} connected`, 'ok');
+    onProviderConnectedProp?.(id);
+  };
+  const onSubscriptionDisconnected = (id) => {
+    // TODO(cursor-hooks): remove the MC entry from ~/.cursor/hooks.json here (Phase 5).
+    pushToast(`${providerLabel(id)} disconnected`, 'ok');
+    onProviderDisconnectedProp?.(id);
+  };
+  const newSessionDefaultModel = (id) => (id === 'claude'
+    ? resolveModelId(settings.defaultModel)
+    : `${id}:${settings[getProvider(id)?.defaultModelSetting] || 'auto'}`);
 
   // ── Saved-session hint (or auto-resume) on boot ─────────
   // If there are any persisted sessions and every slot is currently
@@ -2048,10 +2114,16 @@ export default function App({ fleet, auth: initialAuth }) {
             slot={newSlot}
             repos={repos}
             defaultModel={settings.defaultModel}
-            onLaunch={launchSession}
+            onLaunch={(payload) => { lastProviderRef.current = payload.provider; launchSession(payload); }}
             onClose={() => { setModal(null); setNewSlot(null); }}
             theme={theme}
             width={modalWidth(84, 180)}
+            height={overlayHeight(termRows, toasts.length)}
+            providers={usableProviders}
+            initialProvider={lastProviderRef.current || settings.defaultProvider}
+            modelsFor={modelsForProvider}
+            defaultModelFor={newSessionDefaultModel}
+            modelLabel={providerModelLabel}
           />
         </Box>
         <Box flexGrow={1} />
@@ -2063,10 +2135,50 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'settings') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box flexShrink={0} paddingX={2} paddingY={1}><Settings settings={settings} setSettings={setSettingsState} onClose={() => setModal(null)} theme={theme} width={modalWidth(92, 140)} rows={termRows} /></Box>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
+          <Settings
+            settings={settings}
+            setSettings={setSettingsState}
+            onClose={() => { setSettingsTab(null); setModal(null); }}
+            theme={theme}
+            width={modalWidth(92, 140)}
+            rows={termRows}
+            providers={providerList}
+            initialTab={settingsTab}
+            onConnect={(id) => { pendingConnectRef.current = id; setLoginProviderId(id); setModal('login'); }}
+            onDisconnected={onSubscriptionDisconnected}
+            onProbed={onSubscriptionProbed}
+          />
+        </Box>
         <Box flexGrow={1} />
         {feedbackStrip}
         {renderStatusBar('command')}
+      </Box>
+    );
+  }
+  const loginProvider = loginProviderId && providerList.find(p => p.id === loginProviderId);
+  if (modal === 'login' && loginProvider) {
+    // Back to SUBSCRIPTIONS either way; Settings remounts there and re-probes.
+    const backToSettings = () => { setLoginProviderId(null); setSettingsTab('subscriptions'); setModal('settings'); };
+    return (
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
+          <SubscriptionLogin
+            provider={loginProvider}
+            spawn={loginSpawn}
+            onExit={({ exitCode }) => {
+              if (exitCode) pushToast(`${loginProvider.label} login exited with code ${exitCode}`, 'warn');
+              backToSettings();
+            }}
+            onCancel={backToSettings}
+            theme={theme}
+            width={modalWidth(60, 160)}
+            height={overlayHeight(termRows, toasts.length)}
+          />
+        </Box>
+        <Box flexGrow={1} />
+        {feedbackStrip}
+        {renderStatusBar('normal')}
       </Box>
     );
   }
