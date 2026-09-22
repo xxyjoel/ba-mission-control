@@ -33,3 +33,4 @@ templates.json
 # Task registry — internal dev state, not part of the public product.
 tasks/
 tasks/.cache/
+node_modules
