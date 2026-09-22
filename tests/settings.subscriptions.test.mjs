@@ -25,7 +25,7 @@ test('the new subscription keys have the planned defaults', () => {
   assert.equal(SETTINGS_DEFAULTS.defaultProvider, 'claude');
   assert.equal(SETTINGS_DEFAULTS.cursorDefaultModel, 'auto');
   assert.equal(SETTINGS_DEFAULTS.cursorDefaultMode, 'default');
-  assert.equal(SETTINGS_DEFAULTS.cursorStatusHooks, true);
+  assert.equal(SETTINGS_DEFAULTS.cursorStatusHooks, false);
   assert.equal(SETTINGS_DEFAULTS.cursorAutoTrust, false);
   assert.equal(SETTINGS_DEFAULTS.cursorUsageSync, false);
 });
@@ -51,7 +51,7 @@ test('the SUBSCRIPTIONS rows, in order', () => {
     ['cursorAutoTrust', 'toggle'],
     ['defaultProvider', 'cycle'],
   ]);
-  assert.match(item('cursorStatusHooks').desc, /~\/\.cursor\/hooks\.json/);
+  assert.match(item('cursorStatusHooks').desc, /Unused for now|hooks\.json/);
   assert.match(item('cursorUsageSync').desc, /cursor\.com/);
   assert.match(item('cursorAutoTrust').desc, /--trust/);
 });

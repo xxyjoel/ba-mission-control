@@ -406,13 +406,11 @@ export default function App({
     if (pendingConnectRef.current !== id) return;
     pendingConnectRef.current = null;
     if (!ok) return;
-    // TODO(cursor-hooks): install the MC entry in ~/.cursor/hooks.json here when settings.cursorStatusHooks is on (Phase 5).
     if (id === 'claude') setAuth(probeAuth());
     pushToast(`${providerLabel(id)} connected`, 'ok');
     onProviderConnectedProp?.(id);
   };
   const onSubscriptionDisconnected = (id) => {
-    // TODO(cursor-hooks): remove the MC entry from ~/.cursor/hooks.json here (Phase 5).
     pushToast(`${providerLabel(id)} disconnected`, 'ok');
     onProviderDisconnectedProp?.(id);
   };
@@ -790,12 +788,14 @@ export default function App({
           return null;
         }
 
-        // Live id list (not the import-time snapshot) so models discovered by
-        // `:model refresh` are immediately selectable. Claude ids only (0420).
-        const modelIds = catalogModelIds();
+        // Live id list for the focused slot's provider (Claude by default).
+        // Cursor slots list cursor:* ids; :model default stays Claude-only.
+        const slotProvider = focusedAgent && focusedAgent.status !== 'empty'
+          ? providerOf(focusedAgent) : 'claude';
+        const modelIds = catalogModelIds(slotProvider);
         if (!maybeDefault) {
           if (!focusedAgent || focusedAgent.status === 'empty') {
-            pushToast(`available · ${modelIds.join(' · ')}  ·  :model refresh to re-probe`, 'info');
+            pushToast(`available · ${catalogModelIds('claude').join(' · ')}  ·  :model refresh to re-probe`, 'info');
             return null;
           }
           const reqId = focusedAgent.model;
@@ -803,17 +803,18 @@ export default function App({
           const resolved = focusedAgent.resolvedModel || '(pending init)';
           const mismatch = focusedAgent.resolvedModel && focusedAgent.resolvedModel !== reqCli;
           pushToast(
-            `slot ${focusedAgent.slot} · requested ${reqId} (${reqCli}) · resolved ${resolved}${mismatch ? ' ⚠ MISMATCH' : ''}`,
+            `slot ${focusedAgent.slot} · ${slotProvider} · requested ${reqId} (${reqCli}) · resolved ${resolved}${mismatch ? ' ⚠ MISMATCH' : ''}`,
             mismatch ? 'warn' : 'info',
           );
           return null;
         }
         const isDefault = maybeDefault === 'default';
         const newId = isDefault ? modelRest[0] : maybeDefault;
-        // 'auto' is valid for the DEFAULT only (follows discovery: newest
-        // Opus at launch time). A live agent needs a concrete id.
-        if (!modelIds.includes(newId) && !(isDefault && newId === 'auto')) {
-          pushToast(`unknown model · use one of: ${isDefault ? 'auto · ' : ''}${modelIds.join(' · ')}`, 'warn');
+        // 'auto' is valid for the Claude DEFAULT only (follows discovery).
+        // A live agent needs a concrete id in its provider's catalog.
+        const listForValidate = isDefault ? catalogModelIds('claude') : modelIds;
+        if (!listForValidate.includes(newId) && !(isDefault && newId === 'auto')) {
+          pushToast(`unknown model · use one of: ${isDefault ? 'auto · ' : ''}${listForValidate.join(' · ')}`, 'warn');
           return null;
         }
         if (isDefault) {
@@ -825,11 +826,12 @@ export default function App({
           pushToast(`no live session focused — use :model default <id> for new launches`, 'warn');
           return null;
         }
-        // TODO(cursor-model-switch): a live switch validates against the Claude
-        // catalog and restarts via PtyAgent.changeModel; Cursor needs its own.
-        if (refusedFor(focusedAgent)) return null;
         const a = fleet.agentById(focusedAgent.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
+        if (typeof a.changeModel !== 'function') {
+          pushToast(`not available for ${getProvider(slotProvider)?.label || slotProvider} slots`, 'warn');
+          return null;
+        }
         const changed = a.changeModel(newId);
         if (!changed) pushToast(`slot ${focusedAgent.slot} already on ${newId}`, 'info');
         else pushToast(`model: ${newId} (restarting session)`, 'ok');
@@ -839,12 +841,15 @@ export default function App({
       case 'permission': {
         // Two forms:
         //   :perm <mode>            — change the focused live session
-        //   :perm default <mode>    — change the fleet default for new launches
+        //   :perm default <mode>    — change the Claude default for new launches
         const [maybeDefault, ...modeRest] = rest;
         const isDefault = maybeDefault === 'default';
         const mode = isDefault ? modeRest[0] : maybeDefault;
-        if (!PERMISSION_MODES.includes(mode)) {
-          pushToast(`usage: :perm <mode>  or  :perm default <mode>  ·  modes: ${PERMISSION_MODES.join(', ')}`, 'warn');
+        const liveProvider = (!isDefault && focusedAgent && focusedAgent.status !== 'empty')
+          ? providerOf(focusedAgent) : 'claude';
+        const modes = getProvider(liveProvider)?.permissionModes || PERMISSION_MODES;
+        if (!modes.includes(mode)) {
+          pushToast(`usage: :perm <mode>  or  :perm default <mode>  ·  modes: ${modes.join(', ')}`, 'warn');
           return null;
         }
         if (isDefault) {
@@ -852,19 +857,19 @@ export default function App({
           pushToast(`default permission → ${mode}`, mode === 'bypassPermissions' ? 'warn' : 'ok');
           return null;
         }
-        // Per-session change — target the focused live session.
         if (!focusedAgent || focusedAgent.status === 'empty') {
           pushToast(`no live session focused — use :perm default <mode> for new launches`, 'warn');
           return null;
         }
-        // TODO(cursor-perm-switch): PERMISSION_MODES are Claude's; a Cursor slot
-        // needs its own mode list (getProvider('cursor').permissionModes).
-        if (refusedFor(focusedAgent)) return null;
         const a = fleet.agentById(focusedAgent.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
+        if (typeof a.changePermissionMode !== 'function') {
+          pushToast(`not available for ${getProvider(liveProvider)?.label || liveProvider} slots`, 'warn');
+          return null;
+        }
         const changed = a.changePermissionMode(mode);
         if (!changed) pushToast(`slot ${focusedAgent.slot} already in ${mode}`, 'info');
-        else pushToast(`permission: ${mode}`, mode === 'bypassPermissions' ? 'warn' : 'ok');
+        else pushToast(`permission: ${mode}`, (mode === 'bypassPermissions' || mode === 'force') ? 'warn' : 'ok');
         return null;
       }
       // /clear — kill the focused session and immediately relaunch a
@@ -2011,23 +2016,26 @@ export default function App({
     if (a) a.send(text);
   };
 
-  // Cycle a session's permission mode through the three core dev modes.
-  // Used by Shift+Tab from both the main view and the Zoom modal.
-  // TODO(cursor-perm-switch): the cycle is Claude's modes; on a Cursor slot it
-  // must cycle getProvider('cursor').permissionModes (or be refused).
+  // Cycle a session's permission mode. Claude: plan → auto → acceptEdits.
+  // Cursor: its own permissionModes list. Zoom forwards Shift+Tab to the
+  // embedded CLI, so this is the main-view path (and any Zoom chrome that
+  // still calls onCyclePerm).
   const cyclePerm = (agentLike) => {
     if (!agentLike || agentLike.status === 'empty') {
       pushToast(`no live session focused`, 'warn');
       return;
     }
     const a = fleet.agentById(agentLike.id);
-    if (!a) return;
-    const cycle = ['plan', 'auto', 'acceptEdits'];
-    const cur = agentLike.permissionMode || a.permissionMode || 'acceptEdits';
+    if (!a || typeof a.changePermissionMode !== 'function') return;
+    const provider = providerOf(agentLike);
+    const cycle = provider === 'claude'
+      ? ['plan', 'auto', 'acceptEdits']
+      : (getProvider(provider)?.permissionModes || ['default']);
+    const cur = agentLike.permissionMode || a.permissionMode || cycle[0];
     const i = cycle.indexOf(cur);
     const next = cycle[(i + 1) % cycle.length] || cycle[0];
     a.changePermissionMode(next);
-    pushToast(`permission: ${next}`, next === 'bypassPermissions' ? 'warn' : 'ok');
+    pushToast(`permission: ${next}`, (next === 'bypassPermissions' || next === 'force') ? 'warn' : 'ok');
   };
 
   // ── Layout ──────────────────────────────────────────────

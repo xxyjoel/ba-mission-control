@@ -114,7 +114,9 @@ export const SETTINGS_DEFAULTS = {
   defaultProvider: 'claude',
   cursorDefaultModel: 'auto',   // bare Cursor model id; launches use `cursor:<id>`
   cursorDefaultMode: 'default', // a Cursor-native mode (providers/index.mjs)
-  cursorStatusHooks: true,
+  // Off: cards already track Cursor via PTY scrape + transcript. Writing into
+  // ~/.cursor/hooks.json is deferred — that file is also read by the Cursor IDE.
+  cursorStatusHooks: false,
   cursorAutoTrust: false,
   cursorUsageSync: false,
 };
@@ -238,12 +240,10 @@ export const SETTINGS_SCHEMA = [
       desc: 'Model for new Cursor sessions. `auto` lets Cursor pick.' },
     { key: 'cursorDefaultMode', label: 'Cursor · default mode', kind: 'cycle', options: getProvider('cursor').permissionModes,
       desc: 'Mode for new Cursor sessions. force skips every approval.' },
-    // TODO(cursor-hooks): install/remove the MC entry when this flips (Phase 5).
     { key: 'cursorStatusHooks', label: 'Cursor · status hooks', kind: 'toggle',
-      desc: 'One entry in ~/.cursor/hooks.json so cards track Cursor status. Removed on disconnect.' },
-    // TODO(cursor-usage): the poller that reads this lands in Phase 6.
+      desc: 'Unused for now — cards already track Cursor from its screen and transcript. Kept so a later release can opt into writing one MC entry in ~/.cursor/hooks.json (and remove it on disconnect) without a settings migration.' },
     { key: 'cursorUsageSync', label: 'Cursor · usage sync', kind: 'toggle',
-      desc: 'Polls the cursor.com usage API while a Cursor slot runs, for tokens and cost.' },
+      desc: 'Polls the cursor.com usage API while a Cursor slot runs, for tokens and cost. Uses the Cursor CLI keychain token in memory only — nothing is stored under ~/.config/claude-mc/.' },
     { key: 'cursorAutoTrust', label: 'Cursor · auto-trust workspace', kind: 'toggle',
       desc: 'Passes --trust so Cursor skips its workspace-trust prompt.' },
     { key: 'defaultProvider', label: 'Default subscription', kind: 'cycle', options: PROVIDER_IDS,
