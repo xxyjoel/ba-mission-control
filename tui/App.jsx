@@ -33,11 +33,10 @@ import ShellOverlay from './modals/ShellOverlay.jsx';
 import SubscriptionLogin from './modals/SubscriptionLogin.jsx';
 
 import { cdToCwd } from '../server/shellSession.mjs';
-import { listProviders, enabledProviders, getProvider } from '../server/providers/index.mjs';
-import { modelIds } from './lib/models.js';
+import { listProviders, enabledProviders, getProvider, cursorModeFor } from '../server/providers/index.mjs';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
-import { MODELS, resolveModelId } from './lib/models.js';
+import { MODELS, resolveModelId, modelIds, modelIds as catalogModelIds } from './lib/models.js';
 import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
 import { loadSettings, saveSettings, FLEET_LOG_LINES_MAX } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
@@ -46,7 +45,7 @@ import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
 import { normalizeTypedText } from './lib/typedText.js';
 import { CostStore } from './lib/costStore.js';
 import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
-import { getTemplate, listTemplates } from './lib/templateStore.js';
+import { getTemplate, listTemplates, templateSessionProvider } from './lib/templateStore.js';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine } from './lib/version.js';
 import { removeSession } from '../server/claudeSessions.mjs';
@@ -61,12 +60,8 @@ import { isDebugKeysActive, setDebugKeysActive, clearDebugKeysLog, DEBUG_KEYS_PA
 import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPathFor } from './lib/projectMemory.js';
 import { isPluginEnabled } from './lib/plugins.js';
 import { listIssuesForCwd } from './lib/tasks.js';
-import { fmtClock, fmtDuration, fmtMoney, humanize } from './lib/format.js';
+import { fmtClock, fmtDuration, fmtMoney, fmtMoneyMeasured, humanize } from './lib/format.js';
 import { resolveKillTarget } from './lib/killTarget.js';
-import { getProvider, cursorModeFor } from '../server/providers/index.mjs';
-import { modelIds as catalogModelIds } from './lib/models.js';
-import { fmtMoneyMeasured } from './lib/format.js';
-import { templateSessionProvider } from './lib/templateStore.js';
 
 // Permission modes claude CLI accepts. Source: `claude --help`.
 //   default              — prompt on every potentially-mutating tool
