@@ -21,10 +21,7 @@ import { startCursorTranscriptTailer } from './transcriptTailer.mjs';
 const SCAN_ROWS = 16;
 const CREATE_CHAT_TIMEOUT_MS = 10_000;
 
-// Ctrl+Y opens Cursor's chat picker — conflicts with MC Zoom SCROLL.
-// Zoom relocates later; do not edit zoomKeys here.
-// TODO(cursor-zoom-reserved): Zoom chrome must move SCROLL off Ctrl+Y for cursor slots.
-export const CURSOR_RESERVED_KEYS = ['SCROLL'];
+export const CURSOR_RESERVED_KEYS = [];
 
 // Sync mint — Fleet.launch → start() is sync; create-chat is ~1.6s argv-only.
 function defaultMintChat({ bin }) {

@@ -168,10 +168,8 @@ test('CursorAgent.readiness: trust prompt blocks ready', () => {
   a.kill();
 });
 
-test('CursorAgent.reservedKeys includes SCROLL (Ctrl+Y conflict)', () => {
+test('CursorAgent.reservedKeys is empty (zoom SCROLL relocated to Ctrl+B)', () => {
   const a = makeAgent(makeFakeSpawn());
-  assert.ok(a.reservedKeys.includes('SCROLL'));
-  // TODO(cursor-zoom-reserved): Zoom must relocate Ctrl+Y chrome for cursor
-  // slots — do not change zoomKeys in this task.
+  assert.deepEqual(a.reservedKeys, []);
   a.kill();
 });

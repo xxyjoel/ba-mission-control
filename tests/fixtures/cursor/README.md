@@ -39,8 +39,8 @@ Fixture naming: `session.*` = main driven session (`session.pty.ndjson`,
    menu in `session.slash-menu.screen.txt`).
 
 5. **Keybindings vs MC chrome** — ⌃U clears composer (`session.key-ctrl-u.screen.txt`).
-   **⌃Y opens chat picker** (`session.key-ctrl-y-chat-picker.screen.txt`) — **conflicts
-   with MC ⌃Y**. ⌃K/⌃J often no-op or exit picker (`session.key-ctrl-k*.screen.txt`).
+   **⌃Y opens chat picker** (`session.key-ctrl-y-chat-picker.screen.txt`) — forwarded
+   in zoom (MC scroll is ⌃B). ⌃K/⌃J often no-op or exit picker (`session.key-ctrl-k*.screen.txt`).
    ⌃Q types literal `q` in composer (`session.key-ctrl-q.screen.txt`) — no MC conflict.
    Shift+Tab cycles Agent/Plan/Ask/Debug (`session.key-shift-tab-*.screen.txt`).
 

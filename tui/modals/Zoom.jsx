@@ -12,7 +12,7 @@
 //      All typing, scrolling, markdown, syntax highlighting, slash UI, etc.
 //      come from claude itself — Mission Control no longer re-renders the
 //      stream-json events for the zoomed agent.
-//   7. Footer hint: ⌃Q exit · ⌃J newline · ⌃Y scroll · ⌃K tools · ⌃U stats
+//   7. Footer hint: ⌃Q exit · ⌃J newline · ⌃B scroll · ⌃K tools · ⌃U stats
 //
 // Why this exists: the prior Zoom modal parsed claude's stream-json
 // events and laid them out in Ink. That pipeline had perpetual
@@ -523,7 +523,7 @@ export default function Zoom({
 
       {/* ── Footer hint row ──
           Keys mirror tui/zoom/zoomKeys.js (the single source of truth):
-          ⌃Q exit · ⌃J newline · ⌃Y scroll · ⌃K tools · ⌃U stats. Everything
+          ⌃Q exit · ⌃J newline · ⌃B scroll · ⌃K tools · ⌃U stats. Everything
           else — including Esc (interrupt claude) and ⇧⇥ (claude's own perm
           cycler) — is forwarded to the embedded claude session.
           height=1 + overflow=hidden: on a narrow modal the row clips instead
@@ -534,7 +534,7 @@ export default function Zoom({
           <Text color={theme.dim}> exit  ·  </Text>
           <Text color={theme.accent}>⌃J</Text>
           <Text color={theme.dim}> newline  ·  </Text>
-          <Text color={theme.accent}>⌃Y</Text>
+          <Text color={theme.accent}>⌃B</Text>
           <Text color={theme.dim}> scroll  ·  </Text>
           <Text color={theme.accent}>⌃K</Text>
           <Text color={theme.dim}> tools{showTools ? ' (on)' : ''}  ·  </Text>

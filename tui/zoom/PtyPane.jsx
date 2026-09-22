@@ -136,7 +136,7 @@ export default function PtyPane({
   const [error, setError] = useState(null);
   const [exited, setExited] = useState(false);
 
-  // Scroll mode. Activated by Ctrl+Y (0x19 — Ink-reliable, unused by claude).
+  // Scroll mode. Activated by Ctrl+B (0x02 — Ink-reliable; Ctrl+Y reserved for cursor chat picker).
   // While active, `w` / `s` scroll up / down by one line, `f` / `b`
   // half a page up / down (0392), `g` / `G` jump to top / bottom. `Esc` or any
   // other key exits scroll mode and re-enables claude input. We
@@ -171,7 +171,7 @@ export default function PtyPane({
   // the SAME fixed-height box as the terminal rows. Rendering `rows` rows plus
   // a footer gives Ink rows+1 children for a height=rows box, and Ink resolves
   // the overflow by dropping lines from the MIDDLE of the view — text goes
-  // missing mid-screen the moment you press Ctrl+Y (the "misshapen rows while
+  // missing mid-screen the moment you press Ctrl+B (the "misshapen rows while
   // scrolling" half of the duplicated/misshapen-zoom-text report). Reserve the
   // footer's row instead, and keep the hint to exactly one row (truncated).
   const footerRows = (scrollMode ? 1 : 0) + (exited ? 1 : 0);
@@ -478,6 +478,10 @@ export default function PtyPane({
         setScrollOffset(0);
       };
       if (key.escape) { setScrollMode(false); toBottom(); return; }
+      // Ignore Ctrl/Meta chords here — Ctrl+B is also the key that ENTERS scroll
+      // mode (0420), and Ink still sets input==='b' with ctrl:true. Without this
+      // gate a Ctrl+B while already scrolling would half-page down (input==='b').
+      if (key.ctrl || key.meta) return;
       if (input === 'w') { moveBy(-1); return; }
       if (input === 's') { moveBy(1); return; }
       // 0392: f = half-page UP, b = half-page DOWN (toward bottom) — swapped
@@ -503,7 +507,7 @@ export default function PtyPane({
     // menu back-out), Ctrl+T (claude todos), Ctrl+S (claude stash), Shift+Tab
     // (claude perm-mode cycle), and Ctrl+C (interrupt).
     //
-    // Keys are Ctrl+Q/Y/K/U — all in Ink's reliably-parsed 0x01-0x1a range and
+    // Keys are Ctrl+Q/B/K/U — all in Ink's reliably-parsed 0x01-0x1a range and
     // all unused by claude-code. We do NOT use Ctrl+] / Ctrl+\ : those are
     // 0x1d/0x1c, which Ink delivers as raw bytes with ctrl:false, so a
     // `key.ctrl && input===']'` test is unreachable (the old silent-dead bug).

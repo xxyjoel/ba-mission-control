@@ -51,6 +51,7 @@ const FORWARDED = {
   'Ctrl+C (interrupt)':   '\x03',
   'Ctrl+T (claude todos)':'\x14',
   'Ctrl+S (claude stash)':'\x13',
+  'Ctrl+Y (cursor chat picker / claude yank)': '\x19',
   'plain letter a':       'a',
   'Tab':                  '\t',
 };

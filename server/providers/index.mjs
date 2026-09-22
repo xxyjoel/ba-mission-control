@@ -95,9 +95,7 @@ const cursor = {
   defaultModelSetting: 'cursorDefaultModel',
   defaultModeSetting: 'cursorDefaultMode',
   zoomTarget: 'cursor',
-  // Ctrl+Y opens Cursor's chat picker — conflicts with MC Zoom SCROLL.
-  // TODO(cursor-zoom-reserved): Zoom must relocate SCROLL chrome for cursor slots.
-  reservedKeys: ['SCROLL'],
+  reservedKeys: [],
   capabilities: {
     costMetered: false,      // only via the opt-in dashboard usage sync
     tokensMetered: false,

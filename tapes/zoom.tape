@@ -27,8 +27,8 @@ Sleep 3s
 Enter
 Sleep 3s
 
-# Scroll mode (Ctrl+Y), then walk the history: w/s line, b/f half-page, g/G ends.
-Ctrl+y
+# Scroll mode (Ctrl+B), then walk the history: w/s line, b/f half-page, g/G ends.
+Ctrl+b
 Sleep 1s
 Type "s"
 Sleep 500ms
