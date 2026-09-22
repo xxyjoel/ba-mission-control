@@ -293,8 +293,6 @@ function redact(text, token) {
   return token ? s.split(token).join('[redacted]') : s;
 }
 
-// TODO(cursor-usage-auth): the spike decides how the credential is presented
-// (spike question 11). If it is not the dashboard cookie, pass `authHeaders`.
 function cookieHeaders(token) {
   return { cookie: `WorkosCursorSessionToken=${token}` };
 }

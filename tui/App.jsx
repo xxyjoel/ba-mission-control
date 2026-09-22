@@ -62,6 +62,7 @@ import { isPluginEnabled } from './lib/plugins.js';
 import { listIssuesForCwd } from './lib/tasks.js';
 import { fmtClock, fmtDuration, fmtMoney, fmtMoneyMeasured, humanize } from './lib/format.js';
 import { resolveKillTarget } from './lib/killTarget.js';
+import { wireCursorUsageSync } from './lib/cursorUsage.js';
 
 // Permission modes claude CLI accepts. Source: `claude --help`.
 //   default              — prompt on every potentially-mutating tool
@@ -491,6 +492,31 @@ export default function App({
   useEffect(() => {
     fleet.setCostCap(settings.costCapUSD || 0);
   }, [settings.costCapUSD, fleet]);
+
+  // Cursor dashboard usage → live agent token/cost fields while any Cursor slot runs.
+  useEffect(() => {
+    const ctl = wireCursorUsageSync({
+      fleet,
+      enabled: !!settings.cursorUsageSync,
+      onError: (e) => {
+        if (!e?.status) return;
+        if (e.status === 'no-credential') {
+          pushToast('Cursor usage sync: no keychain token — sign in to Cursor on this Mac', 'warn');
+        } else if (e.status === 'auth') {
+          pushToast('Cursor usage sync: session expired — sign in to Cursor again', 'warn');
+        } else if (e.status !== 'network') {
+          pushToast(`Cursor usage sync: ${e.status}`, 'warn');
+        }
+      },
+    });
+    const onFleetChange = () => ctl.sync();
+    fleet.on('change', onFleetChange);
+    ctl.sync();
+    return () => {
+      fleet.off('change', onFleetChange);
+      ctl.stop();
+    };
+  }, [fleet, settings.cursorUsageSync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply "Maximum live sessions" (maxSlots) to the live fleet the moment it
   // changes — no restart needed. The fleet grows freely and refuses to shrink
