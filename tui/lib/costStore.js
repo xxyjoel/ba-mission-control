@@ -205,6 +205,13 @@ export class CostStore {
 
     for (const a of agents) {
       if (!a || a.status === 'empty') continue;
+      // 0420: null = the provider cannot measure cost (yet). Reading it as 0
+      // would baseline at 0, or re-anchor a known total to 0 and re-count it
+      // when the figure returns. Skip it: no baseline, no delta, no reset.
+      // TODO(provider-usage-cost): a fresh non-Claude session's first synced
+      // figure lands as a baseline under the first-sight rule, so spend before
+      // the first usage sync is not counted. Decide in the usage-sync phase.
+      if (a.costSession === null) continue;
       const key = CostStore.seenKey(a);
       const cur = Number(a.costSession || 0);
       if (!(key in this.store.lastSeen)) {

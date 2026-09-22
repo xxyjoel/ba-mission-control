@@ -17,6 +17,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { render } from 'ink-testing-library';
+import { Box } from 'ink';
 
 const sandbox = mkdtempSync(join(tmpdir(), 'mc-0420-null-'));
 process.env.MC_CONFIG_DIR = sandbox;
@@ -82,8 +83,8 @@ test('Aggregate: an all-null fleet renders zero totals, never NaN', () => {
 
 test('Header: over-threshold count ignores a null context; only the session count moves', () => {
   const props = { threshold: 150_000, nowStr: '12:00:00', sessionStr: '00:01:00', theme, auth: null, version: 'v' };
-  const a = strip(frameOf(<Header agents={claudeOnly} {...props} />));
-  const b = strip(frameOf(<Header agents={mixed} {...props} />));
+  const a = strip(frameOf(<Box width={240}><Header agents={claudeOnly} {...props} /></Box>));
+  const b = strip(frameOf(<Box width={240}><Header agents={mixed} {...props} /></Box>));
   assert.match(a, /over 150\.0k 1\/2/);
   assert.match(b, /over 150\.0k 1\/3/);
   assert.equal(b.replace('3 sessions', '2 sessions').replace('work 2', 'work 1').replace('1/3', '1/2'), a);

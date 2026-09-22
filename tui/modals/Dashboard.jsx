@@ -23,7 +23,7 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { MODELS, modelColor } from '../lib/models.js';
-import { fmtK, fmtMoney, fmtDuration, trunc } from '../lib/format.js';
+import { fmtK, fmtMoney, fmtMoneyMeasured, fmtDuration, trunc, UNMEASURED } from '../lib/format.js';
 
 // Ordered list of sortable columns — `S` cycles through these.
 const SORT_KEYS = ['slot', 'status', 'ctx', 'tpm', 'cost', 'age'];
@@ -49,6 +49,29 @@ const STATUS_LABEL = {
   error:   '✕ERR ',
   empty:   ' EMP ',
 };
+
+// 0420: a provider that cannot measure a figure ships it as null. These
+// return null for "unmeasured" so the cells print UNMEASURED and the sorts put
+// the slot last — never NaN, never a fabricated 0. A catalog entry without a
+// maxCtx (non-Claude models) has no ctx % either.
+function ctxFrac(a) {
+  const m = MODELS[a.model];
+  if (a.context === null || (m && !(m.maxCtx > 0))) return null;
+  return m ? (a.context || 0) / m.maxCtx : 0;
+}
+function sparkRate(a) {
+  if (a.spark === null) return null;
+  const sp = a.spark || [];
+  return sp.length ? sp.slice(-3).reduce((s, x) => s + x, 0) / 3 : 0;
+}
+const costOf = (a) => (a.costSession === null ? null : (a.costSession || 0));
+// Descending, unmeasured last. Same sign as the old `b - a` for numbers.
+function descBy(va, vb) {
+  if (va === vb) return 0;
+  if (va === null) return 1;
+  if (vb === null) return -1;
+  return vb - va;
+}
 
 function statusColor(s, theme) {
   if (s === 'error')   return theme.red;
@@ -89,18 +112,9 @@ export default function Dashboard({
     const cmp = (a, b) => {
       switch (sortKey) {
         case 'status': return (STATUS_PRIORITY[a.status] ?? 9) - (STATUS_PRIORITY[b.status] ?? 9);
-        case 'ctx': {
-          const ma = MODELS[a.model], mb = MODELS[b.model];
-          const pa = ma ? (a.context || 0) / ma.maxCtx : 0;
-          const pb = mb ? (b.context || 0) / mb.maxCtx : 0;
-          return pb - pa; // ctx desc — fuller first
-        }
-        case 'tpm': {
-          const ra = (a.spark || []).slice(-3).reduce((s, x) => s + x, 0) / 3;
-          const rb = (b.spark || []).slice(-3).reduce((s, x) => s + x, 0) / 3;
-          return rb - ra; // rate desc
-        }
-        case 'cost': return (b.costSession || 0) - (a.costSession || 0); // cost desc
+        case 'ctx': return descBy(ctxFrac(a), ctxFrac(b)); // ctx desc — fuller first
+        case 'tpm': return descBy(sparkRate(a), sparkRate(b)); // rate desc
+        case 'cost': return descBy(costOf(a), costOf(b)); // cost desc
         case 'age': {
           // Oldest first (longest running). Slots that never entered
           // working state get a 0 timestamp → fall to the bottom.
@@ -199,10 +213,10 @@ export default function Dashboard({
         </Box>
       ) : sorted.map(a => {
         const sel = a.slot === hiInList;
-        const m = MODELS[a.model];
-        const ctxPct = m ? Math.round(((a.context || 0) / m.maxCtx) * 100) : 0;
-        const sp = a.spark || [];
-        const tpm = sp.length ? Math.round(sp.slice(-3).reduce((s, x) => s + x, 0) / 3 * 8000) : 0;
+        const frac = ctxFrac(a);
+        const ctxPct = frac === null ? null : Math.round(frac * 100);
+        const rate = sparkRate(a);
+        const tpm = rate === null ? null : Math.round(rate * 8000);
         const ageMs = a.workingStartTs ? now - a.workingStartTs : 0;
         const ageStr = a.workingStartTs ? fmtDuration(ageMs) : '—';
         return (
@@ -212,9 +226,9 @@ export default function Dashboard({
             <Text color={sel ? theme.fg : theme.dim} bold={sel}>{trunc(a.name || '—', 17).padEnd(18)}</Text>
             <Text color={modelColor(a.model, theme)}>{modelBadge(a.model).padEnd(6)}</Text>
             <Text color={statusColor(a.status, theme)}>{(STATUS_LABEL[a.status] || a.status).padEnd(8)}</Text>
-            <Text color={ctxPct >= 90 ? theme.red : ctxPct >= 80 ? theme.yellow : theme.fg}>{`${ctxPct}%`.padEnd(7)}</Text>
-            <Text color={theme.fg}>{fmtK(tpm).padEnd(8)}</Text>
-            <Text color={theme.fg}>{fmtMoney(a.costSession || 0).padEnd(9)}</Text>
+            <Text color={ctxPct >= 90 ? theme.red : ctxPct >= 80 ? theme.yellow : theme.fg}>{(ctxPct === null ? UNMEASURED : `${ctxPct}%`).padEnd(7)}</Text>
+            <Text color={theme.fg}>{(tpm === null ? UNMEASURED : fmtK(tpm)).padEnd(8)}</Text>
+            <Text color={theme.fg}>{fmtMoneyMeasured(a.costSession).padEnd(9)}</Text>
             <Text color={theme.faint}>{ageStr.padEnd(8)}</Text>
             <Box flexGrow={1} flexShrink={1} overflow="hidden">
               <Text color={theme.faint} wrap="truncate">{a.activity || ''}</Text>

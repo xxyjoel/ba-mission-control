@@ -14,10 +14,13 @@
 //   {
 //     description: <one-liner shown by `:template` with no args>,
 //     sessions: [
-//       { model, permissionMode, prompt },
+//       { model, permissionMode, prompt, provider? },
 //       ...
 //     ]
 //   }
+//
+// `provider` (0420) is optional and defaults to 'claude'; a Cursor session
+// names a namespaced model (`cursor:auto`) and a Cursor mode.
 //
 // Templates do NOT pin cwd / branch — those come from the caller
 // (`:template <name> [cwd]`), so the same template launches against
@@ -115,6 +118,10 @@ export function getTemplate(name) {
   // Case-insensitive lookup so `:template Review` still works.
   const key = Object.keys(all).find(k => k.toLowerCase() === (name || '').toLowerCase());
   return key ? { name: key, ...all[key] } : null;
+}
+
+export function templateSessionProvider(session) {
+  return (session && typeof session.provider === 'string' && session.provider) || 'claude';
 }
 
 export function listTemplates() {
