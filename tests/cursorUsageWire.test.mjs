@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createUsagePoller, LAUNCH_LEAD_MS } from '../server/providers/cursor/usageSync.mjs';
-import {
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+process.env.MC_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'mc-cursor-wire-'));
+
+const { createUsagePoller, LAUNCH_LEAD_MS } = await import('../server/providers/cursor/usageSync.mjs');
+const {
   buildCursorUsageSlots, applyCursorUsageTotals, wireCursorUsageSync,
-} from '../tui/lib/cursorUsage.js';
+} = await import('../tui/lib/cursorUsage.js');
 
 const T0 = 1_800_000_000_000;
 const CHAT = '11111111-2222-3333-4444-555555555555';
@@ -63,7 +69,7 @@ test('buildCursorUsageSlots: live cursor agent with joinKeys and window', () => 
 });
 
 test('applyCursorUsageTotals writes card fields on the live agent', () => {
-  const agent = cursorAgent();
+  const agent = cursorAgent({ sessionId: '22222222-3333-4444-5555-666666666666' });
   const fleet = makeFleet(agent);
   const totals = new Map([['s2-cur', {
     tokensIn: 130, tokensCacheRead: 1000, tokensOut: 55, context: 1130, costSession: 0.42, estimated: false,
