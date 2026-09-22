@@ -60,6 +60,10 @@ import { isPluginEnabled } from './lib/plugins.js';
 import { listIssuesForCwd } from './lib/tasks.js';
 import { fmtClock, fmtDuration, fmtMoney, humanize } from './lib/format.js';
 import { resolveKillTarget } from './lib/killTarget.js';
+import { getProvider, cursorModeFor } from '../server/providers/index.mjs';
+import { modelIds as catalogModelIds } from './lib/models.js';
+import { fmtMoneyMeasured } from './lib/format.js';
+import { templateSessionProvider } from './lib/templateStore.js';
 
 // Permission modes claude CLI accepts. Source: `claude --help`.
 //   default              — prompt on every potentially-mutating tool
@@ -69,6 +73,26 @@ import { resolveKillTarget } from './lib/killTarget.js';
 //   dontAsk              — never prompt; for safe/observed sessions
 //   bypassPermissions    — no guardrails. Scratch dirs only.
 const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'];
+
+// 0420: which CLI runs a slot. Snapshots and records from before providers
+// existed carry no field and are Claude.
+function providerOf(agentOrRecord) {
+  return agentOrRecord?.provider || 'claude';
+}
+
+// Launch defaults for a non-Claude provider: its own settings when they name a
+// valid value, else the Claude default mapped across (D4) / the vendor's auto.
+function providerDefaultMode(provider, settings) {
+  const p = getProvider(provider);
+  const own = p && settings?.[p.defaultModeSetting];
+  if (own && p.permissionModes.includes(own)) return own;
+  return cursorModeFor(settings?.defaultPermission);
+}
+function providerDefaultModel(provider, settings) {
+  const p = getProvider(provider);
+  const own = (p && settings?.[p.defaultModelSetting]) || 'auto';
+  return String(own).startsWith(`${provider}:`) ? own : `${provider}:${own}`;
+}
 
 // Toast kinds drive color. Auto-dismissed by a timer in App.
 const TOAST_COLORS = { error: 'red', warn: 'yellow', info: 'accent', ok: 'green' };
@@ -630,6 +654,17 @@ export default function App({ fleet, auth: initialAuth }) {
     const [cmd, ...rest] = line.trim().split(/\s+/);
     const arg = rest.join(' ');
     if (!cmd) return null;
+    // 0420: a Claude-only verb aimed at another provider's slot. Returns true
+    // (and toasts) when the slot's provider lacks `capability` — or, with no
+    // capability named, whenever the slot is not Claude.
+    const refusedFor = (agent, capability) => {
+      const provider = providerOf(agent);
+      if (provider === 'claude') return false;
+      const p = getProvider(provider);
+      if (capability && p?.capabilities?.[capability]) return false;
+      pushToast(`not available for ${p?.label || provider} slots`, 'warn');
+      return true;
+    };
     switch (cmd) {
       case 'q':
       case 'quit':
@@ -694,9 +729,9 @@ export default function App({ fleet, auth: initialAuth }) {
           return null;
         }
 
-        // Live id list (Object.keys, not the import-time snapshot) so models
-        // discovered by `:model refresh` are immediately selectable.
-        const modelIds = Object.keys(MODELS);
+        // Live id list (not the import-time snapshot) so models discovered by
+        // `:model refresh` are immediately selectable. Claude ids only (0420).
+        const modelIds = catalogModelIds();
         if (!maybeDefault) {
           if (!focusedAgent || focusedAgent.status === 'empty') {
             pushToast(`available · ${modelIds.join(' · ')}  ·  :model refresh to re-probe`, 'info');
@@ -729,6 +764,9 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused — use :model default <id> for new launches`, 'warn');
           return null;
         }
+        // TODO(cursor-model-switch): a live switch validates against the Claude
+        // catalog and restarts via PtyAgent.changeModel; Cursor needs its own.
+        if (refusedFor(focusedAgent)) return null;
         const a = fleet.agentById(focusedAgent.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         const changed = a.changeModel(newId);
@@ -758,6 +796,9 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused — use :perm default <mode> for new launches`, 'warn');
           return null;
         }
+        // TODO(cursor-perm-switch): PERMISSION_MODES are Claude's; a Cursor slot
+        // needs its own mode list (getProvider('cursor').permissionModes).
+        if (refusedFor(focusedAgent)) return null;
         const a = fleet.agentById(focusedAgent.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         const changed = a.changePermissionMode(mode);
@@ -783,6 +824,7 @@ export default function App({ fleet, auth: initialAuth }) {
           model: target.model,
           name: target.name,
           permissionMode: target.permissionMode,
+          provider: providerOf(target),
         };
         try { fleet.kill(target.id); } catch {}
         // Defer the relaunch one tick so the kill's snapshot emit lands
@@ -804,6 +846,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
+        if (refusedFor(target, 'compact')) return null;
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         const prompt = arg && arg.trim()
@@ -830,6 +873,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
+        if (refusedFor(target, 'compact')) return null;
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         const cfg = {
@@ -839,6 +883,7 @@ export default function App({ fleet, auth: initialAuth }) {
           model: target.model,
           name: target.name,
           permissionMode: target.permissionMode,
+          provider: providerOf(target),
         };
         const summaryPrompt = arg && arg.trim()
           ? `Please summarize our conversation so far, focusing on: ${arg.trim()}. 3-5 paragraphs covering decisions, code state, next steps. After your reply mc will auto-restart this session with your summary as the new first message.`
@@ -1154,7 +1199,8 @@ export default function App({ fleet, auth: initialAuth }) {
         // the task's next slice, behind its human checkpoint.
         const disk = probeClaudeVersion(true);
         if (!disk) { pushToast('claude not found on PATH (CLAUDE_BIN?)', 'error'); return null; }
-        const live = agents.filter(a => a.status !== 'empty');
+        // 0420: claude drift says nothing about another provider's slots.
+        const live = agents.filter(a => a.status !== 'empty' && providerOf(a) === 'claude');
         const drifted = live.filter(a => a.claudeVersion && a.claudeVersion !== disk);
         if (drifted.length === 0) {
           pushToast(`claude ${disk} — all ${live.length} session${live.length === 1 ? '' : 's'} current`, 'ok');
@@ -1184,6 +1230,9 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`transcripts dir · ${TRANSCRIPT_BASE_DIR}`, 'info');
           return null;
         }
+        // TODO(cursor-transcript-path): transcriptPathFor is claude's layout;
+        // Cursor's lives under ~/.cursor/projects/*/agent-transcripts/<chatId>/.
+        if (refusedFor(focused)) return null;
         const p = transcriptPathFor(focused.sessionId);
         pushToast(`transcript · ${p}`, 'info');
         return null;
@@ -1260,7 +1309,9 @@ export default function App({ fleet, auth: initialAuth }) {
         // One-stop "where does mc keep things?" report.
         const focused = focusedAgent;
         pushToast(`config · ${getConfigDir()}`, 'info');
-        if (focused && focused.status !== 'empty') {
+        if (focused && focused.status !== 'empty' && providerOf(focused) !== 'claude') {
+          refusedFor(focused);
+        } else if (focused && focused.status !== 'empty') {
           pushToast(`transcript · ${transcriptPathFor(focused.sessionId)}`, 'info');
         } else {
           pushToast(`transcripts · ${TRANSCRIPT_BASE_DIR}`, 'info');
@@ -1310,12 +1361,18 @@ export default function App({ fleet, auth: initialAuth }) {
           ? cwdRaw
           : (focusedAgent && focusedAgent.status !== 'empty' && focusedAgent.cwd) || process.cwd();
         sessions.forEach((s, i) => {
+          const provider = templateSessionProvider(s);
           launchSession({
             slot: empties[i],
             repoPath: cwd,
             branch: 'main',
-            model: s.model || resolveModelId(settings.defaultModel),
-            permissionMode: s.permissionMode || settings.defaultPermission || 'acceptEdits',
+            provider,
+            ...(provider === 'claude'
+              ? {
+                  model: s.model || resolveModelId(settings.defaultModel),
+                  permissionMode: s.permissionMode || settings.defaultPermission || 'acceptEdits',
+                }
+              : { model: s.model, permissionMode: s.permissionMode }),
             prompt: s.prompt || null,
           });
         });
@@ -1372,7 +1429,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
-        pushToast(`cost · session ${fmtMoney(a.costSession || 0)}  ·  fleet week ${fmtMoney(weekCost || 0)}`, 'info');
+        pushToast(`cost · session ${fmtMoneyMeasured(a.costSession)}  ·  fleet week ${fmtMoney(weekCost || 0)}`, 'info');
         return null;
       }
       case 'usage': {
@@ -1736,6 +1793,7 @@ export default function App({ fleet, auth: initialAuth }) {
       }
 
       let { slot, repoPath, branch, model, permissionMode, prompt } = payload;
+      const provider = providerOf(payload);
       repoPath = expandTilde(repoPath);
 
       if (!repoPath) {
@@ -1743,7 +1801,13 @@ export default function App({ fleet, auth: initialAuth }) {
         return;
       }
 
-      const perm = permissionMode || settings.defaultPermission || 'acceptEdits';
+      // TODO(provider-usage-cost): with usage sync off a Cursor slot reports no
+      // cost, so costCapUSD / dailyBudgetUSD cannot see it — warn at launch
+      // when either limit is set (plan: "Cursor usage and cost → Budgets").
+      if (provider !== 'claude' && !model) model = providerDefaultModel(provider, settings);
+      const perm = provider === 'claude'
+        ? permissionMode || settings.defaultPermission || 'acceptEdits'
+        : permissionMode || providerDefaultMode(provider, settings);
       // Layer-2 memory: if plugin_projectMemory is enabled and the
       // launch cwd has a .mc/MEMORY.md, prepend its contents to the
       // first prompt. Silent no-op when memory file is absent.
@@ -1763,11 +1827,17 @@ export default function App({ fleet, auth: initialAuth }) {
         name: (repoPath || '').split('/').filter(Boolean).pop() || 'session',
         permissionMode: perm,
         prompt: finalPrompt,
+        provider,
       });
       setModal(null);
       setNewSlot(null);
       setFocusedSlot(slot);
-      pushToast(`launched slot ${slot} · ${model} · ${perm}`, perm === 'bypassPermissions' ? 'warn' : 'ok');
+      if (provider === 'claude') {
+        pushToast(`launched slot ${slot} · ${model} · ${perm}`, perm === 'bypassPermissions' ? 'warn' : 'ok');
+      } else {
+        const label = MODELS[model]?.label || String(model || '').replace(/^[^:]+:/, '');
+        pushToast(`launched slot ${slot} · ${getProvider(provider)?.label || provider} · ${label} · ${perm}`, perm === 'force' ? 'warn' : 'ok');
+      }
     } catch (e) {
       pushToast(`launch failed: ${e?.message || String(e)}`, 'error');
     }
@@ -1800,11 +1870,13 @@ export default function App({ fleet, auth: initialAuth }) {
       slot, name: rec.name, cwd: rec.cwd,
       sid: rec.sessionId ? String(rec.sessionId).slice(0, 8) : null, fresh: !!rec.fresh,
     });
-    const permissionMode = rec.permissionMode || settings.defaultPermission || 'acceptEdits';
+    const provider = providerOf(rec);
+    const permissionMode = rec.permissionMode
+      || (provider === 'claude' ? settings.defaultPermission || 'acceptEdits' : providerDefaultMode(provider, settings));
     if (rec.fresh || !rec.sessionId) {
       fleet.launch({
         slot, cwd: rec.cwd, branch: rec.branch, model: rec.model,
-        name: rec.name, permissionMode, prompt: null,
+        name: rec.name, permissionMode, prompt: null, provider,
       });
       return 'fresh';
     }
@@ -1813,7 +1885,7 @@ export default function App({ fleet, auth: initialAuth }) {
       // A /model switch made inside claude lands in resolvedModel; prefer it
       // so a resume relaunches on the model the user actually chose. The
       // friendly launch id stays the fallback for records without one.
-      model: rec.resolvedModel || rec.model, name: rec.name, permissionMode,
+      model: rec.resolvedModel || rec.model, name: rec.name, permissionMode, provider,
     });
     if (agent) {
       if (rec.tokensIn != null) agent.tokensIn = rec.tokensIn;
@@ -1880,6 +1952,8 @@ export default function App({ fleet, auth: initialAuth }) {
 
   // Cycle a session's permission mode through the three core dev modes.
   // Used by Shift+Tab from both the main view and the Zoom modal.
+  // TODO(cursor-perm-switch): the cycle is Claude's modes; on a Cursor slot it
+  // must cycle getProvider('cursor').permissionModes (or be refused).
   const cyclePerm = (agentLike) => {
     if (!agentLike || agentLike.status === 'empty') {
       pushToast(`no live session focused`, 'warn');

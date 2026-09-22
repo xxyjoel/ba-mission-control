@@ -155,6 +155,7 @@ test(':resume-all launches a fresh cursor record through fleet.launch with provi
   const { stdin, unmount } = mount(fleet);
   await tick(); await tick();
   await type(stdin, 'resume-all');
+  await tick(400); // the second start is staggered by broadcastStaggerMs
   const launch = fleet.calls.find(c => c[0] === 'launch');
   const resume = fleet.calls.find(c => c[0] === 'resumeFromRecord');
   assert.equal(launch[1].provider, 'cursor');
@@ -231,6 +232,18 @@ test(':model lists only Claude ids even with cursor models registered', async ()
   const t = toasts(lastFrame()).find(x => /^available/.test(x)) || '';
   assert.ok(t, JSON.stringify(toasts(lastFrame())));
   assert.doesNotMatch(t, /cursor:/);
+  unmount();
+});
+
+test(':model default rejects a cursor id — the Claude default model stays Claude', async () => {
+  clearStore();
+  const fleet = fleetWith([]);
+  const { stdin, lastFrame, unmount } = mount(fleet);
+  await tick(); await tick();
+  await type(stdin, 'model default cursor:auto');
+  const ts = toasts(lastFrame());
+  assert.ok(ts.some(t => /^unknown model/.test(t)), JSON.stringify(ts));
+  assert.ok(!ts.some(t => /default model →/.test(t)));
   unmount();
 });
 

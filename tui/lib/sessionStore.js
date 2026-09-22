@@ -221,7 +221,7 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
       // ...rec} merge below keeps it when the key is absent here).
       ...(a.resolvedModel ? { resolvedModel: a.resolvedModel } : {}),
       name: a.name,
-      permissionMode: a.permissionMode || 'acceptEdits',
+      permissionMode: a.permissionMode || (a.provider && a.provider !== 'claude' ? 'default' : 'acceptEdits'),
       lastSeen: Date.now(),
       live: true,
     };
