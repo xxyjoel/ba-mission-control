@@ -15,10 +15,11 @@
 //     so Ink delivers them as raw bytes with ctrl:false → a `key.ctrl &&
 //     input===']'` test is unreachable. We use only Ctrl+A..Z keys.
 //   • claude-code's keymap binds Ctrl+T (todos), Ctrl+S (stash), Ctrl+L, Ctrl+O,
-//     Ctrl+R, Ctrl+J (newline), Esc (cancel). It does NOT bind Ctrl+Q / Ctrl+B /
+//     Ctrl+R, Ctrl+J (newline), Esc (cancel). It does NOT bind Ctrl+Q / Ctrl+G /
 //     Ctrl+K / Ctrl+U — so stealing those doesn't shadow a claude binding.
-//   • cursor-agent binds Ctrl+Y to its chat picker (0420 spike) — SCROLL moved
-//     off Ctrl+Y to Ctrl+B, which the spike did not show as a cursor binding.
+//   • cursor-agent binds Ctrl+Y to its chat picker (0420 spike) — SCROLL left Y.
+//   • Mission Control New Session already uses Ctrl+B for filesystem browse —
+//     SCROLL must not reuse B. Ctrl+G is free in New Session, Claude, and Cursor.
 //   • TODO(cursor-zoom-stats): spike found Ctrl+U clears the Cursor composer —
 //     conflicts with STATS here; relocate STATS in a follow-up, not this change.
 //   • Raw mode disables IXON/ISIG, so Ctrl+Q (0x11) arrives as a byte, not XON.
@@ -27,8 +28,9 @@ export const ZOOM_KEYS = {
   // Exit the zoom pane. Replaces the old Esc (which shadowed claude's cancel)
   // and the dead Ctrl+] . Mnemonic: Q = quit.
   EXIT:    { name: 'exit zoom',    bytes: '\x11', match: (i, k) => k.ctrl && i === 'q' }, // Ctrl+Q
-  // Enter scroll mode (w/s/b/f/g/G drive the viewport). Replaces dead Ctrl+\ .
-  SCROLL:  { name: 'scroll mode',  bytes: '\x02', match: (i, k) => k.ctrl && i === 'b' }, // Ctrl+B
+  // Enter scroll mode (w/s/b/f/g/G drive the viewport). Ctrl+G — not Ctrl+B
+  // (New Session browse) and not Ctrl+Y (Cursor chat picker).
+  SCROLL:  { name: 'scroll mode',  bytes: '\x07', match: (i, k) => k.ctrl && i === 'g' }, // Ctrl+G
   // Toggle the tools panel. Moved off Ctrl+T (claude app:toggleTodos).
   TOOLS:   { name: 'toggle tools', bytes: '\x0b', match: (i, k) => k.ctrl && i === 'k' }, // Ctrl+K
   // Toggle the stats panel. Moved off Ctrl+S (claude chat:stash).

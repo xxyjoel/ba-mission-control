@@ -188,7 +188,7 @@ npm link
 mc
 ```
 
-**Scrolling back through output.** In the Zoom view press `Ctrl+B` to enter
+**Scrolling back through output.** In the Zoom view press `Ctrl+G` to enter
 scroll mode, then `w`/`s` for a line, `f`/`b` for half a page, `g` for the top
 and `G` to return to the live output. In the `!` shell overlay use `PageUp` and
 `PageDown`; typing anything returns you to the live output. Both views hold
@@ -439,7 +439,7 @@ Settings → LAYOUT. Keys available there:
 | `/` | Type a slash command — autocomplete dropdown appears above the composer. `Tab` fills the highlighted name (keeping any args you've typed); `↵` runs it. See below for the catalog. |
 | `⌥↵`  ·  `Ctrl+J` | Newline in composer (plain `↵` submits) |
 | `↑` / `↓` | Recall prior submitted prompt (history nav in composer) |
-| `Ctrl+B` | Enter **scroll mode** — view scrollback without forwarding keys to claude (the embedded session owns the screen, so mc brackets a dedicated mode rather than fighting it for arrow keys) |
+| `Ctrl+G` | Enter **scroll mode** — view scrollback without forwarding keys to claude (the embedded session owns the screen, so mc brackets a dedicated mode rather than fighting it for arrow keys) |
 | `w` / `s` _(scroll mode)_ | Scroll one line back / forward through history |
 | `f` / `b` _(scroll mode)_ | Scroll half a page up / down |
 | `g` / `G` _(scroll mode)_ | Jump to the oldest / newest (live) line |
@@ -457,7 +457,7 @@ scrollback, so a resize costs you one extra, differently-wrapped copy of the
 conversation (measured: 1 copy → 2 after widening → 3 after widening again).
 Zooming in, zooming out, a toast landing, and opening the stats or tasks panel
 therefore resize nothing; the zoom pane renders the bottom slice of the
-emulator instead, and `Ctrl+B` scroll reaches whatever the window skipped.
+emulator instead, and `Ctrl+G` scroll reaches whatever the window skipped.
 
 #### Slash commands (in zoom)
 

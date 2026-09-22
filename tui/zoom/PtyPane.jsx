@@ -136,7 +136,8 @@ export default function PtyPane({
   const [error, setError] = useState(null);
   const [exited, setExited] = useState(false);
 
-  // Scroll mode. Activated by Ctrl+B (0x02 — Ink-reliable; Ctrl+Y reserved for cursor chat picker).
+  // Scroll mode. Activated by Ctrl+G (0x07). Not Ctrl+Y (Cursor chat picker)
+  // and not Ctrl+B (New Session filesystem browse).
   // While active, `w` / `s` scroll up / down by one line, `f` / `b`
   // half a page up / down (0392), `g` / `G` jump to top / bottom. `Esc` or any
   // other key exits scroll mode and re-enables claude input. We
@@ -171,7 +172,7 @@ export default function PtyPane({
   // the SAME fixed-height box as the terminal rows. Rendering `rows` rows plus
   // a footer gives Ink rows+1 children for a height=rows box, and Ink resolves
   // the overflow by dropping lines from the MIDDLE of the view — text goes
-  // missing mid-screen the moment you press Ctrl+B (the "misshapen rows while
+  // missing mid-screen the moment you press Ctrl+G (the "misshapen rows while
   // scrolling" half of the duplicated/misshapen-zoom-text report). Reserve the
   // footer's row instead, and keep the hint to exactly one row (truncated).
   const footerRows = (scrollMode ? 1 : 0) + (exited ? 1 : 0);
@@ -478,9 +479,9 @@ export default function PtyPane({
         setScrollOffset(0);
       };
       if (key.escape) { setScrollMode(false); toBottom(); return; }
-      // Ignore Ctrl/Meta chords here — Ctrl+B is also the key that ENTERS scroll
-      // mode (0420), and Ink still sets input==='b' with ctrl:true. Without this
-      // gate a Ctrl+B while already scrolling would half-page down (input==='b').
+      // Ignore Ctrl/Meta chords here — Ctrl+G enters scroll mode (0420) and Ink
+      // still sets input==='g' with ctrl:true; without this gate Ctrl+G while
+      // scrolling would jump to top (bare `g`). Same for Ctrl+B vs half-page `b`.
       if (key.ctrl || key.meta) return;
       if (input === 'w') { moveBy(-1); return; }
       if (input === 's') { moveBy(1); return; }

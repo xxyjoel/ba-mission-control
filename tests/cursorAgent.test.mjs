@@ -168,7 +168,7 @@ test('CursorAgent.readiness: trust prompt blocks ready', () => {
   a.kill();
 });
 
-test('CursorAgent.reservedKeys is empty (zoom SCROLL relocated to Ctrl+B)', () => {
+test('CursorAgent.reservedKeys is empty (zoom SCROLL relocated to Ctrl+G)', () => {
   const a = makeAgent(makeFakeSpawn());
   assert.deepEqual(a.reservedKeys, []);
   a.kill();

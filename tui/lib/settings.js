@@ -114,11 +114,13 @@ export const SETTINGS_DEFAULTS = {
   defaultProvider: 'claude',
   cursorDefaultModel: 'auto',   // bare Cursor model id; launches use `cursor:<id>`
   cursorDefaultMode: 'default', // a Cursor-native mode (providers/index.mjs)
-  // Off: cards already track Cursor via PTY scrape + transcript. Writing into
-  // ~/.cursor/hooks.json is deferred — that file is also read by the Cursor IDE.
+  // Off by default: writing into ~/.cursor/hooks.json is deferred — that file
+  // is also read by the Cursor IDE.
   cursorStatusHooks: false,
   cursorAutoTrust: false,
-  cursorUsageSync: false,
+  // On by default: polls cursor.com usage into ~/.config/claude-mc/cursor-usage.json.
+  // "Spike" in older notes meant the Phase 0 CLI probe (scripts/probe-cursor.mjs), not a person.
+  cursorUsageSync: true,
 };
 
 // Cursor model ids for the default-model cycler, stored bare (no `cursor:`
@@ -243,7 +245,7 @@ export const SETTINGS_SCHEMA = [
     { key: 'cursorStatusHooks', label: 'Cursor · status hooks', kind: 'toggle',
       desc: 'Unused for now — cards already track Cursor from its screen and transcript. Kept so a later release can opt into writing one MC entry in ~/.cursor/hooks.json (and remove it on disconnect) without a settings migration.' },
     { key: 'cursorUsageSync', label: 'Cursor · usage sync', kind: 'toggle',
-      desc: 'Polls the cursor.com usage API while a Cursor slot runs, for tokens and cost. Uses the Cursor CLI keychain token in memory only — nothing is stored under ~/.config/claude-mc/.' },
+      desc: 'Polls the cursor.com usage API while a Cursor slot runs. Persists totals under ~/.config/claude-mc/; uses the Cursor CLI keychain token in memory only — never touches Cursor IDE files.' },
     { key: 'cursorAutoTrust', label: 'Cursor · auto-trust workspace', kind: 'toggle',
       desc: 'Passes --trust so Cursor skips its workspace-trust prompt.' },
     { key: 'defaultProvider', label: 'Default subscription', kind: 'cycle', options: PROVIDER_IDS,
