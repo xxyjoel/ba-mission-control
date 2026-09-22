@@ -16,6 +16,7 @@ import { Agent } from './agent.mjs';
 import { MockAgent } from './mockAgent.mjs';
 import { PtyAgent } from './ptyAgent.mjs';
 import { samplePids } from './procStats.mjs';
+import { getProvider } from './providers/index.mjs';
 
 const DEFAULT_SLOTS = 10;
 
@@ -66,8 +67,12 @@ export class Fleet extends EventEmitter {
   #sessionTimer = null;
   #sessionPollEnabled = false;
 
-  constructor({ slots = DEFAULT_SLOTS, viewport = null } = {}) {
+  constructor({ slots = DEFAULT_SLOTS, viewport = null, agentFactories = {} } = {}) {
     super();
+    // 0420: builders for non-Claude slots, keyed by provider id:
+    // `(launchOpts) → agent` with the PtyAgent surface. Claude never goes
+    // through here — its selection order below is fixed.
+    this.agentFactories = { ...agentFactories };
     // 0404: the PTY geometry every agent spawns at and keeps. One size for the
     // whole fleet, computed from the real terminal by tui/lib/zoomGeometry.js.
     // null = unknown (tests / non-TTY) → agents fall back to their 80x24
@@ -180,7 +185,14 @@ export class Fleet extends EventEmitter {
       agents: this.agents.map((a, i) => {
         if (!a) return emptySlot(i + 1);
         const j = a.toJSON();
-        const others = otherLiveSessionsInRepo(this.claudeSessions, { cwd: a.cwd, sessionId: a.sessionId });
+        j.provider = j.provider ?? a.provider ?? 'claude';
+        // 0420: claude's session list says nothing about another provider's
+        // conversations, so for those slots the count is unknown.
+        // TODO(provider-other-sessions): derive it for Cursor from
+        // ~/.cursor/chats/<md5(cwd)>/*/meta.json.
+        const others = j.provider === 'claude'
+          ? otherLiveSessionsInRepo(this.claudeSessions, { cwd: a.cwd, sessionId: a.sessionId })
+          : null;
         j.otherSessions = others ? others.length : null;
         return j;
       }),
@@ -223,9 +235,15 @@ export class Fleet extends EventEmitter {
     return this.agents.find((a) => a && a.id === id) || null;
   }
 
-  launch({ slot, cwd, branch, model, name, permissionMode, prompt, sessionId, resume }) {
+  launch({ slot, cwd, branch, model, name, permissionMode, prompt, sessionId, resume, provider = 'claude' }) {
     if (slot < 1 || slot > this.slots) throw new Error(`bad slot ${slot}`);
     if (this.agents[slot - 1]) throw new Error(`slot ${slot} already occupied`);
+    const descriptor = getProvider(provider);
+    if (!descriptor) throw new Error(`unknown provider ${provider}`);
+    const factory = provider === 'claude' ? null : this.agentFactories[provider];
+    if (provider !== 'claude' && typeof factory !== 'function') {
+      throw new Error(`${descriptor.label} sessions are not available yet`);
+    }
     const id = `s${slot}-${Date.now().toString(36)}`;
     // 0188: getter for the sessionIds of the OTHER live slots, evaluated lazily
     // (only when this slot's tailer hunts for a rotation), so it reflects the
@@ -233,20 +251,31 @@ export class Fleet extends EventEmitter {
     // this slot by index. PtyAgent forwards it to the tailer as claimedSids.
     const siblingSids = () =>
       this.agents.filter((a, i) => a && i !== slot - 1).map((a) => a.sessionId).filter(Boolean);
-    // Selection order: MOCK_FIXTURE always wins (test/dev replay), then
-    // FLEET_USE_PTY chooses the new single-pipeline class, otherwise
-    // fall back to the legacy stream-json Agent.
-    const agent = MOCK_FIXTURE
-      ? new MockAgent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, fixture: MOCK_FIXTURE })
-      : USE_PTY
-        ? new PtyAgent({
-          slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids,
-          // 0404: spawn straight into the zoom body geometry so zooming never
-          // has to resize (a resize duplicates claude's frame in the buffer).
-          cols: this.viewport?.cols,
-          rows: this.viewport?.rows,
-        })
-        : new Agent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, resume });
+    // Selection order for claude: MOCK_FIXTURE always wins (test/dev replay),
+    // then FLEET_USE_PTY chooses the new single-pipeline class, otherwise
+    // fall back to the legacy stream-json Agent. Other providers are built by
+    // their registered factory.
+    // TODO(cursor-mock): MC_MOCK promises no real subprocess; once a Cursor
+    // factory exists, MockAgent needs a provider so Cursor fixtures replay.
+    const agent = factory
+      ? factory({
+        slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids,
+        cols: this.viewport?.cols,
+        rows: this.viewport?.rows,
+      })
+      : MOCK_FIXTURE
+        ? new MockAgent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, fixture: MOCK_FIXTURE })
+        : USE_PTY
+          ? new PtyAgent({
+            slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids,
+            // 0404: spawn straight into the zoom body geometry so zooming never
+            // has to resize (a resize duplicates claude's frame in the buffer).
+            cols: this.viewport?.cols,
+            rows: this.viewport?.rows,
+          })
+          : new Agent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, resume });
+    // An agent class may declare its own provider (possibly as a getter).
+    if (agent.provider == null) agent.provider = provider;
     agent.costCapUSD = this.defaultCostCapUSD;
     // Forward each agent's high-frequency 'change' as a PAYLOAD-LESS fleet
     // event. Computing this.snapshot() here — eagerly, on every JSONL line /
@@ -269,14 +298,15 @@ export class Fleet extends EventEmitter {
   // provides the saved record from the session store; we wire its
   // sessionId back through launch() with resume=true so claude rehydrates
   // the transcript from disk.
-  resume({ slot, sessionId, cwd, branch, model, name, permissionMode }) {
+  resume({ slot, sessionId, cwd, branch, model, name, permissionMode, provider = 'claude' }) {
     if (!sessionId) throw new Error(`no sessionId — nothing to resume`);
     return this.launch({
       slot, cwd, branch, model, name,
-      permissionMode: permissionMode || 'acceptEdits',
+      permissionMode: permissionMode || (provider === 'claude' ? 'acceptEdits' : 'default'),
       sessionId,
       resume: true,
       prompt: null,
+      provider,
     });
   }
 

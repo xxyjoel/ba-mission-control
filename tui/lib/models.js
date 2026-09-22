@@ -87,7 +87,71 @@ export const MODELS = {
 // selector (Settings cycler, NewSession ←/→, :model validation) must see
 // discovered models. The old `MODEL_IDS = Object.keys(MODELS)` snapshot
 // silently excluded anything discovered after import.
-export function modelIds() { return Object.keys(MODELS); }
+//
+// 0420: other providers' models share this object under namespaced keys
+// (`cursor:<id>`, see registerProviderModels). A Claude entry is one with no
+// `provider` field, so `modelIds()` — every existing caller — still returns
+// exactly the Claude list.
+export function modelIds(provider = 'claude') {
+  return Object.keys(MODELS).filter((id) => (MODELS[id].provider || 'claude') === provider);
+}
+
+const isClaudeEntry = (m) => !m.provider;
+
+// ── Other providers (0420) ─────────────────────────────────────────────────
+// Keys and cliModel are both `<provider>:<id>`, so the card's existing
+// MODELS[agent.model] / modelByCli(agent.resolvedModel) lookups resolve them
+// and nothing can collide with a Claude id. No pricing fields: cost for these
+// comes from the provider's own usage feed or stays unknown.
+
+// maxCtx from a vendor label such as "Claude Opus 5 1M Thinking" / "… 300K".
+// Absent when the label names no size — the card already renders `limit ?`.
+function maxCtxFromLabel(label) {
+  const m = /(?:^|\s)(\d+(?:\.\d+)?)([MK])(?=\s|$)/i.exec(String(label || ''));
+  if (!m) return null;
+  return Math.round(parseFloat(m[1]) * (m[2].toUpperCase() === 'M' ? 1_000_000 : 1_000));
+}
+
+// registerProviderModels — replace `provider`'s entries with `models`
+// ([{ id, label }]). Claude entries are never touched.
+export function registerProviderModels(provider, models) {
+  if (!provider || provider === 'claude') return;
+  const prefix = `${provider}:`;
+  for (const k of Object.keys(MODELS)) if (k.startsWith(prefix)) delete MODELS[k];
+  for (const { id, label } of models || []) {
+    if (!id) continue;
+    const key = `${prefix}${id}`;
+    const entry = { label: label || id, cliModel: key, kind: provider, provider };
+    const maxCtx = maxCtxFromLabel(label);
+    if (maxCtx) entry.maxCtx = maxCtx;
+    MODELS[key] = entry;
+  }
+}
+
+// cursorCliArg — the `--model` value for a Cursor catalog id. 'auto' is a real
+// Cursor model id and passes through like any other.
+export function cursorCliArg(modelId) {
+  if (!modelId) return null;
+  const s = String(modelId);
+  return s.startsWith('cursor:') ? s.slice('cursor:'.length) || null : s;
+}
+
+// Zero-width / BOM characters the CLI pads some labels with.
+const ZERO_WIDTH_RX = /[\u200b-\u200d\u2060\ufeff]/g;
+
+// parseCursorModelList — `cursor-agent --list-models` stdout → [{ id, label }].
+// Lines are `id - Label`; the header, blank lines and anything else are
+// skipped. Never throws.
+export function parseCursorModelList(stdout) {
+  const out = [];
+  for (const raw of String(stdout || '').split(/\r?\n/)) {
+    const line = raw.replace(ZERO_WIDTH_RX, '').trim();
+    const m = /^(\S+) - (.+)$/.exec(line);
+    if (!m) continue;
+    out.push({ id: m[1], label: m[2].trim() });
+  }
+  return out;
+}
 
 // newestModelId — newest non-retired model of a kind, by the numeric version
 // in its friendly id ('opus-5' → 5, 'opus-4.8' → 4.8). A LIVE computation over
@@ -96,7 +160,7 @@ export function modelIds() { return Object.keys(MODELS); }
 export function newestModelId(kind = 'opus') {
   let best = null, bestV = -1;
   for (const [id, m] of Object.entries(MODELS)) {
-    if (m.kind !== kind || m.retired) continue;
+    if (!isClaudeEntry(m) || m.kind !== kind || m.retired) continue;
     const v = parseFloat(String(id).slice(String(id).lastIndexOf('-') + 1));
     if (Number.isFinite(v) && v > bestV) { bestV = v; best = id; }
   }
@@ -153,7 +217,8 @@ export function modelByCli(cliModel) {
   return null;
 }
 
-// Display color per model (theme-relative, resolved at render).
+// Display color per model (theme-relative, resolved at render). A non-Claude
+// kind (e.g. 'cursor') falls through to the default below.
 export function modelColor(id, theme) {
   const m = MODELS[id];
   if (!m) return theme.dim;

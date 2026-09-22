@@ -28,6 +28,13 @@ const SPARK = '▁▂▃▄▅▆▇█';
 // house spelling (Aggregate's `↻{fmtReset(...) || '?'}`); this just names it.
 export const UNKNOWN = '?';
 export const ESTIMATED = '~';
+// 0420/D1: UNMEASURED ('-') — a meterable figure (cost, tokens, tok/min, ctx)
+// that the slot's provider reports as null because it cannot measure it (yet).
+// Same shape as the number it replaces (`$-.--`, `-↓`), distinct from `?`.
+// Only an explicit null is unmeasured; undefined keeps the old zero rendering.
+export const UNMEASURED = '-';
+export const fmtMoneyMeasured = (n) => (n === null ? '$-.--' : fmtMoney(n || 0));
+export const fmtKMeasured = (n) => (n === null ? UNMEASURED : fmtK(n || 0));
 
 // unknownIf — pick the marker or the formatted value in one expression, so a
 // caller can't accidentally render `0` for a missing measurement:
