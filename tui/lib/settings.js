@@ -14,6 +14,7 @@ import { PLUGINS, applyPluginDefaults } from './plugins.js';
 // re-evaluated on every cycle — a hardcoded array here silently fell out of
 // sync with the catalog twice (0367).
 import { modelIds } from './models.js';
+import { PROVIDER_IDS, getProvider } from '../../server/providers/index.mjs';
 
 const CONFIG_DIR  = getConfigDir();
 const CONFIG_FILE = join(CONFIG_DIR, 'settings.json');
@@ -106,7 +107,59 @@ export const SETTINGS_DEFAULTS = {
   // Slack Incoming Webhook URL — used by :feedback and :request. Leave
   // empty to disable. Set with `:slack <url>` from the command bar.
   slackWebhook: '',
+  // Subscriptions (0420). mc stores only these flags — credentials stay with
+  // each vendor CLI. Claude is always enabled; Cursor needs its toggle on AND
+  // a connected `cursor-agent` before New Session offers it.
+  subscriptions_cursor_enabled: false,
+  defaultProvider: 'claude',
+  cursorDefaultModel: 'auto',   // bare Cursor model id; launches use `cursor:<id>`
+  cursorDefaultMode: 'default', // a Cursor-native mode (providers/index.mjs)
+  cursorStatusHooks: true,
+  cursorAutoTrust: false,
+  cursorUsageSync: false,
 };
+
+// Cursor model ids for the default-model cycler, stored bare (no `cursor:`
+// namespace). Only namespaced catalog entries count, so a modelIds() that
+// ignores its argument (Claude-only catalog) contributes nothing.
+// TODO(provider-models): drop the prefix filter once models.js ships
+// modelIds(provider) with namespaced `cursor:<id>` entries.
+function cursorModelOptions() {
+  let ids = [];
+  try { ids = modelIds('cursor') || []; } catch { ids = []; }
+  const bare = ids.filter(id => typeof id === 'string' && id.startsWith('cursor:')).map(id => id.slice('cursor:'.length));
+  return ['auto', ...bare.filter(id => id && id !== 'auto')];
+}
+
+// One-line auth status for a SUBSCRIPTIONS row. `st` is the probe state kept
+// by Settings.jsx: { state: 'checking'|'connected'|'disconnected'|'not-installed', email, plan, bin }.
+export function subscriptionStatusText(st) {
+  if (!st || st.state === 'checking') return '◌ checking…';
+  if (st.state === 'connected') return ['● connected', st.email, st.plan].filter(Boolean).join(' · ');
+  if (st.state === 'not-installed') return `○ not installed — install ${st.bin}`;
+  return '○ not connected';
+}
+
+// A provider's status row: shows the probe result, ↵ connects (or, for
+// providers other than Claude, disconnects). `ctx` comes from Settings.jsx.
+function subscriptionStatusRow(id, label, desc) {
+  return {
+    key: `sub_${id}_status`, label, kind: 'action', provider: id, desc,
+    compute: (_s, ctx) => subscriptionStatusText(ctx?.status?.(id)),
+    hint: (_s, ctx) => {
+      const st = ctx?.status?.(id);
+      if (st?.state === 'disconnected') return '↵ connect';
+      if (st?.state === 'connected' && id !== 'claude') return '↵ disconnect';
+      return '';
+    },
+    run: (ctx) => {
+      const st = ctx.status(id);
+      if (st?.state === 'disconnected') ctx.connect(id);
+      else if (st?.state === 'connected' && id !== 'claude') ctx.disconnect(id);
+      else if (st?.state === 'not-installed') ctx.notice(subscriptionStatusText(st));
+    },
+  };
+}
 
 export const SETTINGS_SCHEMA = [
   { id: 'general', title: 'GENERAL', items: [
@@ -166,6 +219,36 @@ export const SETTINGS_SCHEMA = [
     { key: 'slackWebhook', label: 'Slack webhook configured', kind: 'computed',
       compute: (s) => s.slackWebhook ? '◆ yes (hidden)' : '○ no — set with `:slack <url>`',
       desc: 'Used by :feedback and :request. Configure with `:slack <url>` from the command bar.' },
+  ]},
+  // SUBSCRIPTIONS (0420) — placed just before NOTES so no existing tab's
+  // number hotkey moves. Status rows are probed when the tab first opens.
+  { id: 'subscriptions', title: 'SUBSCRIPTIONS', items: [
+    subscriptionStatusRow('claude', 'Claude Code', 'Always enabled. Login belongs to the claude CLI (↵ runs `claude auth login` when not connected); mc stores no credentials.'),
+    subscriptionStatusRow('cursor', 'Cursor', '↵ connect runs `cursor-agent login` (browser) · ↵ disconnect runs `cursor-agent logout`. mc stores no credentials.'),
+    { key: 'subscriptions_cursor_enabled', label: 'Cursor · enabled', kind: 'toggle',
+      desc: 'Offer Cursor in New Session once it is connected. Needs cursor-agent installed.',
+      guard: (next, ctx) => {
+        if (!next) return null;
+        const st = ctx?.status?.('cursor');
+        if (st?.state === 'not-installed') return subscriptionStatusText(st);
+        if (!st || st.state === 'checking') return '◌ still checking cursor-agent — try again in a moment';
+        return null;
+      } },
+    { key: 'cursorDefaultModel', label: 'Cursor · default model', kind: 'cycle', options: cursorModelOptions,
+      desc: 'Model for new Cursor sessions. `auto` lets Cursor pick.' },
+    { key: 'cursorDefaultMode', label: 'Cursor · default mode', kind: 'cycle', options: getProvider('cursor').permissionModes,
+      desc: 'Mode for new Cursor sessions. force skips every approval.' },
+    // TODO(cursor-hooks): install/remove the MC entry when this flips (Phase 5).
+    { key: 'cursorStatusHooks', label: 'Cursor · status hooks', kind: 'toggle',
+      desc: 'One entry in ~/.cursor/hooks.json so cards track Cursor status. Removed on disconnect.' },
+    // TODO(cursor-usage): the poller that reads this lands in Phase 6.
+    { key: 'cursorUsageSync', label: 'Cursor · usage sync', kind: 'toggle',
+      desc: 'Polls the cursor.com usage API while a Cursor slot runs, for tokens and cost.' },
+    { key: 'cursorAutoTrust', label: 'Cursor · auto-trust workspace', kind: 'toggle',
+      desc: 'Passes --trust so Cursor skips its workspace-trust prompt.' },
+    { key: 'defaultProvider', label: 'Default subscription', kind: 'cycle', options: PROVIDER_IDS,
+      format: (id) => getProvider(id)?.label || String(id),
+      desc: 'Preselected in New Session when more than one subscription is connected.' },
   ]},
   { id: 'notes', title: 'NOTES', items: [] },
 ];
@@ -245,12 +328,13 @@ const MODEL_ID_MIGRATIONS = {
 // default before the object reaches any consumer. Unknown keys pass through
 // untouched (forward compatibility).
 
-// Flat key → schema item map, built once. `computed` items are display-only.
+// Flat key → schema item map, built once. `computed` and `action` items are
+// display-only and never stored.
 const SCHEMA_BY_KEY = (() => {
   const map = {};
   for (const section of SETTINGS_SCHEMA) {
     for (const item of section.items || []) {
-      if (item.kind !== 'computed') map[item.key] = item;
+      if (item.kind !== 'computed' && item.kind !== 'action') map[item.key] = item;
     }
   }
   return map;
