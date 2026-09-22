@@ -3,6 +3,11 @@
 import { createUsagePoller } from '../../server/providers/cursor/usageSync.mjs';
 import { getCursorSessionToken } from '../../server/providers/cursor/auth.mjs';
 import { updateSpark } from '../../server/spark.mjs';
+import {
+  upsert as upsertCursorUsageStore,
+  seedAgentFromStore,
+  pollerTotalsFromStore,
+} from './cursorUsageStore.js';
 
 function stripCursorModel(model) {
   if (typeof model !== 'string' || !model) return null;
@@ -20,6 +25,9 @@ export function buildCursorUsageSlots(fleet) {
   if (!fleet?.agents) return out;
   for (const agent of fleet.agents) {
     if (!isLiveCursorAgent(agent)) continue;
+    // Seed card numbers from disk before the first poll (costStore treats the
+    // first non-null costSession as baseline, not a delta).
+    seedAgentFromStore(agent);
     const working = agent.status === 'working' || agent.status === 'waiting';
     const start = agent.sessionStartedAt ?? agent.spawnedAt;
     if (!Number.isFinite(start)) continue;
@@ -64,6 +72,7 @@ export function applyCursorUsageTotals(fleet, totalsMap, prevSnap = new Map()) {
       context: totals.context,
       costSession: totals.costSession,
     });
+    if (agent.sessionId) upsertCursorUsageStore(agent.sessionId, totals);
   }
   if (changed) fleet.emit('change');
   return changed;
@@ -103,6 +112,10 @@ export function wireCursorUsageSync({
         onTotals: (map) => { applyCursorUsageTotals(fleet, map, prevTotals); },
         onError,
       });
+      for (const slot of buildCursorUsageSlots(fleet)) {
+        const seeded = pollerTotalsFromStore(slot.chatId);
+        if (seeded) poller.totals.set(slot.slotId, seeded);
+      }
       poller.start();
     } else {
       poller.start();

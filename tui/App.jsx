@@ -1893,8 +1893,8 @@ export default function App({
         return;
       }
 
-      // TODO(provider-usage-cost): with usage sync off a Cursor slot reports no
-      // cost, so costCapUSD / dailyBudgetUSD cannot see it — warn at launch
+      // TODO(provider-usage-cost): with usage sync disabled a Cursor slot may
+      // report no cost, so costCapUSD / dailyBudgetUSD cannot see it — warn at
       // when either limit is set (plan: "Cursor usage and cost → Budgets").
       if (provider !== 'claude' && !model) model = providerDefaultModel(provider, settings);
       const perm = provider === 'claude'
