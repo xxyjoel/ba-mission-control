@@ -23,6 +23,7 @@ import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange, syncModelsFromApi } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
 import { killShellSession } from '../server/shellSession.mjs';
+import { createCursorAgent } from '../server/providers/cursor/index.mjs';
 
 // Preflight: print one-line status BEFORE Ink takes over the screen. We don't
 // abort on failure — the user might still want to explore the UI — but the
@@ -156,6 +157,8 @@ try {
 const fleet = new Fleet({
   slots: bootSettings.maxSlots,
   viewport: zoomBodyDims(process.stdout.columns || 180, process.stdout.rows || 50),
+  // 0420: Cursor slots — factory minting create-chat when sessionId is absent.
+  agentFactories: { cursor: createCursorAgent },
 });
 
 // Opt-in memory instrumentation for the long-uptime OOM (#18). Inert in normal
