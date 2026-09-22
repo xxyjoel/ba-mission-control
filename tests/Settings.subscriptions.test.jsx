@@ -67,7 +67,11 @@ async function open(props = {}, keys = []) {
   return { ...inst, writes };
 }
 
-const withNineTabs = (frame) => frame.replace('1–8 jump', '1–9 jump');
+const withNineTabs = (frame) => {
+  const re = /1–8((?:\x1b\[[0-9;]*m)*) jump/;
+  assert.match(frame, re, 'baseline footer carries the tab count');
+  return frame.replace(re, '1–9$1 jump');
+};
 
 for (const rows of [40, 24]) {
   for (let t = 1; t <= 7; t++) {
