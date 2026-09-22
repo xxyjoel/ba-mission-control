@@ -136,7 +136,7 @@ export default function PtyPane({
   const [error, setError] = useState(null);
   const [exited, setExited] = useState(false);
 
-  // Scroll mode. Activated by Ctrl+G (0x07). Not Ctrl+Y (Cursor chat picker)
+  // Scroll mode. Activated by Ctrl+F (0x06). Not Ctrl+Y (Cursor chat picker)
   // and not Ctrl+B (New Session filesystem browse).
   // While active, `w` / `s` scroll up / down by one line, `f` / `b`
   // half a page up / down (0392), `g` / `G` jump to top / bottom. `Esc` or any
@@ -172,7 +172,7 @@ export default function PtyPane({
   // the SAME fixed-height box as the terminal rows. Rendering `rows` rows plus
   // a footer gives Ink rows+1 children for a height=rows box, and Ink resolves
   // the overflow by dropping lines from the MIDDLE of the view — text goes
-  // missing mid-screen the moment you press Ctrl+G (the "misshapen rows while
+  // missing mid-screen the moment you press Ctrl+F (the "misshapen rows while
   // scrolling" half of the duplicated/misshapen-zoom-text report). Reserve the
   // footer's row instead, and keep the hint to exactly one row (truncated).
   const footerRows = (scrollMode ? 1 : 0) + (exited ? 1 : 0);
@@ -479,9 +479,9 @@ export default function PtyPane({
         setScrollOffset(0);
       };
       if (key.escape) { setScrollMode(false); toBottom(); return; }
-      // Ignore Ctrl/Meta chords here — Ctrl+G enters scroll mode (0420) and Ink
-      // still sets input==='g' with ctrl:true; without this gate Ctrl+G while
-      // scrolling would jump to top (bare `g`). Same for Ctrl+B vs half-page `b`.
+      // Ignore Ctrl/Meta chords here — Ctrl+F enters scroll mode (0420) and Ink
+      // still sets input==='f' with ctrl:true; without this gate Ctrl+F while
+      // scrolling would half-page up (bare `f`). Same for bare `g` / `b`.
       if (key.ctrl || key.meta) return;
       if (input === 'w') { moveBy(-1); return; }
       if (input === 's') { moveBy(1); return; }
@@ -573,6 +573,11 @@ export default function PtyPane({
   // and any underlying cell content. We don't trust Ink's `inverse` for
   // whitespace cells — terminals are inconsistent about painting the
   // inverse background when there's no glyph to invert.
+  //
+  // Cursor CLI already draws its own caret in the PTY — painting ours on
+  // top yields two cursors (0420 product note). Claude's TUI often needs
+  // the hard paint; only skip it when the agent says so.
+  const paintHardCursor = agent?.paintHardCursor !== false;
   const cursorStyle = useMemo(() => ({
     backgroundColor: theme?.accent || 'cyan',
     color: theme?.bg || 'black',
@@ -629,7 +634,7 @@ export default function PtyPane({
     const offset = scrolledBack + (skipBackRef.current || 0);
     // Cursor row in OUR coordinates: claude's row minus the rows we skipped.
     const cursorRow = cursorY - skip;
-    const cursorInView = offset === 0 && (
+    const cursorInView = paintHardCursor && offset === 0 && (
       Number.isInteger(cursorRow) && cursorRow >= 0 && cursorRow < viewRows &&
       Number.isInteger(cursorX) && cursorX >= 0 && cursorX < readCols
     );
@@ -653,7 +658,7 @@ export default function PtyPane({
     // tick drives re-renders; cols/rows already trigger via resize effect.
     // viewRows is in the deps because entering scroll mode reserves a row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick, cols, rows, viewRows, cursorStyle, scrollOffset, hideUpdateBanner]);
+  }, [tick, cols, rows, viewRows, cursorStyle, scrollOffset, hideUpdateBanner, paintHardCursor]);
 
   // Report claude's update banner upward (outside render) so Zoom can show a
   // discrete chip. Keyed on the banner text so it only fires when it changes.

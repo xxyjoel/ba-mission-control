@@ -66,6 +66,8 @@ export class CursorAgent extends PtyCore {
   } = {}) {
     super({ spawn, cols, rows });
     this.provider = 'cursor';
+    // Cursor CLI paints its own caret — PtyPane must not hard-paint a second one.
+    this.paintHardCursor = false;
     this.reservedKeys = CURSOR_RESERVED_KEYS.slice();
     this.slot = slot;
     this.id = id || `slot-${slot}`;
@@ -224,6 +226,19 @@ export class CursorAgent extends PtyCore {
   }
 
   approve() {
+    // Trust dialog: key is `[a]` (fixture trust-first-run). Shell/approval
+    // dialogs use `y`. send() queues until ready — but trust BLOCKS ready, so
+    // a queued "y" never reaches the dialog. Write straight to the PTY.
+    try {
+      const rows = bottomContentRows(this.term, SCAN_ROWS);
+      if (detectTrustPrompt(rows)) {
+        if (!this.pty) return false;
+        try { this.pty.write('a'); } catch { return false; }
+        this.appendTail({ kind: 'sys', text: 'trust → a' });
+        this.emit('change');
+        return true;
+      }
+    } catch {}
     return this.send('y');
   }
 

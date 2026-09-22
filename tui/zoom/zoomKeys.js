@@ -9,17 +9,20 @@
 // This is what makes it impossible to ship a binding that checks a shape Ink
 // can never produce — the bug that left Ctrl+] / Ctrl+\ silently dead.
 //
-// WHY THESE KEYS (verified, not guessed):
+// WHY THESE KEYS (verified, not guessed — check docs/HOTKEYS.md §5 + Cursor spike
+// before relocating again):
 //   • Ink sets {ctrl:true, input:<letter>} ONLY for bytes 0x01-0x1a (Ctrl+A..Z)
 //     — parse-keypress.js. Ctrl+] (0x1d) / Ctrl+\ (0x1c) are ABOVE that range,
 //     so Ink delivers them as raw bytes with ctrl:false → a `key.ctrl &&
 //     input===']'` test is unreachable. We use only Ctrl+A..Z keys.
-//   • claude-code's keymap binds Ctrl+T (todos), Ctrl+S (stash), Ctrl+L, Ctrl+O,
-//     Ctrl+R, Ctrl+J (newline), Esc (cancel). It does NOT bind Ctrl+Q / Ctrl+G /
-//     Ctrl+K / Ctrl+U — so stealing those doesn't shadow a claude binding.
-//   • cursor-agent binds Ctrl+Y to its chat picker (0420 spike) — SCROLL left Y.
-//   • Mission Control New Session already uses Ctrl+B for filesystem browse —
-//     SCROLL must not reuse B. Ctrl+G is free in New Session, Claude, and Cursor.
+//   • SCROLL relocation history (0420):
+//       Ctrl+Y — original mc chrome; Cursor spike: chat picker. Rejected.
+//       Ctrl+B — New Session filesystem browse. Rejected.
+//       Ctrl+G — Claude "open in default text editor" (HOTKEYS.md §5) AND the
+//                legacy Zoom snap-to-live. Rejected after user report.
+//       Ctrl+F — readline forward-char only (editing); not Claude general, not
+//                New Session, not Cursor spike bindings. Same "editing-only"
+//                rationale as the original Ctrl+Y steal.
 //   • TODO(cursor-zoom-stats): spike found Ctrl+U clears the Cursor composer —
 //     conflicts with STATS here; relocate STATS in a follow-up, not this change.
 //   • Raw mode disables IXON/ISIG, so Ctrl+Q (0x11) arrives as a byte, not XON.
@@ -28,9 +31,8 @@ export const ZOOM_KEYS = {
   // Exit the zoom pane. Replaces the old Esc (which shadowed claude's cancel)
   // and the dead Ctrl+] . Mnemonic: Q = quit.
   EXIT:    { name: 'exit zoom',    bytes: '\x11', match: (i, k) => k.ctrl && i === 'q' }, // Ctrl+Q
-  // Enter scroll mode (w/s/b/f/g/G drive the viewport). Ctrl+G — not Ctrl+B
-  // (New Session browse) and not Ctrl+Y (Cursor chat picker).
-  SCROLL:  { name: 'scroll mode',  bytes: '\x07', match: (i, k) => k.ctrl && i === 'g' }, // Ctrl+G
+  // Enter scroll mode (w/s/b/f/g/G drive the viewport). Ctrl+F — see history above.
+  SCROLL:  { name: 'scroll mode',  bytes: '\x06', match: (i, k) => k.ctrl && i === 'f' }, // Ctrl+F
   // Toggle the tools panel. Moved off Ctrl+T (claude app:toggleTodos).
   TOOLS:   { name: 'toggle tools', bytes: '\x0b', match: (i, k) => k.ctrl && i === 'k' }, // Ctrl+K
   // Toggle the stats panel. Moved off Ctrl+S (claude chat:stash).

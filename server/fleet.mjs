@@ -235,7 +235,7 @@ export class Fleet extends EventEmitter {
     return this.agents.find((a) => a && a.id === id) || null;
   }
 
-  launch({ slot, cwd, branch, model, name, permissionMode, prompt, sessionId, resume, provider = 'claude' }) {
+  launch({ slot, cwd, branch, model, name, permissionMode, prompt, sessionId, resume, provider = 'claude', autoTrust = false }) {
     if (slot < 1 || slot > this.slots) throw new Error(`bad slot ${slot}`);
     if (this.agents[slot - 1]) throw new Error(`slot ${slot} already occupied`);
     const descriptor = getProvider(provider);
@@ -262,6 +262,7 @@ export class Fleet extends EventEmitter {
         slot, id, cwd, branch, model, name, permissionMode, sessionId, resume, siblingSids,
         cols: this.viewport?.cols,
         rows: this.viewport?.rows,
+        autoTrust: !!autoTrust,
       })
       : MOCK_FIXTURE
         ? new MockAgent({ slot, id, cwd, branch, model, name, permissionMode, sessionId, fixture: MOCK_FIXTURE })
@@ -298,7 +299,7 @@ export class Fleet extends EventEmitter {
   // provides the saved record from the session store; we wire its
   // sessionId back through launch() with resume=true so claude rehydrates
   // the transcript from disk.
-  resume({ slot, sessionId, cwd, branch, model, name, permissionMode, provider = 'claude' }) {
+  resume({ slot, sessionId, cwd, branch, model, name, permissionMode, provider = 'claude', autoTrust = false }) {
     if (!sessionId) throw new Error(`no sessionId — nothing to resume`);
     return this.launch({
       slot, cwd, branch, model, name,
@@ -307,6 +308,7 @@ export class Fleet extends EventEmitter {
       resume: true,
       prompt: null,
       provider,
+      autoTrust,
     });
   }
 

@@ -46,7 +46,7 @@ All four are committed. Each drives an `MC_MOCK` fixture and writes one GIF:
 
 - **hero.tape** — grid fills with agents, navigation, zoom, Matrix theme (the
   README hero).
-- **zoom.tape** — `Enter` to zoom, `Ctrl+g` scroll mode (w/s/b/f/g/G), `Ctrl+u`
+- **zoom.tape** — `Enter` to zoom, `Ctrl+f` scroll mode (w/s/b/f/g/G), `Ctrl+u`
   stats panel, `Ctrl+k` tools panel, `Ctrl+q` to exit.
 - **themes.tape** — cycles the palette gallery (Tokyo Night → Gruvbox →
   Catppuccin → Amber → Matrix → BlueArch).

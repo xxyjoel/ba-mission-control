@@ -12,7 +12,7 @@
 //      All typing, scrolling, markdown, syntax highlighting, slash UI, etc.
 //      come from claude itself — Mission Control no longer re-renders the
 //      stream-json events for the zoomed agent.
-//   7. Footer hint: ⌃Q exit · ⌃J newline · ⌃G scroll · ⌃K tools · ⌃U stats
+//   7. Footer hint: ⌃Q exit · ⌃J newline · ⌃F scroll · ⌃K tools · ⌃U stats
 //
 // Why this exists: the prior Zoom modal parsed claude's stream-json
 // events and laid them out in Ink. That pipeline had perpetual
@@ -25,7 +25,7 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { MODELS, modelColor, modelByCli } from '../lib/models.js';
-import { barCells, fmtK, fmtMoney, fmtDuration, humanize, trunc, UNKNOWN } from '../lib/format.js';
+import { barCells, fmtK, fmtMoney, fmtMoneyMeasured, fmtKMeasured, fmtDuration, humanize, trunc, UNKNOWN, UNMEASURED } from '../lib/format.js';
 import { zoomInnerWidth } from '../lib/zoomGeometry.js';
 import { readProjectHealth, healthColor, healthScoreText } from '../lib/projectHealth.js';
 import PtyPane from '../zoom/PtyPane.jsx';
@@ -113,11 +113,14 @@ export default function Zoom({
   // token count over a fabricated limit, reported as 0% used. Gate every ctx
   // ratio on ctxKnown and print the unknown marker instead.
   const ctxKnown = !!(model && Number.isFinite(model.maxCtx) && model.maxCtx > 0);
-  const ctxPct = ctxKnown ? (agent.context || 0) / model.maxCtx : 0;
-  const ctxPctText = ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
+  // 0420/D1: null context is unmeasured (`-`), not UNKNOWN (`?`).
+  const ctxMeasured = agent.context !== null;
+  const ctxPct = ctxKnown && ctxMeasured ? (agent.context || 0) / model.maxCtx : 0;
+  const ctxPctText = !ctxMeasured ? UNMEASURED
+    : ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
   const ctxMaxText = ctxKnown ? fmtK(model.maxCtx) : UNKNOWN;
-  const overT = (agent.context || 0) >= threshold;
-  const nearT = (agent.context || 0) >= threshold * 0.85;
+  const overT = ctxMeasured && (agent.context || 0) >= threshold;
+  const nearT = ctxMeasured && (agent.context || 0) >= threshold * 0.85;
 
   // 0417: read the DERIVED status, the same value the card shows. `agent` is
   // the live PtyAgent when zoom is opened from the grid, and its `.status` is
@@ -146,7 +149,7 @@ export default function Zoom({
   // itself is suppressed (cells === null) rather than drawn empty, which would
   // read as "0% of the context used".
   const barW = Math.max(10, Math.min(40, Math.floor(innerW / 2) - 4));
-  const cells = ctxKnown
+  const cells = ctxKnown && ctxMeasured
     ? barCells({ value: ctxPct, width: barW, threshFrac: threshold / model.maxCtx })
     : null;
 
@@ -307,18 +310,18 @@ export default function Zoom({
           row — a narrow modal clips the tail chips instead of wrapping) ── */}
       <Box marginTop={1} height={1} overflow="hidden">
         <Text color={theme.dim}>ctx </Text>
-        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{fmtK(agent.context || 0)}</Text>
+        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxMeasured ? fmtK(agent.context || 0) : UNMEASURED}</Text>
         <Text color={theme.dim}>/{ctxMaxText}  </Text>
         <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxPctText}</Text>
         <Text color={theme.faint}>  ·  </Text>
         <Text color={theme.dim}>in </Text>
-        <Text color={theme.fg}>{fmtK(agent.tokensIn || 0)}↓</Text>
+        <Text color={theme.fg}>{fmtKMeasured(agent.tokensIn)}↓</Text>
         <Text color={theme.dim}>  out </Text>
-        <Text color={theme.fg}>{fmtK(agent.tokensOut || 0)}↑</Text>
+        <Text color={theme.fg}>{fmtKMeasured(agent.tokensOut)}↑</Text>
         <Text color={theme.dim}>  cache </Text>
-        <Text color={theme.faint}>{fmtK(agent.tokensCacheRead || 0)}</Text>
+        <Text color={theme.faint}>{fmtKMeasured(agent.tokensCacheRead)}</Text>
         <Text color={theme.faint}>  ·  </Text>
-        <Text color={theme.fg}>{costPrefix}{fmtMoney(agent.costSession || 0)}</Text>
+        <Text color={theme.fg}>{costPrefix}{fmtMoneyMeasured(agent.costSession)}</Text>
         <Text color={theme.dim}> (wk </Text>
         <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
         <Text color={theme.dim}>)</Text>
@@ -450,22 +453,22 @@ export default function Zoom({
             <Box>
               <Text color={theme.dim}>tokens in  </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{fmtK(agent.tokensIn || 0)}↓</Text>
+              <Text color={theme.fg}>{fmtKMeasured(agent.tokensIn)}↓</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>tokens out </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{fmtK(agent.tokensOut || 0)}↑</Text>
+              <Text color={theme.fg}>{fmtKMeasured(agent.tokensOut)}↑</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cache read </Text>
               <Box flexGrow={1} />
-              <Text color={theme.faint}>{fmtK(agent.tokensCacheRead || 0)}</Text>
+              <Text color={theme.faint}>{fmtKMeasured(agent.tokensCacheRead)}</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cost · session </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{costPrefix}{fmtMoney(agent.costSession || 0)}</Text>
+              <Text color={theme.fg}>{costPrefix}{fmtMoneyMeasured(agent.costSession)}</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cost · week    </Text>
@@ -523,7 +526,7 @@ export default function Zoom({
 
       {/* ── Footer hint row ──
           Keys mirror tui/zoom/zoomKeys.js (the single source of truth):
-          ⌃Q exit · ⌃J newline · ⌃G scroll · ⌃K tools · ⌃U stats. Everything
+          ⌃Q exit · ⌃J newline · ⌃F scroll · ⌃K tools · ⌃U stats. Everything
           else — including Esc (interrupt claude) and ⇧⇥ (claude's own perm
           cycler) — is forwarded to the embedded claude session.
           height=1 + overflow=hidden: on a narrow modal the row clips instead
@@ -534,7 +537,7 @@ export default function Zoom({
           <Text color={theme.dim}> exit  ·  </Text>
           <Text color={theme.accent}>⌃J</Text>
           <Text color={theme.dim}> newline  ·  </Text>
-          <Text color={theme.accent}>⌃G</Text>
+          <Text color={theme.accent}>⌃F</Text>
           <Text color={theme.dim}> scroll  ·  </Text>
           <Text color={theme.accent}>⌃K</Text>
           <Text color={theme.dim}> tools{showTools ? ' (on)' : ''}  ·  </Text>

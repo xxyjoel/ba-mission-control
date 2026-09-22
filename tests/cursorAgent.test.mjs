@@ -168,8 +168,42 @@ test('CursorAgent.readiness: trust prompt blocks ready', () => {
   a.kill();
 });
 
-test('CursorAgent.reservedKeys is empty (zoom SCROLL relocated to Ctrl+G)', () => {
+test('CursorAgent.reservedKeys is empty (zoom SCROLL relocated to Ctrl+F)', () => {
   const a = makeAgent(makeFakeSpawn());
   assert.deepEqual(a.reservedKeys, []);
+  a.kill();
+});
+
+test('CursorAgent.paintHardCursor is false (native Cursor caret only)', () => {
+  const a = makeAgent(makeFakeSpawn());
+  assert.equal(a.paintHardCursor, false);
+  a.kill();
+});
+
+test('CursorAgent.approve: trust prompt writes a to PTY (not queued y)', () => {
+  const writes = [];
+  const a = makeAgent(makeFakeSpawn());
+  a.ready = false;
+  a.pendingSends = [];
+  a.pty = { write: (s) => writes.push(s) };
+  const lines = [
+    '⚠ Workspace Trust Required',
+    '▶ [a] Trust this workspace',
+    '  [q] Quit',
+  ];
+  a.term = {
+    rows: 24,
+    buffer: {
+      active: {
+        length: lines.length,
+        getLine: (y) => ({
+          translateToString: () => lines[y] || '',
+        }),
+      },
+    },
+  };
+  assert.equal(a.approve(), true);
+  assert.deepEqual(writes, ['a']);
+  assert.equal(a.pendingSends.length, 0, 'must not queue while trust blocks ready');
   a.kill();
 });

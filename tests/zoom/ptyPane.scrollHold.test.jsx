@@ -12,7 +12,7 @@ import { render } from 'ink-testing-library';
 import PtyPane from '../../tui/zoom/PtyPane.jsx';
 import { makeStubAgent } from '../lib/zoom-stub.js';
 
-const CTRL_G = String.fromCharCode(7);    // enters scroll mode (Ctrl+G)
+const CTRL_F = String.fromCharCode(6);    // enters scroll mode (Ctrl+G)
 const strip = (t) => String(t || '').replace(new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g'), '');
 const markers = (frame) => (strip(frame).match(/L\d{3}/g) || []);
 // Scroll mode reserves a footer row, so the visible window is one row shorter
@@ -42,7 +42,7 @@ test('a parked reader is not dragged forward by new output', async () => {
   );
   await wait(120);
 
-  stdin.write(CTRL_G);
+  stdin.write(CTRL_F);
   await wait(60);
   for (let i = 0; i < 20; i++) stdin.write('w');
   await wait(120);
@@ -73,7 +73,7 @@ test('G returns to the live output', async () => {
   await wait(120);
   const live = bottom(lastFrame());
 
-  stdin.write(CTRL_G);
+  stdin.write(CTRL_F);
   await wait(60);
   for (let i = 0; i < 20; i++) stdin.write('w');
   await wait(100);
@@ -99,7 +99,7 @@ test('a resize does not snap a parked reader to the bottom', async () => {
   await wait(120);
   const live = bottom(lastFrame());
 
-  stdin.write(CTRL_G);
+  stdin.write(CTRL_F);
   await wait(60);
   for (let i = 0; i < 20; i++) stdin.write('w');
   await wait(120);
@@ -164,7 +164,7 @@ test('a resize does not stop the reader scrolling further', async () => {
     <PtyPane agent={stub.agent} width={80} height={20} theme={THEME} />,
   );
   await wait(60);
-  stdin.write(CTRL_G);
+  stdin.write(CTRL_F);
   await wait(60);
   // Park well inside the emulator's scrollback, past the skip region.
   for (let i = 0; i < 25; i++) { stdin.write('w'); await wait(8); }

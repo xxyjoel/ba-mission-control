@@ -1920,6 +1920,7 @@ export default function App({
         permissionMode: perm,
         prompt: finalPrompt,
         provider,
+        autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
       });
       setModal(null);
       setNewSlot(null);
@@ -1969,6 +1970,7 @@ export default function App({
       fleet.launch({
         slot, cwd: rec.cwd, branch: rec.branch, model: rec.model,
         name: rec.name, permissionMode, prompt: null, provider,
+        autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
       });
       return 'fresh';
     }
@@ -1978,6 +1980,7 @@ export default function App({
       // so a resume relaunches on the model the user actually chose. The
       // friendly launch id stays the fallback for records without one.
       model: rec.resolvedModel || rec.model, name: rec.name, permissionMode, provider,
+      autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
     });
     if (agent) {
       if (rec.tokensIn != null) agent.tokensIn = rec.tokensIn;

@@ -30,8 +30,8 @@ describe('classifyShellKey', () => {
     assert.strictEqual(classifyShellKey('j', { ctrl: true }), null);
   });
 
-  it('returns null for Ctrl+G (zoom scroll — not a shell chrome key here)', () => {
-    assert.strictEqual(classifyShellKey('g', { ctrl: true }), null);
+  it('returns null for Ctrl+F (zoom scroll — not a shell chrome key here)', () => {
+    assert.strictEqual(classifyShellKey('f', { ctrl: true }), null);
   });
 
   it('returns null for plain letter keys', () => {
