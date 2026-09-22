@@ -1,0 +1,13 @@
+{"t":1,"label":"spawn","bin":"cursor-agent","args":["--resume","dc1435e1-18b7-4868-8a51-8e811dc470e4","--model","composer-2.5","--workspace","/tmp/mc-cursor-spike"],"cols":120,"rows":32}
+{"t":203,"label":"chat-state","tr":null,"meta":null,"tp":null,"mp":null}
+{"t":6167,"label":"trust-prompt","op":"snap"}
+{"t":6169,"label":"trust-prompt","bracketedPaste":false,"cursorY":18}
+{"t":6169,"label":"trust-a","op":"write"}
+{"t":6170,"label":"trust-a","dataB64":"YQ=="}
+{"t":7030,"label":"chat-state","tr":null,"meta":{"updatedAtMs":1790112512638,"mtimeMs":1790112512639},"tp":null,"mp":"/Users/<user>/.cursor/chats/5d3f0d18b9f3fb7ce0faa1e36bc552f3/dc1435e1-18b7-4868-8a51-8e811dc470e4/meta.json"}
+{"t":10214,"label":"after-trust","op":"snap"}
+{"t":10216,"label":"after-trust","bracketedPaste":true,"cursorY":31}
+{"t":20018,"label":null,"op":"type"}
+{"t":20196,"label":"typed","text":"hello world"}
+{"t":21510,"label":"typed","op":"snap"}
+{"t":21512,"label":"typed","bracketedPaste":true,"cursorY":31}

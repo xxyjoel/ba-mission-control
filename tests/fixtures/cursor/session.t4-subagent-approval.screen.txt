@@ -1,0 +1,30 @@
+    Tue Sep 22 16:33:28 CDT 2026
+
+  Tue Sep 22 16:33:28 CDT 2026
+
+
+  Use your todo list tool to create two todos: (1) spawn a subagent that runs `ls` and
+  reports the file count, (2) reply done. Do them in order, marking each completed. Keep it
+  minimal.
+
+
+    To-do Working on 2 to-dos
+    ◐ Spawn subagent: run `ls`, report file count
+    ○ Reply done
+
+    Running 1 agent…
+    Run ls file count
+    Running: ls /private/tmp/mc-cursor-spi…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ $  ls /private/tmp/mc-cursor-spike | wc -l in /tmp/mc-cursor-spike
+
+ Run this command?
+ Not in allowlist: wc
+  → Run (once) (y)
+    Add Shell(wc) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc or n)
+
+                                                                    ctrl+r to review changed files
+
