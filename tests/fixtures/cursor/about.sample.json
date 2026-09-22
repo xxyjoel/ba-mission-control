@@ -1,0 +1,13 @@
+{
+  "cliVersion": "2026.09.18-9a7762b",
+  "latestStatus": "up_to_date",
+  "latestVersion": "2026.09.18-9a7762b",
+  "model": "Composer 2.5",
+  "subscriptionTier": "Pro+",
+  "osPlatform": "darwin",
+  "osArch": "arm64",
+  "userEmail": "user@example.com",
+  "terminalProgram": "apple-terminal",
+  "shell": "zsh",
+  "lastRequestId": null
+}

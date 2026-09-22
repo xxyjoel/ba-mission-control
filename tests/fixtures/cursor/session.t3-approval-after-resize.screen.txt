@@ -1,0 +1,30 @@
+  ok
+
+
+  create a file a.txt containing hi
+
+
+    Edited a.txt +1
+
+    ▎+ hi
+
+  Created a.txt in the project root with the content hi.
+
+
+  run the shell command `date` once and tell me its output. Do nothing else.
+
+
+  $ date Waiting for approval...
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ $  date in /tmp/mc-cursor-spike
+
+ Run this command?
+ Not in allowlist: date
+  → Run (once) (y)
+    Add Shell(date) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip & tell the agent what to do instead (esc or n)
+
+                                                                    ctrl+r to review changed files
+
