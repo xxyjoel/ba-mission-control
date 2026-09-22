@@ -1,0 +1,9 @@
+{"t":2,"ev":"spawn","bin":"cursor-agent","args":["--resume","b25613cf-b05b-4f1d-8310-6a50cc5e4bc4","--model","composer-2.5","--workspace","/tmp/mc-cursor-spike"],"cols":120,"rows":32}
+{"t":206,"ev":"chat-state","tr":null,"meta":null,"tp":null,"mp":null}
+{"t":1210,"ev":"chat-state","tr":null,"meta":{"updatedAtMs":1790112971860,"mtimeMs":1790112971861},"tp":null,"mp":"/Users/<user>/.cursor/chats/5d3f0d18b9f3fb7ce0faa1e36bc552f3/b25613cf-b05b-4f1d-8310-6a50cc5e4bc4/meta.json"}
+{"t":6059,"ev":"ctl","op":"snap","label":"ready-random-resume"}
+{"t":6060,"ev":"snap","label":"ready-random-resume","bracketedPaste":true,"cursorY":14}
+{"t":6567,"ev":"ctl","op":"quit","label":null}
+{"t":6630,"ev":"chat-state","tr":null,"meta":null,"tp":null,"mp":null}
+{"t":6923,"ev":"exit","exitCode":143,"signal":0}
+{"t":6973,"ev":"snap","label":"final","bracketedPaste":false,"cursorY":14}

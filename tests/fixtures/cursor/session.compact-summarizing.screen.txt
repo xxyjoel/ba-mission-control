@@ -1,0 +1,30 @@
+    ◐ Spawn subagent: run `ls`, report file count
+    ○ Reply done
+
+    1 agent completed
+    Run ls file count
+    ✓ Done
+
+    To-do All done
+    ✔ Spawn subagent: run `ls`, report file count
+    ✔ Reply done
+
+  done — subagent reported 6 entries from ls.
+
+ ⠘⠤ Summarizing  642 tokens
+
+
+  → Add a follow-up                                                                 ctrl+c to stop
+
+
+  Composer 2.5 · 7.5% · 3 files edited
+  /private/tmp/mc-cursor-spike · main
+
+
+
+
+
+
+
+
+

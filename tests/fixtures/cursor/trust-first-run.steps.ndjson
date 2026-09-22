@@ -1,0 +1,8 @@
+{"t":2,"label":"spawn","bin":"cursor-agent","args":["--resume","dc1435e1-18b7-4868-8a51-8e811dc470e4","--model","composer-2.5","--workspace","/tmp/mc-cursor-spike"],"cols":120,"rows":32}
+{"t":206,"label":"chat-state","tr":null,"meta":null,"tp":null,"mp":null}
+{"t":464,"label":"first-screen"}
+{"t":1577,"label":"first-screen","bracketedPaste":false,"cursorY":19}
+{"t":1578,"label":"trust-prompt","bracketedPaste":false,"cursorY":19}
+{"t":1578,"label":"boot-state","state":"trust","chatId":"dc1435e1-18b7-4868-8a51-8e811dc470e4"}
+{"t":4581,"label":"after-3s","bracketedPaste":false,"cursorY":19}
+{"t":4594,"label":"exit","exitCode":0,"signal":15}

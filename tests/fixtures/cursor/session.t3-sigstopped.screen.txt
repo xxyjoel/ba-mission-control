@@ -1,0 +1,30 @@
+  ok
+
+
+  create a file a.txt containing hi
+
+
+    Edited a.txt +1
+
+    ▎+ hi
+
+  Created a.txt in the project root with the content hi.
+
+
+  run the shell command `date` once and tell me its output. Do nothing else.
+
+
+  $ date 29s
+    Tue Sep 22 16:33:28 CDT 2026
+
+ ⠰⠰ Running  67 tokens
+    Tip: Hit shift+tab to enable Plan Mode for large or complex changes.
+
+
+  → Add a follow-up                                                                 ctrl+c to stop
+
+
+  1 task
+  Composer 2.5 · 6.9% · 3 files edited
+  /private/tmp/mc-cursor-spike · main
+
