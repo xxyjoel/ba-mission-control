@@ -298,7 +298,10 @@ export default function Settings({
       <Text color={theme.accent}>⚙ SETTINGS</Text>
       {/* Tabs — one row, never wrapped: at narrow widths Yoga used to squeeze
           the labels into garbage ("GENER AYOUT OLORS"). Overflowing tabs clip
-          instead; number keys still reach them. */}
+          instead; number keys still reach them.
+          TODO(settings-tabstrip): at the default 92-col width the strip clips
+          after [6], so FEEDBACK, SUBSCRIPTIONS and NOTES never show their label
+          even when active — scroll the strip to keep the active tab in view. */}
       <Box marginTop={1} flexWrap="nowrap" overflow="hidden">
         {SETTINGS_SCHEMA.map((t, i) => (
           <Box key={t.id} marginRight={2} flexShrink={0}>
