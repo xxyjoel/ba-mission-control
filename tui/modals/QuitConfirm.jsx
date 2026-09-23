@@ -1,18 +1,19 @@
 // tui/modals/QuitConfirm.jsx — quit mc with an explicit save / no-save choice.
 //
 // Opened when the user presses `q`. The modal owns its own keys:
-//   s/S/Enter → save & quit   (onQuit('save'))  — keep the conversations + totals
-//   d/D       → quit, no save  (onQuit('clear')) — sessions end; reopen fresh
-//   n/N/Esc   → cancel         (onCancel())
-// Every other key is ignored (no auto-dismiss, no race with App's `q` handler).
+//   s/S/Enter/y/Y → save & quit   (onQuit('save'))  — keep conversations + totals
+//   d/D/q/Q       → quit, no save (onQuit('clear')) — reopen fresh
+//   n/N/Esc       → cancel        (onCancel())
+// `q` and `y` are aliases for muscle memory (q→q discard; older Notes said
+// q→y for confirm). Every other key is ignored (no auto-dismiss).
 //
 // Save is the DEFAULT: every exit preserves resumable conversations + token/cost
-// totals UNLESS the user explicitly picks [d]. Closing the terminal (cmd+W →
-// SIGHUP), Ctrl-C, and this modal's [s] all keep the sessions; only [d] quit-no-save
-// downgrades to a "clear" — `:resume-all` then reopens those repos as fresh
-// sessions. Enter maps to SAVE so an instinctive Enter never loses work. onQuit
-// sets the persist mode in the session store BEFORE Ink tears down; the final write
-// in main.jsx then records the right thing (default 'save' if no key set it).
+// totals UNLESS the user explicitly picks [d]/[q]. Closing the terminal (cmd+W →
+// SIGHUP), Ctrl-C, and this modal's [s] all keep the sessions; only [d]/[q]
+// quit-no-save downgrades to a "clear". Enter maps to SAVE so an instinctive
+// Enter never loses work. onQuit sets the persist mode in the session store
+// BEFORE Ink tears down; the final write in main.jsx then records the right
+// thing (default 'save' if no key set it).
 
 import React from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
@@ -23,8 +24,16 @@ export default function QuitConfirm({ onCancel, onQuit, theme, agentCount = 0 })
     try { onQuit?.(mode); } finally { exit(); }
   };
   useInput((input, key) => {
-    if (input === 's' || input === 'S' || key.return) { quit('save'); return; }
-    if (input === 'd' || input === 'D') { quit('clear'); return; }
+    if (input === 's' || input === 'S' || input === 'y' || input === 'Y' || key.return) {
+      quit('save');
+      return;
+    }
+    // Second `q` = quit no save (common muscle memory; ignoring plain `q`
+    // here made quit look broken).
+    if (input === 'd' || input === 'D' || input === 'q' || input === 'Q') {
+      quit('clear');
+      return;
+    }
     if (input === 'n' || input === 'N' || key.escape) { onCancel(); return; }
     // Any other key is ignored — user must commit explicitly. No timer.
   });
@@ -36,7 +45,7 @@ export default function QuitConfirm({ onCancel, onQuit, theme, agentCount = 0 })
       borderColor={theme.yellow || theme.accent}
       paddingX={3}
       paddingY={1}
-      width={52}
+      width={56}
     >
       <Box>
         <Text color={theme.yellow || theme.accent} bold>Quit mc?</Text>
@@ -57,17 +66,17 @@ export default function QuitConfirm({ onCancel, onQuit, theme, agentCount = 0 })
         <Box>
           <Text color={theme.accent}>[s]</Text>
           <Text color={theme.fg}> save & quit</Text>
-          <Text color={theme.dim}>     keep conversations</Text>
+          <Text color={theme.dim}>     keep conversations · y/↵</Text>
         </Box>
         <Box>
           <Text color={theme.accent}>[d]</Text>
           <Text color={theme.fg}> quit, no save</Text>
-          <Text color={theme.dim}>   reopen fresh</Text>
+          <Text color={theme.dim}>   reopen fresh · q</Text>
         </Box>
         <Box>
           <Text color={theme.accent}>[n]</Text>
           <Text color={theme.fg}> cancel</Text>
-          <Text color={theme.dim}>          esc · enter=save</Text>
+          <Text color={theme.dim}>          esc</Text>
         </Box>
       </Box>
     </Box>

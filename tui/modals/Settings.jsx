@@ -92,7 +92,7 @@ const NOTES_BODY = [
   [':history [n]',        'VIEW-ONLY browse of last N sessions (NOT restorable; reference only)'],
   [':sessions / :ls',     'list saved sessions for the current bySlot map'],
   [':forget <slot>',      'drop one slot from saved state'],
-  ['q  then  y',          'quit mc (sessions auto-save before exit)'],
+  ['q  then  s / d',      'quit mc · s=save sessions · d (or q again)=no save'],
   ['',           ''],
   ['',           'Auto-resume on launch: toggle `Auto-resume sessions on startup` (GENERAL).'],
   ['',           'History length: tune `Session history limit` (GENERAL · default 20).'],

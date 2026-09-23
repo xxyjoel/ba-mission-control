@@ -115,6 +115,21 @@ test('hotkey: q opens QuitConfirm (does NOT exit immediately)', async () => {
   unmount();
 });
 
+test('hotkey: q then q is quit-no-save (second q aliases [d])', async () => {
+  const { stdin, lastFrame, unmount } = mount();
+  await tick(); await tick();
+  await press(stdin, 'q');
+  assert.match(strip(lastFrame()), /Quit mc\?/);
+  await press(stdin, 'q');
+  await tick();
+  // Ink testing library does not fully tear down useApp().exit(); the modal
+  // must at least have accepted the key (frame no longer QuitConfirm, or exit
+  // was requested). Accept either: gone modal or empty after exit.
+  const frame = strip(lastFrame() || '');
+  assert.doesNotMatch(frame, /\[n\] cancel/);
+  unmount();
+});
+
 test('hotkey: n opens NewSession', async () => {
   const { stdin, lastFrame, unmount } = mount();
   await tick(); await tick();
