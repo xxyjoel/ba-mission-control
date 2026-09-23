@@ -209,7 +209,7 @@ export const SETTINGS_SCHEMA = [
   // plugin does so the user knows what they're enabling. Layer 1/2/3
   // grouping tracks ARCHITECTURE.md's "in-session / cross-session /
   // external" model.
-  { id: 'plugins', title: 'PLUGINS · memory management', items:
+  { id: 'plugins', title: 'PLUGINS', items:
     PLUGINS.map(p => ({
       key: p.key,
       label: `[L${p.layer}] ${p.label}`,
@@ -230,7 +230,7 @@ export const SETTINGS_SCHEMA = [
     subscriptionStatusRow('claude', 'Claude Code', 'Always enabled. Login belongs to the claude CLI (↵ runs `claude auth login` when not connected); mc stores no credentials.'),
     subscriptionStatusRow('cursor', 'Cursor', '↵ connect runs `cursor-agent login` (browser) · ↵ disconnect runs `cursor-agent logout`. mc stores no credentials.'),
     { key: 'subscriptions_cursor_enabled', label: 'Cursor · enabled', kind: 'toggle',
-      desc: 'Offer Cursor in New Session once it is connected. Needs cursor-agent installed.',
+      desc: 'Offer Cursor in New Session. Turned on automatically when Cursor is connected; turn off to hide it without logging out.',
       guard: (next, ctx) => {
         if (!next) return null;
         const st = ctx?.status?.('cursor');

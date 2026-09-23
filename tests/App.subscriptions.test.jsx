@@ -125,3 +125,17 @@ test('Connect opens the login PTY; on exit Settings returns on SUBSCRIPTIONS and
   assert.deepEqual(connected, ['cursor']);
   await app.unmount();
 });
+
+test('Settings discovering Cursor already connected auto-enables it for New Session', async () => {
+  writeSettings({ subscriptions_cursor_enabled: false });
+  const cursor = fakeProvider('cursor', { ok: true, email: 'c@x' });
+  const app = await boot({ providers: [fakeProvider('claude', { ok: true }), cursor] });
+  await app.press(',', '8');
+  await tick(80);
+  assert.match(app.frame(), /Cursor\s+● connected/);
+  await app.press('\x1b'); // close settings
+  await app.press('n');
+  await tick(80);
+  assert.match(app.frame(), /subscription ◀/, 'New Session offers Cursor after connect probe auto-enabled it');
+  await app.unmount();
+});

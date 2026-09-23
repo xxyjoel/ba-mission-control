@@ -404,6 +404,13 @@ export default function App({
   const onSubscriptionProbed = (id, st) => {
     const ok = st?.state === 'connected';
     setProviderAuth(a => ({ ...a, [id]: { ok } }));
+    // Seamless: a successful connect (or Settings discovering an already-
+    // logged-in CLI) turns the subscription on for New Session. The toggle
+    // stays available to hide it again without logging out.
+    if (ok && id !== 'claude') {
+      const key = `subscriptions_${id}_enabled`;
+      setSettingsState(s => (s[key] ? s : { ...s, [key]: true }));
+    }
     if (pendingConnectRef.current !== id) return;
     pendingConnectRef.current = null;
     if (!ok) return;

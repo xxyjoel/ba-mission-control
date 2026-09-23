@@ -13,6 +13,7 @@ import { Box, Text, useInput, useStdout } from 'ink';
 import { execFile } from 'node:child_process';
 import { basename } from 'node:path';
 import { SETTINGS_SCHEMA } from '../lib/settings.js';
+import { visibleTabRange } from '../lib/settingsTabs.js';
 import { listProviders } from '../../server/providers/index.mjs';
 
 const LOGOUT_TIMEOUT_MS = 15000;
@@ -296,20 +297,45 @@ export default function Settings({
       width={width}
     >
       <Text color={theme.accent}>⚙ SETTINGS</Text>
-      {/* Tabs — one row, never wrapped: at narrow widths Yoga used to squeeze
-          the labels into garbage ("GENER AYOUT OLORS"). Overflowing tabs clip
-          instead; number keys still reach them.
-          TODO(settings-tabstrip): at the default 92-col width the strip clips
-          after [6], so FEEDBACK, SUBSCRIPTIONS and NOTES never show their label
-          even when active — scroll the strip to keep the active tab in view. */}
+      {/* Tabs — one row, never wrapped. Slide a window so the active tab's
+          full label is always visible (NOTES was clipping to "NOT"). */}
       <Box marginTop={1} flexWrap="nowrap" overflow="hidden">
-        {SETTINGS_SCHEMA.map((t, i) => (
-          <Box key={t.id} marginRight={2} flexShrink={0}>
-            <Text color={i === tabIdx ? theme.accent : theme.dim}>
-              [{i + 1}] {t.title}
-            </Text>
-          </Box>
-        ))}
+        {(() => {
+          // width prop is the modal outer width; paddingX={2} eats 4 cells.
+          // Reserve 2 for a leading ‹ and 2 for a trailing › when the window
+          // does not cover the full schema.
+          const outer = Math.max(20, (width || 92) - 4);
+          const notesIdx = SETTINGS_SCHEMA.length - 1;
+          // First pass without chevrons to see if everything fits.
+          let { lo, hi } = visibleTabRange(SETTINGS_SCHEMA, tabIdx, outer);
+          const clippedLeft = lo > 0;
+          const clippedRight = hi < notesIdx;
+          const chevronBudget = (clippedLeft ? 2 : 0) + (clippedRight ? 2 : 0);
+          if (chevronBudget > 0) {
+            ({ lo, hi } = visibleTabRange(SETTINGS_SCHEMA, tabIdx, outer - chevronBudget));
+          }
+          const chips = [];
+          if (lo > 0) {
+            chips.push(
+              <Text key="lead" color={theme.faint}>‹ </Text>,
+            );
+          }
+          for (let i = lo; i <= hi; i++) {
+            const t = SETTINGS_SCHEMA[i];
+            const gap = i < hi ? '  ' : '';
+            chips.push(
+              <Text key={t.id} color={i === tabIdx ? theme.accent : theme.dim}>
+                [{i + 1}] {t.title}{gap}
+              </Text>,
+            );
+          }
+          if (hi < notesIdx) {
+            chips.push(
+              <Text key="trail" color={theme.faint}> ›</Text>,
+            );
+          }
+          return chips;
+        })()}
       </Box>
       {/* Body — FIXED height + overflow hidden + scroll window (Help.jsx
           pattern). A miscount clips; it never overlaps or drops rows. */}

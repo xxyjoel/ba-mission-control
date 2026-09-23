@@ -73,22 +73,52 @@ const withNineTabs = (frame) => {
   return frame.replace(re, '1–9$1 jump');
 };
 
+// Body-only compare: the tab strip now scrolls to keep the active label fully
+// visible (NOTES was clipping to "NOT"), so byte-identical strip frames are
+// no longer the gate. Strip the tab row and still demand the body match.
+function bodyAfterTabs(frame) {
+  const lines = String(frame || '').split('\n');
+  // Row with `[1] GENERAL` (or a scrolled window starting later) is the strip.
+  const i = lines.findIndex((l) => /\[\d+\]\s+[A-Z]/.test(strip(l)));
+  if (i < 0) return frame;
+  return lines.slice(i + 1).join('\n');
+}
+
 for (const rows of [40, 24]) {
   for (let t = 1; t <= 7; t++) {
-    test(`seamless: tab ${t} at ${rows} rows renders the pre-0420 frame (only the tab count differs)`, async () => {
+    test(`seamless: tab ${t} at ${rows} rows keeps the pre-0420 body (tab strip may scroll)`, async () => {
       const providers = fakes();
       const { lastFrame, unmount } = await open({ providers, rows }, [String(t)]);
-      assert.equal(lastFrame(), withNineTabs(BASE[`settings_r${rows}_tab${t}`]));
+      const got = bodyAfterTabs(lastFrame());
+      const want = bodyAfterTabs(withNineTabs(BASE[`settings_r${rows}_tab${t}`]));
+      assert.equal(got, want);
       assert.equal(providers[0].calls.auth + providers[1].calls.auth, 0, 'no auth probe outside SUBSCRIPTIONS');
       unmount();
     });
   }
   test(`seamless: NOTES at ${rows} rows moved to key 9 with an unchanged body`, async () => {
     const { lastFrame, unmount } = await open({ providers: fakes(), rows }, ['9']);
-    assert.equal(lastFrame(), withNineTabs(BASE[`settings_r${rows}_tab8`]));
+    const got = bodyAfterTabs(lastFrame());
+    const want = bodyAfterTabs(withNineTabs(BASE[`settings_r${rows}_tab8`]));
+    assert.equal(got, want);
+    assert.match(strip(lastFrame()), /\[9\] NOTES/, 'active NOTES label is fully visible');
     unmount();
   });
 }
+
+test('tab strip: active NOTES is fully visible (not clipped to NOT)', async () => {
+  const { lastFrame, unmount } = await open({ providers: fakes(), rows: 40 }, ['9']);
+  const f = strip(lastFrame());
+  assert.match(f, /\[9\] NOTES/);
+  assert.doesNotMatch(f, /\[9\] NOT(?:\s|$)/);
+  unmount();
+});
+
+test('tab strip: active SUBSCRIPTIONS is fully visible', async () => {
+  const { lastFrame, unmount } = await open({ providers: fakes(), rows: 40 }, ['8']);
+  assert.match(strip(lastFrame()), /\[8\] SUBSCRIPTIONS/);
+  unmount();
+});
 
 test('seamless: opening Settings never probes auth (boot and other tabs stay fast)', async () => {
   const providers = fakes();
