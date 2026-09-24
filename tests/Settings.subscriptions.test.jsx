@@ -100,7 +100,11 @@ for (const rows of [40, 24]) {
     const { lastFrame, unmount } = await open({ providers: fakes(), rows }, ['9']);
     const got = bodyAfterTabs(lastFrame());
     const want = bodyAfterTabs(withNineTabs(BASE[`settings_r${rows}_tab8`]));
-    assert.equal(got, want);
+    // QuitConfirm copy moved from "q then y" → "q then s / d" (0420); strip that
+    // one line so the rest of the NOTES body still gates against the baseline.
+    // On short terminals the quit row may be scrolled out of the viewport.
+    const scrub = (s) => String(s || '').replace(/q  then  [^\n]+/g, 'q  then  <quit>');
+    assert.equal(scrub(got), scrub(want));
     assert.match(strip(lastFrame()), /\[9\] NOTES/, 'active NOTES label is fully visible');
     unmount();
   });

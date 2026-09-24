@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseEvent, deriveCost } from '../server/jsonlConnector.mjs';
-import { MODELS, modelByCli } from '../tui/lib/models.js';
+import { MODELS, modelByCli, newestModelId } from '../tui/lib/models.js';
 import { TAIL_MAX, TAIL_TEXT_MAX, TAIL_CHARS_MAX, FLEET_LOG_LINES_MAX } from '../tui/lib/settings.js';
 
 // Expected cost derived from the CATALOG (single source of truth) — mirrors
@@ -581,7 +581,8 @@ test('deriveCost: unknown model with no recognizable family inherits newest opus
   const u = { input_tokens: 100 };
   const cost = deriveCost(u, 'made-up-model');
   assert.ok(cost > 0, '0408-M2: never $0');
-  assert.ok(Math.abs(cost - expectedCost(u, 'opus-4.8')) < 1e-9, `got ${cost}`);
+  // Falls through to newestModelId('opus') — currently opus-5.5 ($4/MTok in).
+  assert.ok(Math.abs(cost - expectedCost(u, newestModelId('opus'))) < 1e-9, `got ${cost}`);
 });
 
 test('deriveCost: missing usage → 0', () => {

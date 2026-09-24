@@ -85,8 +85,8 @@ test('Header: over-threshold count ignores a null context; only the session coun
   const props = { threshold: 150_000, nowStr: '12:00:00', sessionStr: '00:01:00', theme, auth: null, version: 'v' };
   const a = strip(frameOf(<Box width={240}><Header agents={claudeOnly} {...props} /></Box>));
   const b = strip(frameOf(<Box width={240}><Header agents={mixed} {...props} /></Box>));
-  assert.match(a, /over 150\.0k 1\/2/);
-  assert.match(b, /over 150\.0k 1\/3/);
+  assert.match(a, /ctx≥150\.0k 1\/2/);
+  assert.match(b, /ctx≥150\.0k 1\/3/);
   assert.equal(b.replace('3 sessions', '2 sessions').replace('work 2', 'work 1').replace('1/3', '1/2'), a);
 });
 

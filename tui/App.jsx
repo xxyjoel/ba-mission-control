@@ -55,7 +55,7 @@ import { dlog } from './lib/debugLog.js';
 import { postSlack } from './lib/slack.js';
 import { listRecentRepos } from '../server/repos.mjs';
 import { transcriptPathFor, TRANSCRIPT_BASE_DIR } from '../server/agent.mjs';
-import { getConfigDir } from './lib/configDir.js';
+import { getConfigDir, isSandboxed } from './lib/configDir.js';
 import { isDebugKeysActive, setDebugKeysActive, clearDebugKeysLog, DEBUG_KEYS_PATH } from './lib/debugKeys.js';
 import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPathFor } from './lib/projectMemory.js';
 import { isPluginEnabled } from './lib/plugins.js';
@@ -693,9 +693,11 @@ export default function App({
   // ── Claude CLI upgrade → re-probe aliases ───────────────
   // Brew upgrades do not restart mc. Boot already runs autoProbeOnVersionChange;
   // also check periodically so a CLI bump while mc is open still refreshes the
-  // model list without waiting for a quit/relaunch.
+  // model list without waiting for a quit/relaunch. Skip in a sandboxed config
+  // dir (tests / MC_CONFIG_DIR) unless MC_SYNC_MODELS=1 — same gate as boot.
   useEffect(() => {
     if (settings.syncModelsOnBoot === false) return undefined;
+    if (isSandboxed() && process.env.MC_SYNC_MODELS !== '1') return undefined;
     let busy = false;
     const check = async () => {
       if (busy) return;
