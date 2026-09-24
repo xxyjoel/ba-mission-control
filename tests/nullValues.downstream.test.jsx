@@ -90,7 +90,10 @@ test('Header: over-threshold count ignores a null context; only the session coun
   assert.equal(b.replace('3 sessions', '2 sessions').replace('work 2', 'work 1').replace('1/3', '1/2'), a);
 });
 
-test('Dashboard: Claude rows unchanged by a null-valued slot; its row shows placeholders, no NaN', () => {
+test('Dashboard: Claude rows unchanged by a null-valued slot; its row shows placeholders, no NaN', (t) => {
+  // workingStartTs → elapsed clock; freeze Date.now so two back-to-back
+  // renders cannot disagree by one second (macOS · node 22 CI flake).
+  t.mock.method(Date, 'now', () => 1_700_000_000_000);
   registerProviderModels('cursor', [{ id: 'composer-2.5', label: 'Composer 2.5' }]);
   try {
     const props = { threshold: 150_000, theme, weekCost: 4.2, dayCost: 1, budget: 0, initialSlot: 1, width: 120 };

@@ -260,15 +260,17 @@ test('disconnect confirms y/n, runs logout argv, reports, and re-probes', async 
   r.stdin.write('y'); await tick(80);
   assert.deepEqual(logouts, [['cursor-agent', ['logout']]]);
   assert.deepEqual(disconnected, ['cursor']);
-  assert.equal(providers[1].calls.auth, 2, 're-probed after logout');
-  // Re-probe is async — wait until the status leaves "checking…" (CI macOS
-  // was still mid-probe at 80ms and failed the ○ not connected assert).
+  // Logout → onDisconnected → probeAuth is async. Wait for the second auth
+  // call AND the status leave "checking…" (macOS CI was still at calls=1
+  // after 80ms; another cell failed mid-probe on the ○ assert).
   let frame = '';
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 40; i++) {
     await tick(40);
+    if (providers[1].calls.auth < 2) continue;
     frame = strip(r.lastFrame());
     if (/Cursor\s+○ not connected/.test(frame)) break;
   }
+  assert.equal(providers[1].calls.auth, 2, 're-probed after logout');
   assert.match(frame, /Cursor\s+○ not connected\s+↵ connect/);
   r.unmount();
 });
