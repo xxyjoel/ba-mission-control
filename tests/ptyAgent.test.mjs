@@ -610,7 +610,8 @@ test('bg-agent claim on exit: actionable error, NO restart budget burned', () =>
   assert.equal(p.status, 'error');
   assert.equal(p.restartTimer, null, 'no auto-restart scheduled — every retry fails identically');
   const tail = p.tail.map((l) => l.text).join('\n');
-  assert.match(tail, /background agent/);
+  assert.match(tail, /background session/);
+  assert.match(tail, /claude stop/);
   assert.match(tail, /:resume/);
   p.kill();
 });

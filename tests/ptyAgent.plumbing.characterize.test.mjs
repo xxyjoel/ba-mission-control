@@ -452,9 +452,10 @@ test('held-by-agent refusal within the spawn window: error, no restart, remediat
   p.fireExit({ exitCode: 1 });
   assert.equal(agent.status, 'error');
   assert.equal(agent.restartTimer, null);
-  assert.equal(agent.activity, 'held by a background agent — not retrying');
-  assert.match(tailTexts(agent).at(-1), /^err:session is held by a claude background agent — /);
-  assert.match(tailTexts(agent).at(-1), /then :resume this slot$/);
+  assert.equal(agent.activity, 'held by a background session — not retrying');
+  assert.match(tailTexts(agent).at(-1), /^err:session is held by a claude background session — /);
+  assert.match(tailTexts(agent).at(-1), /claude stop/);
+  assert.match(tailTexts(agent).at(-1), /:resume this slot/);
 });
 
 test('the refusal phrase after the 20s window is a normal transient crash', (t) => {
