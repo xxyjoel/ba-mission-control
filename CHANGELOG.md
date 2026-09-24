@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-09-24
+
+### Added
+- **Subscriptions — run Cursor next to Claude.** Settings → SUBSCRIPTIONS
+  connects Cursor (`cursor-agent`); New Session picks a provider when two are
+  enabled; a Cursor slot zooms into the real interactive Cursor TUI. Same
+  fleet grid and card shape; cost/tokens stay honestly unmeasured (`$-.--` /
+  `-`) until optional usage sync.
+- **Per-subscription Aggregate / Header** when more than one provider is on —
+  each row keeps its own plan meters; nothing is blended across vendors.
+
+### Fixed
+- **Zoom/Card `ctx ?%` and missing model chip after resume.** Launch/`resume`
+  often stores a CLI id (`claude-opus-5`) as `model`; resolve that back to the
+  catalog so maxCtx and `[OPUS …]` render.
+- **`:resume-all` looked like a crash when Claude held a “background session”.**
+  Claude 2.1.273 says `background session` (not only `background agent`); the
+  refusal classifier now matches and tips `claude stop <id>` instead of
+  auto-restarting into the same refusal.
+
 ## [1.1.17] — 2026-09-21
 
 1.1.16 never published either — its macOS job wedged and GitHub killed it at the
