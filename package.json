@@ -1,6 +1,6 @@
 {
   "name": "@bluearch/mission-control",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "BlueArch Mission Control — keyboard-first terminal TUI for real Claude Code agents. Up to 64 live at once, every conversation restored with one command, per-session cost measured and hard spend caps that refuse to go past them. By BlueArch, a cloud governance and efficiency company.",
   "license": "AGPL-3.0-only",
