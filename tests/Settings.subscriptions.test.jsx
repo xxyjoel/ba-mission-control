@@ -261,7 +261,15 @@ test('disconnect confirms y/n, runs logout argv, reports, and re-probes', async 
   assert.deepEqual(logouts, [['cursor-agent', ['logout']]]);
   assert.deepEqual(disconnected, ['cursor']);
   assert.equal(providers[1].calls.auth, 2, 're-probed after logout');
-  assert.match(strip(r.lastFrame()), /Cursor\s+○ not connected\s+↵ connect/);
+  // Re-probe is async — wait until the status leaves "checking…" (CI macOS
+  // was still mid-probe at 80ms and failed the ○ not connected assert).
+  let frame = '';
+  for (let i = 0; i < 20; i++) {
+    await tick(40);
+    frame = strip(r.lastFrame());
+    if (/Cursor\s+○ not connected/.test(frame)) break;
+  }
+  assert.match(frame, /Cursor\s+○ not connected\s+↵ connect/);
   r.unmount();
 });
 
