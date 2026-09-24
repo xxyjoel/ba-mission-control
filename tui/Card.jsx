@@ -26,7 +26,7 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
-import { MODELS, modelColor, modelByCli } from './lib/models.js';
+import { modelColor, resolveAgentModel } from './lib/models.js';
 import { barCells, sparkLine, fmtK, fmtMem, trunc, humanize, fmtDurShort, UNKNOWN, UNMEASURED, fmtMoneyMeasured, fmtKMeasured } from './lib/format.js';
 import { readProjectHealth, healthColor, healthScoreText } from './lib/projectHealth.js';
 
@@ -121,10 +121,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // Effective model = what claude is CURRENTLY on. A mid-session `/model`
   // switch only updates agent.resolvedModel (cli id), not agent.model (launch
   // model), so prefer the resolved catalog entry — keeps the card label,
-  // color and ctx% denominator in sync with the switch. See modelByCli().
-  const resolved = modelByCli(agent.resolvedModel);
-  const model = resolved || MODELS[agent.model];
-  const modelId = resolved ? resolved.id : agent.model;
+  // color and ctx% denominator in sync with the switch. `auto` launches
+  // resolve through resolveAgentModel so ctx% is not `?%`.
+  const model = resolveAgentModel(agent);
+  const modelId = model?.id || agent.model;
   // 0409: ctx% needs a DENOMINATOR, and the only source of one is the model's
   // maxCtx. When claude reports a model the catalog has never heard of there is
   // no denominator — the old `: 0` then rendered a confident `0%` beside a real

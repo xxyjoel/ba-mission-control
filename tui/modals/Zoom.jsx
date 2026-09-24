@@ -24,7 +24,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
-import { MODELS, modelColor, modelByCli } from '../lib/models.js';
+import { MODELS, modelColor, resolveAgentModel, modelByCli, resolveModelId } from '../lib/models.js';
 import { barCells, fmtK, fmtMoney, fmtMoneyMeasured, fmtKMeasured, fmtDuration, humanize, trunc, UNKNOWN, UNMEASURED } from '../lib/format.js';
 import { zoomInnerWidth } from '../lib/zoomGeometry.js';
 import { readProjectHealth, healthColor, healthScoreText } from '../lib/projectHealth.js';
@@ -99,15 +99,23 @@ export default function Zoom({
   // Effective model = the model claude is CURRENTLY on. A mid-session `/model`
   // switch only updates agent.resolvedModel (the cli id), never agent.model
   // (the launch model) — so prefer the resolved catalog entry and fall back
-  // to the launch model. This is what makes the header label, color, and
-  // maxCtx track a /model switch instead of showing the stale launch model.
-  const resolved = modelByCli(agent.resolvedModel);
-  const model = resolved || MODELS[agent.model];
-  const modelId = resolved ? resolved.id : agent.model;
-  // True only when claude reports a cli model the catalog doesn't know — a
-  // genuine drift/unknown model, not an intentional in-catalog /model switch.
-  const unknownResolved = agent.resolvedModel && !resolved
-    && (!MODELS[agent.model] || agent.resolvedModel !== MODELS[agent.model].cliModel);
+  // through resolveModelId(`auto` → newest). See resolveAgentModel().
+  // Resume often stores a CLI id in agent.model; resolveAgentModel maps that
+  // back to a catalog label so the header never loses `[OPUS …]`.
+  const model = resolveAgentModel(agent);
+  const modelId = model?.id || agent.model;
+  const modelLabel = model?.label
+    || (agent.resolvedModel ? trunc(humanize(String(agent.resolvedModel)), 18) : '')
+    || (agent.model ? trunc(humanize(String(agent.model)), 18) : '')
+    || '—';
+  // Warn when claude reports a CLI id that is not an exact catalog match
+  // (and is not simply the launch model's cli id).
+  const launch = modelByCli(agent.model)
+    || MODELS[resolveModelId(agent.model)]
+    || MODELS[agent.model];
+  const unknownResolved = !!(agent.resolvedModel
+    && !modelByCli(agent.resolvedModel)
+    && (!launch || agent.resolvedModel !== launch.cliModel));
   // 0409: an unknown model has no maxCtx, so there is no ctx DENOMINATOR. The
   // old `: 0` rendered the compact stats line as `ctx 142k/0  0%` — a real
   // token count over a fabricated limit, reported as 0% used. Gate every ctx
@@ -235,7 +243,7 @@ export default function Zoom({
     + `${statusGlyph} ${statusWord}`.length;
   const nameStr = trunc(humanize(agent.name || '—'), 24);
   const leftFixedW = `[${agent.slot}] `.length + nameStr.length + 2
-    + (model ? `[${model.label}]  `.length : 0)
+    + `[${modelLabel}]  `.length
     + (resolvedText ? `⚠ resolved ${resolvedText}  `.length : 0)
     + 2; // '⎇ '
   const branchStr = trunc(humanize(agent.branch || '—'),
@@ -263,9 +271,7 @@ export default function Zoom({
         <Box flexShrink={0}>
           <Text color={theme.accent}>[{agent.slot}] </Text>
           <Text color={theme.accent}>{nameStr}  </Text>
-          {model && (
-            <Text color={modelColor(modelId, theme)}>[{model.label}]  </Text>
-          )}
+          <Text color={modelColor(modelId, theme)}>[{modelLabel}]  </Text>
           {/* Only warn when claude's resolved cli model is unknown to the catalog
               (genuine drift). An in-catalog /model switch updates the [label]
               above instead of showing a warning. resolvedText is humanized +
@@ -325,13 +331,22 @@ export default function Zoom({
         <Text color={theme.dim}> (wk </Text>
         <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
         <Text color={theme.dim}>)</Text>
-        {usage && (
+        {usage && (usage.fiveHour?.usedPct != null || usage.sevenDay?.usedPct != null) && (
           <>
             <Text color={theme.faint}>  ·  </Text>
-            <Text color={theme.dim}>5h </Text>
-            <Text color={pctColor(usage.fiveHour.usedPct, theme)}>{usage.fiveHour.usedPct.toFixed(0)}%</Text>
-            <Text color={theme.dim}>  7d </Text>
-            <Text color={pctColor(usage.sevenDay.usedPct, theme)}>{usage.sevenDay.usedPct.toFixed(0)}%</Text>
+            {usage.fiveHour?.usedPct != null && (
+              <>
+                <Text color={theme.dim}>5h </Text>
+                <Text color={pctColor(usage.fiveHour.usedPct, theme)}>{usage.fiveHour.usedPct.toFixed(0)}%</Text>
+              </>
+            )}
+            {usage.fiveHour?.usedPct != null && usage.sevenDay?.usedPct != null && <Text color={theme.dim}>  </Text>}
+            {usage.sevenDay?.usedPct != null && (
+              <>
+                <Text color={theme.dim}>7d </Text>
+                <Text color={pctColor(usage.sevenDay.usedPct, theme)}>{usage.sevenDay.usedPct.toFixed(0)}%</Text>
+              </>
+            )}
           </>
         )}
         {health && (

@@ -31,6 +31,7 @@ const SECTIONS = [
     ['Kill (uppercase K twice · 3s arm)', 'K K   or  :kill!'],
     ['Approve pending action (only while waiting)', 'a'],
     ['Cycle perm (plan → auto → acceptEdits)', 'shift+tab'],
+    ['Parallel agents on one repo', 'prefer git worktree — same checkout races files'],
   ]},
   { title: 'ZOOM (focused session)', views: ['zoom'], rows: [
     ['Exit zoom', 'ctrl+q'],

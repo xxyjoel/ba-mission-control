@@ -23,7 +23,12 @@ function contextLines({ auth, agents, usage }) {
     }
   }
   if (usage) {
-    lines.push(`*plan usage:* 5h ${usage.fiveHour.usedPct.toFixed(0)}% · 7d ${usage.sevenDay.usedPct.toFixed(0)}%`);
+    const five = usage.fiveHour?.usedPct;
+    const seven = usage.sevenDay?.usedPct;
+    const bits = [];
+    if (five != null) bits.push(`5h ${Number(five).toFixed(0)}%`);
+    if (seven != null) bits.push(`7d ${Number(seven).toFixed(0)}%`);
+    if (bits.length) lines.push(`*plan usage:* ${bits.join(' · ')}`);
   }
   return lines;
 }

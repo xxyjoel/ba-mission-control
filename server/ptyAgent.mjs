@@ -365,9 +365,9 @@ export class PtyAgent extends PtyCore {
         : 'likely started from claude.ai or orphaned by a force-close';
       this.appendTail({
         kind: 'err',
-        text: `session is held by a claude background agent — ${ownerStr}. Wait for it to finish (or \`claude agents\` to attach/stop it), then :resume this slot`,
+        text: `session is held by a claude background session — ${ownerStr}. \`claude stop ${String(this.sessionId || '').slice(0, 8)}\` then :resume this slot (or \`claude attach ${String(this.sessionId || '').slice(0, 8)}\` outside mc)`,
       });
-      this.activity = 'held by a background agent — not retrying';
+      this.activity = 'held by a background session — not retrying';
       this.status = 'error';
       this.emit('change');
       return true;

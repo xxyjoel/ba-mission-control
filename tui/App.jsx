@@ -11,8 +11,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve as pathResolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 
 import Header   from './Header.jsx';
 import Aggregate from './Aggregate.jsx';
@@ -37,7 +37,7 @@ import { listProviders, enabledProviders, getProvider, cursorModeFor } from '../
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
 import { MODELS, resolveModelId, modelIds, modelIds as catalogModelIds } from './lib/models.js';
-import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
+import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion, autoProbeOnVersionChange, loadModelCache } from './lib/modelProbe.js';
 import { loadSettings, saveSettings, FLEET_LOG_LINES_MAX } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows, MAX_TOAST_ROWS } from './lib/gridLayout.js';
@@ -47,7 +47,7 @@ import { CostStore } from './lib/costStore.js';
 import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
 import { getTemplate, listTemplates, templateSessionProvider } from './lib/templateStore.js';
 import { probeAuth, authSummary } from './lib/auth.js';
-import { versionLine } from './lib/version.js';
+import { versionLine, VERSION } from './lib/version.js';
 import { removeSession } from '../server/claudeSessions.mjs';
 import { probeClaudeVersion } from './lib/claudeVersion.js';
 import { readUsage, fmtReset } from './lib/usage.js';
@@ -168,7 +168,10 @@ function modelsForProvider(id) {
   if (id === 'claude') return modelIds();
   try { return (modelIds(id) || []).filter(k => typeof k === 'string' && k.startsWith(`${id}:`)); } catch { return []; }
 }
-const providerModelLabel = (id) => MODELS[id]?.label || String(id).replace(/^[a-z]+:/, '');
+const providerModelLabel = (id) => {
+  if (!id) return '—';
+  return MODELS[id]?.label || String(id).replace(/^[a-z]+:/, '') || '—';
+};
 
 // `providers`, `loginSpawn` and the onProvider* callbacks are test seams;
 // main.jsx passes none of them.
@@ -374,11 +377,11 @@ export default function App({
   useEffect(() => { if (modal === 'new') refreshRepos(); }, [modal]);
 
   // ── Subscriptions (0420) ────────────────────────────────
-  // New Session offers a provider only when it is enabled in settings AND its
-  // last known auth probe was ok. Claude is the baseline and is always offered.
-  // Probes are lazy: Settings → SUBSCRIPTIONS reports what it learns, and the
-  // first New Session open probes any enabled provider still unknown. Until a
-  // result lands the provider is treated as unavailable.
+  // New Session offers a provider when it is enabled. Claude is always on.
+  // Auth is probed as soon as a provider is enabled (boot / toggle / Settings
+  // discovery) — not deferred until New Session — so the subscription row is
+  // present on the first paint. Enabled + not-yet-probed is shown optimistically;
+  // a failed probe removes it. Settings → SUBSCRIPTIONS still refreshes the cache.
   const [providerAuth, setProviderAuth] = useState({}); // id → { ok }
   const [loginProviderId, setLoginProviderId] = useState(null);
   const [settingsTab, setSettingsTab] = useState(null);
@@ -387,9 +390,15 @@ export default function App({
   const probingRef = useRef(new Set());
   const enabledIds = new Set(enabledProviders(settings).map(p => p.id));
   const enabledList = providerList.filter(p => enabledIds.has(p.id));
-  const usableProviders = enabledList.filter(p => p.id === 'claude' || providerAuth[p.id]?.ok);
+  const enabledKey = enabledList.map(p => p.id).join(',');
+  const usableProviders = enabledList.filter((p) => {
+    if (p.id === 'claude') return true;
+    const auth = providerAuth[p.id];
+    // Unknown → show now (avoids the half-second pop-in). Hide only after ok:false.
+    if (!auth) return true;
+    return !!auth.ok;
+  });
   useEffect(() => {
-    if (modal !== 'new') return;
     for (const p of enabledList) {
       if (p.id === 'claude' || providerAuth[p.id] || probingRef.current.has(p.id)) continue;
       probingRef.current.add(p.id);
@@ -399,8 +408,36 @@ export default function App({
         .then((r) => { probingRef.current.delete(p.id); setProviderAuth(a => ({ ...a, [p.id]: r })); });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modal]);
+  }, [enabledKey]);
   const providerLabel = (id) => providerList.find(p => p.id === id)?.label || id;
+  // Aggregate / Header strip: every ENABLED subscription, including Cursor
+  // before/without a successful probe (shows ✕ until connected). Filtering to
+  // auth-ok only made the Cursor row vanish and collapsed Aggregate to the
+  // Claude-only classic line — no connection distinction at all.
+  const headerSubscriptions = enabledList.map((p) => {
+    if (p.id === 'claude') {
+      return {
+        id: 'claude',
+        short: p.short || 'CC',
+        label: p.label || 'Claude Code',
+        ok: !!auth?.ok,
+        detail: auth?.ok
+          ? (auth.subscription || auth.email || auth.method || null)
+          : 'not signed in',
+      };
+    }
+    const st = providerAuth[p.id];
+    const ok = !!st?.ok;
+    return {
+      id: p.id,
+      short: p.short || p.id,
+      label: p.label || p.id,
+      ok,
+      detail: ok
+        ? (st.email || st.plan || 'connected')
+        : (st ? 'not signed in' : 'checking…'),
+    };
+  });
   const onSubscriptionProbed = (id, st) => {
     const ok = st?.state === 'connected';
     setProviderAuth(a => ({ ...a, [id]: { ok } }));
@@ -652,6 +689,37 @@ export default function App({
     }, 8000);
     return () => clearInterval(t);
   }, []);
+
+  // ── Claude CLI upgrade → re-probe aliases ───────────────
+  // Brew upgrades do not restart mc. Boot already runs autoProbeOnVersionChange;
+  // also check periodically so a CLI bump while mc is open still refreshes the
+  // model list without waiting for a quit/relaunch.
+  useEffect(() => {
+    if (settings.syncModelsOnBoot === false) return undefined;
+    let busy = false;
+    const check = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const stamped = loadModelCache()?.claudeVersion || null;
+        const version = await getClaudeVersion();
+        if (!version || version === stamped) return;
+        pushToast(`claude ${stamped || '?'} → ${version} · probing models…`, 'info');
+        const r = await autoProbeOnVersionChange(MODELS);
+        if (r?.probed) {
+          const n = (r.added?.length || 0) + (r.updated?.length || 0);
+          pushToast(
+            n ? `models refreshed · ${n} change${n === 1 ? '' : 's'}` : `models probed · claude ${version}`,
+            'ok',
+          );
+        }
+      } catch { /* never block the UI */ }
+      finally { busy = false; }
+    };
+    check();
+    const t = setInterval(check, 60_000);
+    return () => clearInterval(t);
+  }, [settings.syncModelsOnBoot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Derived ─────────────────────────────────────────────
   // costStore.weekCost is the FLEET total. It's shown once, authoritatively, in
@@ -1538,8 +1606,12 @@ export default function App({
           pushToast(`no usage data — claude hasn't written ~/.claude/abtop-rate-limits.json yet`, 'warn');
           return null;
         }
-        pushToast(`5h: ${u.fiveHour.usedPct.toFixed(0)}%  (resets in ${fmtReset(u.fiveHour.resetsAt) || '?'})`, u.fiveHour.usedPct >= 85 ? 'warn' : 'ok');
-        pushToast(`7d: ${u.sevenDay.usedPct.toFixed(0)}%  (resets in ${fmtReset(u.sevenDay.resetsAt) || '?'})`, u.sevenDay.usedPct >= 85 ? 'warn' : 'ok');
+        const five = u.fiveHour?.usedPct;
+        const seven = u.sevenDay?.usedPct;
+        if (five == null) pushToast(`5h: —  (claude has not written a five-hour window yet)`, 'info');
+        else pushToast(`5h: ${five.toFixed(0)}%  (resets in ${fmtReset(u.fiveHour.resetsAt) || '?'})`, five >= 85 ? 'warn' : 'ok');
+        if (seven == null) pushToast(`7d: —`, 'info');
+        else pushToast(`7d: ${seven.toFixed(0)}%  (resets in ${fmtReset(u.sevenDay.resetsAt) || '?'}) · from ~/.claude/abtop-rate-limits.json`, seven >= 85 ? 'warn' : 'ok');
         return null;
       }
       case 'repos': {
@@ -1938,6 +2010,20 @@ export default function App({
         const label = MODELS[model]?.label || String(model || '').replace(/^[^:]+:/, '');
         pushToast(`launched slot ${slot} · ${getProvider(provider)?.label || provider} · ${label} · ${perm}`, perm === 'force' ? 'warn' : 'ok');
       }
+      // Soft warn: two agents on the same checkout race the working tree.
+      // Git commits are truth for history — not for concurrent mid-edit writers.
+      try {
+        const resolved = realpathSync(pathResolve(repoPath));
+        const peer = (fleet.snapshot()?.agents || []).find((a) => {
+          if (a.status === 'empty' || a.slot === slot || !a.cwd) return false;
+          try { return realpathSync(pathResolve(a.cwd)) === resolved; }
+          catch { return pathResolve(a.cwd) === pathResolve(repoPath); }
+        });
+        if (peer) {
+          const short = String(peer.cwd || '').replace(homedir(), '~');
+          pushToast(`slot ${peer.slot} already in ${short} — prefer a worktree or expect file races`, 'warn');
+        }
+      } catch { /* path unreadable — skip warn */ }
     } catch (e) {
       pushToast(`launch failed: ${e?.message || String(e)}`, 'error');
     }
@@ -2392,8 +2478,8 @@ export default function App({
 
   return (
     <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-      <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} version={versionLine()} />
-      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} background={snapshot.background} />
+      <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} version={VERSION} subscriptions={headerSubscriptions} />
+      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} background={snapshot.background} providers={headerSubscriptions} cursorUsageSync={!!settings.cursorUsageSync} />
 
       {/* Grid of cards — empty slots are hidden; live cards autosize to
           fill the row. Filter pass dims non-matching slots. */}

@@ -18,6 +18,14 @@ test('recognises claude 2.1.267: "belongs to another running Claude Code session
   assert.equal(classifyEarlyExit(out, SOON), 'held-by-agent');
 });
 
+test('recognises claude 2.1.273: "running as a background session"', () => {
+  // Measured 2026-09-24 on labor-market-app after quit + :resume-all — the
+  // session was still a daemon job (state: done, pid still held). Prior
+  // patterns only said "background agent", so this refused as a crash.
+  const out = 'Error: Session b0398ccf-0e92-43fe-88f8-968aa2a58152 is running as a background session (b0398ccf). Run `claude attach b0398ccf` to open it, or `claude stop b0398ccf` first to resume it here.';
+  assert.equal(classifyEarlyExit(out, SOON), 'held-by-agent');
+});
+
 test('recognises the generic lock wording too', () => {
   assert.equal(classifyEarlyExit('fatal: locked by another process', SOON), 'held-by-agent');
 });

@@ -26,6 +26,12 @@ const JOBS_DIR = join(homedir(), '.claude', 'jobs');
 const REFUSAL_RX = new RegExp(
   [
     '(currently|already|is) (running|in use) as a background agent',
+    // claude 2.1.273+ (measured 2026-09-24 on labor-market-app):
+    // "Session <uuid> is running as a background session (<id8>). Run
+    // `claude attach …` … or `claude stop …` first to resume it here."
+    // "session" ≠ "agent" — without this the slot falls through to
+    // auto-restart and the user sees a crash instead of a held-session tip.
+    '(currently|already|is) (running|in use) as a background session',
     'held by a background agent',
     'in use by (a|another) (background agent|agent|process)',
     'session is (already )?(running|in use|active) (elsewhere|in another)',

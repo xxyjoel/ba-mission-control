@@ -137,6 +137,14 @@ export default function NewSession({
     if (want !== provider) { setProvider(want); setModel(defaultFor(want)); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerIds, initialProvider]);
+  // Keep the cycler on a model that belongs to the current provider — e.g. after
+  // switching Claude ↔ Cursor, or when the catalog reloads under the same provider.
+  useEffect(() => {
+    const ids = modelsFor(provider);
+    if (!ids.length) return;
+    if (!model || !ids.includes(model)) setModel(defaultFor(provider));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, providerIds]);
   const [fsChildren, setFsChildren] = useState([]);
   const [error, setError] = useState(null);
   // Which field owns arrow keys. 'path' (default) → TextField gets ←/→

@@ -71,17 +71,18 @@ test('only Claude enabled: New Session has no subscription row and Cursor is nev
   await app.unmount();
 });
 
-test('Cursor enabled + connected: the probe runs lazily on New Session and the row appears', async () => {
+test('Cursor enabled + connected: subscription row is on the first New Session paint', async () => {
   writeSettings({ subscriptions_cursor_enabled: true, defaultProvider: 'cursor', cursorDefaultModel: 'auto' });
   const cursor = fakeProvider('cursor', { ok: true, email: 'c@x' });
   const app = await boot({ providers: [fakeProvider('claude', { ok: true }), cursor] });
-  assert.equal(cursor.calls, 0, 'never probed at boot');
-  await app.press('n');
+  // Enabled providers are probed at boot; the row does not wait on New Session.
   await tick(60);
+  assert.equal(cursor.calls, 1, 'probed once when enabled at boot');
+  await app.press('n');
+  // No extra tick — first frame after `n` must already show the row.
   const f = app.frame();
   assert.match(f, /subscription ◀ Cursor ▶/, 'initialProvider = settings.defaultProvider');
   assert.match(f, /model ◀ auto ▶/, 'cursor default model = cursor:<cursorDefaultModel>, shown without the namespace');
-  assert.equal(cursor.calls, 1);
   // Reopening uses the cached result — no second probe.
   await app.press('\x1b');
   await app.press('n');

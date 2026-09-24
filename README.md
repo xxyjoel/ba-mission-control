@@ -321,9 +321,29 @@ Each agent has exactly one status from this six-value enum (`server/agent.mjs`):
 | `error`   | crashed or API failure — auto-restart may retry |
 | `empty`   | slot is vacant, no agent assigned |
 
-The fleet header (`Header.jsx`) shows live counts for `work / wait / paused
-/ idle / err` plus the over-context-threshold count and an aggregate
-`NOMINAL / AWAITING / DEGRADED` pill.
+The fleet header (`Header.jsx`) shows live counts for `work / wait / err`
+plus (when any session is live) how many are over the context threshold
+(`ctx≥600k 0/3` = zero of three sessions above 600k tokens of context), and
+an aggregate `NOMINAL / AWAITING / DEGRADED` pill. Session uptime and UTC
+clock sit early in the strip so they survive a narrow resize. When two or
+more subscriptions are connected, the header says **all sessions** (count
+alongside); each provider’s green ◆ active marker lives on its Aggregate
+row, not as CC/CUR chips in the header.
+
+The Aggregate line under the header is Claude-only (tokens, session/week
+cost, 5h/7d plan %) when only Claude is connected. With multiple
+subscriptions it splits into **one Aggregate row per subscription** — each
+provider keeps its own meters (Claude’s rolling plan windows stay on the Claude
+row; Cursor shows measured $ / tokens when usage sync is on, otherwise
+`sync off` / `$-.--`). Metrics are never blended across providers whose
+baselines do not match.
+
+Two live slots may share a project path; transcripts and PTYs stay
+isolated, but the working tree and git index are shared. Prefer
+`git worktree` (or careful sequencing) for parallel writers — git commits
+are the source of truth for history, not for concurrent mid-edit races.
+Launching into a cwd already used by another live slot shows a soft warn
+toast.
 
 **Not states (derived indicators):**
 
@@ -636,8 +656,8 @@ bin/
 tui/
   main.jsx            Boot: constructs Fleet, renders <App/>, wires shutdown
   App.jsx             Top-level: hotkeys, focus, modal routing, fleet sub
-  Header.jsx          Top status strip
-  Aggregate.jsx       Token/cost line + week budget bar + fleet sparkline
+  Header.jsx          Top status strip (+ connected subscription chips)
+  Aggregate.jsx       Token/cost line (per-sub when multi-provider)
   Card.jsx            One agent tile
   FleetLog.jsx        Bottom pane — aggregated activity stream
   StatusBar.jsx       Vim-style status bar
