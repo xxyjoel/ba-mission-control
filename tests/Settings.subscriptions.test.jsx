@@ -67,6 +67,17 @@ async function open(props = {}, keys = []) {
   return { ...inst, writes };
 }
 
+/** Poll until SUBSCRIPTIONS status rows leave "◌ checking…" (async probe). */
+async function waitProbesSettled(getFrame, { tries = 50, ms = 40 } = {}) {
+  let frame = '';
+  for (let i = 0; i < tries; i++) {
+    await tick(ms);
+    frame = strip(typeof getFrame === 'function' ? getFrame() : getFrame);
+    if (!/◌ checking…/.test(frame)) return frame;
+  }
+  assert.fail(`probes still checking after ${(tries * ms)}ms:\n${frame}`);
+}
+
 const withNineTabs = (frame) => {
   const re = /1–8((?:\x1b\[[0-9;]*m)*) jump/;
   assert.match(frame, re, 'baseline footer carries the tab count');
@@ -149,16 +160,15 @@ test('status rows show checking… until the probe resolves', async () => {
   const { lastFrame, unmount } = await open({ providers }, ['8']);
   assert.match(strip(lastFrame()), /Cursor\s+◌ checking…/);
   release();
-  await tick(60);
-  assert.match(strip(lastFrame()), /Cursor\s+● connected · c@example\.com\s+↵ disconnect/);
+  const f = await waitProbesSettled(lastFrame);
+  assert.match(f, /Cursor\s+● connected · c@example\.com\s+↵ disconnect/);
   unmount();
 });
 
 test('connected state: account, plan and a disconnect action', async () => {
   const providers = fakes({ auth: { ok: true, email: 'c@example.com', plan: 'pro' } });
   const { lastFrame, unmount } = await open({ providers }, ['8']);
-  await tick(60);
-  const f = strip(lastFrame());
+  const f = await waitProbesSettled(lastFrame);
   assert.match(f, /▶ Claude Code\s+● connected · joel@example\.com · max/);
   assert.match(f, /Cursor\s+● connected · c@example\.com · pro\s+↵ disconnect/);
   unmount();
@@ -167,24 +177,22 @@ test('connected state: account, plan and a disconnect action', async () => {
 test('not-connected state offers ↵ connect', async () => {
   const providers = fakes({ auth: { ok: false, email: null, plan: null, error: 'not logged in' } });
   const { lastFrame, unmount } = await open({ providers }, ['8']);
-  await tick(60);
-  assert.match(strip(lastFrame()), /Cursor\s+○ not connected\s+↵ connect/);
+  assert.match(await waitProbesSettled(lastFrame), /Cursor\s+○ not connected\s+↵ connect/);
   unmount();
 });
 
 test('not-installed state names the missing binary and skips the auth probe', async () => {
   const providers = fakes({ installed: false });
   const { lastFrame, unmount } = await open({ providers }, ['8']);
-  await tick(60);
-  assert.match(strip(lastFrame()), /Cursor\s+○ not installed — install cursor-agent/);
+  assert.match(await waitProbesSettled(lastFrame), /Cursor\s+○ not installed — install cursor-agent/);
   assert.equal(providers[1].calls.auth, 0);
   unmount();
 });
 
 test('probes run once per open: leaving and re-entering the tab does not re-probe', async () => {
   const providers = fakes();
-  const { unmount } = await open({ providers }, ['8', '1', '8', '\t', '\t']);
-  await tick(60);
+  const { lastFrame, unmount } = await open({ providers }, ['8', '1', '8', '\t', '\t']);
+  await waitProbesSettled(lastFrame);
   assert.equal(providers[0].calls.auth, 1);
   assert.equal(providers[1].calls.auth, 1);
   unmount();
@@ -192,15 +200,15 @@ test('probes run once per open: leaving and re-entering the tab does not re-prob
 
 test('probe results are reported upward so App can cache them', async () => {
   const seen = [];
-  const { unmount } = await open({ providers: fakes(), onProbed: (id, st) => seen.push([id, st.state]) }, ['8']);
-  await tick(60);
+  const { lastFrame, unmount } = await open({ providers: fakes(), onProbed: (id, st) => seen.push([id, st.state]) }, ['8']);
+  await waitProbesSettled(lastFrame);
   assert.deepEqual(seen.sort(), [['claude', 'connected'], ['cursor', 'connected']]);
   unmount();
 });
 
 test('enabling Cursor while it is not installed does not flip the toggle', async () => {
   const r = await open({ providers: fakes({ installed: false }) }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   for (const k of ['j', 'j', ' ', '\x1b[C']) { r.stdin.write(k); await tick(); }
   assert.equal(r.writes.filter(w => w.subscriptions_cursor_enabled === true).length, 0);
   const f = strip(r.lastFrame());
@@ -211,7 +219,7 @@ test('enabling Cursor while it is not installed does not flip the toggle', async
 
 test('enabling Cursor when installed flips the toggle', async () => {
   const r = await open({ providers: fakes({ auth: { ok: false } }) }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   for (const k of ['j', 'j', ' ']) { r.stdin.write(k); await tick(); }
   assert.equal(r.writes.at(-1).subscriptions_cursor_enabled, true);
   assert.match(strip(r.lastFrame()), /Cursor · enabled\s+\[●\] on/);
@@ -221,7 +229,7 @@ test('enabling Cursor when installed flips the toggle', async () => {
 test('↵ on a not-connected Cursor row asks App to connect; ←/→ do nothing', async () => {
   const connects = [];
   const r = await open({ providers: fakes({ auth: { ok: false } }), onConnect: (id) => connects.push(id) }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   for (const k of ['j', '\x1b[C', '\x1b[D']) { r.stdin.write(k); await tick(); }
   assert.deepEqual(connects, []);
   assert.equal(r.writes.length, 0, 'arrows on an action row write nothing');
@@ -234,7 +242,7 @@ test('↵ on a not-connected Claude row connects claude too', async () => {
   const connects = [];
   const providers = [fakeProvider('claude', { auth: { ok: false } }), fakeProvider('cursor')];
   const r = await open({ providers, onConnect: (id) => connects.push(id) }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   r.stdin.write(' '); await tick();
   assert.deepEqual(connects, ['claude']);
   r.unmount();
@@ -247,7 +255,7 @@ test('disconnect confirms y/n, runs logout argv, reports, and re-probes', async 
   const disconnected = [];
   const runLogout = async (p) => { logouts.push([p.bin(), p.logoutArgv]); authed = false; };
   const r = await open({ providers, runLogout, onDisconnected: (id) => disconnected.push(id) }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   r.stdin.write('j'); await tick();
   r.stdin.write('\r'); await tick();
   assert.match(strip(r.lastFrame()), /disconnect Cursor\? y\/n/);
@@ -278,7 +286,7 @@ test('disconnect confirms y/n, runs logout argv, reports, and re-probes', async 
 test('esc during a disconnect confirm cancels the confirm and keeps Settings open', async () => {
   let closed = false;
   const r = await open({ providers: fakes(), onClose: () => { closed = true; } }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   for (const k of ['j', '\r']) { r.stdin.write(k); await tick(); }
   r.stdin.write('\x1b'); await tick(60);
   assert.equal(closed, false);
@@ -289,7 +297,7 @@ test('esc during a disconnect confirm cancels the confirm and keeps Settings ope
 test('initialTab opens straight onto SUBSCRIPTIONS and probes (the return-from-login path)', async () => {
   const providers = fakes();
   const r = await open({ providers, initialTab: 'subscriptions' });
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   assert.match(strip(r.lastFrame()), /Cursor\s+● connected/);
   assert.equal(providers[1].calls.auth, 1);
   r.unmount();
@@ -297,7 +305,7 @@ test('initialTab opens straight onto SUBSCRIPTIONS and probes (the return-from-l
 
 test('default subscription shows the provider label and cycles ids', async () => {
   const r = await open({ providers: fakes() }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   for (let i = 0; i < 8; i++) { r.stdin.write('j'); await tick(); }
   assert.match(strip(r.lastFrame()), /▶ Default subscription\s+◀ Claude Code ▶/);
   r.stdin.write('\x1b[C'); await tick();
@@ -309,7 +317,7 @@ test('default subscription shows the provider label and cycles ids', async () =>
 test('80×24: SUBSCRIPTIONS fits the modal budget and the last row is reachable', async () => {
   // App chrome around the modal is 5 rows (0408/I6 math), so the modal gets 19.
   const r = await open({ providers: fakes(), rows: 24 }, ['8']);
-  await tick(60);
+  await waitProbesSettled(r.lastFrame);
   assert.ok(strip(r.lastFrame()).split('\n').length <= 19, strip(r.lastFrame()));
   for (let i = 0; i < 8; i++) { r.stdin.write('j'); await tick(); }
   const f = strip(r.lastFrame());
