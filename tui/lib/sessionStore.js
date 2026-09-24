@@ -8,6 +8,8 @@
 //                   on relaunch lets claude rehydrate the conversation
 //                   history from its own on-disk transcript.
 //   - cwd, branch, model, name, permissionMode : pass-through to launch.
+//   - provider    : which CLI ran it ('claude' | 'cursor'; 0420). Missing on
+//                   older records, which read back as 'claude'.
 //
 // File: ~/.config/claude-mc/sessions.json
 //   {
@@ -99,11 +101,18 @@ const MODEL_ID_MIGRATIONS = {
   'opus-4.1':   'opus-4.7',
 };
 
+// 0420: records written before providers existed are Claude sessions.
 function migrate(rec) {
   if (!rec) return rec;
-  if (MODEL_ID_MIGRATIONS[rec.model]) return { ...rec, model: MODEL_ID_MIGRATIONS[rec.model] };
-  return rec;
+  let out = rec;
+  if (MODEL_ID_MIGRATIONS[out.model]) out = { ...out, model: MODEL_ID_MIGRATIONS[out.model] };
+  if (!out.provider) out = { ...out, provider: 'claude' };
+  return out;
 }
+
+// 0420: null is a provider's "not measured" — keep it, so a resume does not
+// seed a fabricated 0 onto the card. undefined still saves as 0.
+const savedTotal = (v) => (v === null ? null : (v || 0));
 
 // Try to read+parse a candidate file. Returns the parsed store on
 // success, null on any failure (file missing, JSON corrupt, etc.). The
@@ -198,6 +207,7 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
     if (saving && !a.sessionId) continue;
 
     const base = {
+      provider: a.provider || 'claude',
       cwd: a.cwd,
       branch: a.branch,
       model: a.model,
@@ -211,7 +221,7 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
       // ...rec} merge below keeps it when the key is absent here).
       ...(a.resolvedModel ? { resolvedModel: a.resolvedModel } : {}),
       name: a.name,
-      permissionMode: a.permissionMode || 'acceptEdits',
+      permissionMode: a.permissionMode || (a.provider && a.provider !== 'claude' ? 'default' : 'acceptEdits'),
       lastSeen: Date.now(),
       live: true,
     };
@@ -223,16 +233,17 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
           ...base,
           fresh: false,
           sessionId: a.sessionId,
-          tokensIn: a.tokensIn || 0,
-          tokensCacheRead: a.tokensCacheRead || 0,
-          tokensOut: a.tokensOut || 0,
-          costSession: a.costSession || 0,
+          tokensIn: savedTotal(a.tokensIn),
+          tokensCacheRead: savedTotal(a.tokensCacheRead),
+          tokensOut: savedTotal(a.tokensOut),
+          costSession: savedTotal(a.costSession),
         }
       : { ...base, fresh: true };
 
     const prev = store.bySlot[a.slot];
     const identityChanged = !prev
       || prev.cwd !== rec.cwd
+      || (prev.provider || 'claude') !== rec.provider
       || !!prev.fresh !== !!rec.fresh
       || (saving && prev.sessionId !== rec.sessionId);
     if (identityChanged) {

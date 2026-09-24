@@ -1,0 +1,22 @@
+{
+  "online": [
+    {
+      "id": "dc1435e1-18b7-4868-8a51-8e811dc470e4",
+      "ms": 1662,
+      "code": 0
+    },
+    {
+      "id": "c306f641-c6c4-4d99-87ec-5daa3475d88e",
+      "ms": 1570,
+      "code": 0
+    }
+  ],
+  "offline": {
+    "ms": 1604,
+    "code": 0,
+    "stdout": "02cf152a-6a48-4138-84d7-015f391acfd1",
+    "stderr": ""
+  },
+  "transcriptAfterCreate": null,
+  "metaAfterCreate": null
+}

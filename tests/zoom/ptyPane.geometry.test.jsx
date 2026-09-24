@@ -144,13 +144,13 @@ test('0404: a transcript that exactly fills the window loses nothing', async () 
   unmount();
 });
 
-test('0404: Ctrl+Y scroll can still reach the rows the window skipped', async () => {
+test('0404: Ctrl+F scroll can still reach the rows the window skipped', async () => {
   const stub = makeStubAgent({ cols: 40, rows: 20 });
   fillRows(stub.term, 20);
   const { stdin, lastFrame, unmount } = renderPane(stub, { width: 40, height: 12 });
   await tick();
   assert.ok(!lastFrame().includes('L01'));
-  stdin.write('\x19');      // Ctrl+Y → scroll mode
+  stdin.write('\x06');      // Ctrl+F → scroll mode
   await tick();
   // Scroll mode reserves one row for its hint, so the window is 11 rows and
   // its maximum offset is 9 (buffer 20 − 11).
@@ -173,7 +173,7 @@ test('0404: entering scroll mode must not drop rows from the middle of the view'
   await tick();
   const before = lastFrame().split('\n');
   assert.equal(before.length, 12);
-  stdin.write('\x19');      // Ctrl+Y → scroll mode, offset still 0
+  stdin.write('\x06');      // Ctrl+F → scroll mode, offset still 0
   await tick();
   const after = lastFrame().split('\n');
   assert.equal(after.length, 12, 'the pane must stay inside its allocated rows');

@@ -1,0 +1,30 @@
+  $ date 29s
+    Tue Sep 22 16:33:28 CDT 2026
+
+  Tue Sep 22 16:33:28 CDT 2026
+
+
+  Use your todo list tool to create two todos: (1) spawn a subagent that runs `ls` and
+  reports the file count, (2) reply done. Do them in order, marking each completed. Keep it
+  minimal.
+
+
+    To-do Working on 2 to-dos
+    ◐ Spawn subagent: run `ls`, report file count
+    ○ Reply done
+
+    Running 1 agent…
+    Run ls file count
+    Working…
+
+ ⠘⠆ Running subagent  266 tokens
+    Tip: Try Cursor Grok 4.6 via /model, frontier intelligence at a fraction of the cost.
+
+
+  → Add a follow-up                                                                 ctrl+c to stop
+
+
+  1 task
+  Composer 2.5 · 7% · 3 files edited
+  /private/tmp/mc-cursor-spike · main
+

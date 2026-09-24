@@ -36,11 +36,12 @@ export function readUsage() {
     return {
       updatedAt: (raw.updated_at || 0) * 1000,
       fiveHour: {
-        usedPct: Number(fiveH.used_percentage) || 0,
+        // Missing window → null (unknown), never fabricate a confident 0%.
+        usedPct: fiveH.used_percentage == null ? null : Number(fiveH.used_percentage),
         resetsAt: (fiveH.resets_at || 0) * 1000,
       },
       sevenDay: {
-        usedPct: Number(sevenD.used_percentage) || 0,
+        usedPct: sevenD.used_percentage == null ? null : Number(sevenD.used_percentage),
         resetsAt: (sevenD.resets_at || 0) * 1000,
       },
       source: raw.source || 'claude',

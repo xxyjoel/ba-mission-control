@@ -32,6 +32,19 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 // what we probe to discover.
 export const KNOWN_ALIASES = ['opus', 'sonnet', 'haiku'];
 
+// aliasMatchesCli — an `opus` probe that resolves to haiku (rate-limit
+// fallback, unrecognized_model, advisor demotion) must not be stamped as
+// the opus alias or it poisons models-cache.json and the catalog overlay.
+export function aliasMatchesCli(alias, cliModel) {
+  const s = String(cliModel || '').toLowerCase();
+  if (!s) return false;
+  if (alias === 'opus') return s.includes('opus');
+  if (alias === 'sonnet') return s.includes('sonnet');
+  if (alias === 'haiku') return s.includes('haiku');
+  if (alias === 'fable') return s.includes('fable');
+  return true;
+}
+
 const CACHE_FILE = join(getConfigDir(), 'models-cache.json');
 const TMP_FILE   = CACHE_FILE + '.tmp';
 
@@ -116,6 +129,7 @@ export function saveModelCache(results, now = Date.now(), claudeVersion = null) 
   const models = {};
   for (const r of results || []) {
     if (!r || r.error || !r.cliModel) continue;
+    if (!aliasMatchesCli(r.alias, r.cliModel)) continue;
     models[r.alias] = { cliModel: r.cliModel, contextWindow: r.contextWindow, maxOut: r.maxOut };
   }
   const payload = { fetchedAt: now, ...(claudeVersion ? { claudeVersion } : {}), models };
@@ -339,6 +353,7 @@ export function applyCacheToCatalog(models, cache) {
   for (const alias of Object.keys(cache.models)) {
     const { cliModel, contextWindow, maxOut } = cache.models[alias] || {};
     if (!cliModel) continue;
+    if (!aliasMatchesCli(alias, cliModel)) continue;
 
     const knownId = byCli.get(cliModel);
     if (knownId) {

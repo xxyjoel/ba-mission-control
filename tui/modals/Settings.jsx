@@ -1,14 +1,42 @@
 // tui/modals/Settings.jsx — btop-style settings menu.
 //
-// Tabs across the top (GENERAL · LAYOUT · COLORS · ALERTS · SAFETY · NOTES),
-// rows in the body, footer with key hints. Tab / 1-9 switch tabs; arrows nav
-// rows; ←/→ change values; ↵/space toggle. Esc closes.
+// Tabs across the top (GENERAL · LAYOUT · … · SUBSCRIPTIONS · NOTES), rows in
+// the body, footer with key hints. Tab / 1-9 switch tabs; arrows nav rows;
+// ←/→ change values; ↵/space toggle or run an action row. Esc closes.
+//
+// SUBSCRIPTIONS rows read each provider's auth state through `ctx.status(id)`.
+// The probes run once per mount, the first time that tab is shown — never at
+// boot and never per render.
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
+import { execFile } from 'node:child_process';
+import { basename } from 'node:path';
 import { SETTINGS_SCHEMA } from '../lib/settings.js';
+import { visibleTabRange } from '../lib/settingsTabs.js';
+import { listProviders } from '../../server/providers/index.mjs';
 
-function valueText(item, value, theme, settings) {
+const LOGOUT_TIMEOUT_MS = 15000;
+
+// argv form only: bin() is user-controlled (CURSOR_AGENT_BIN / CLAUDE_BIN).
+function defaultLogout(provider) {
+  return new Promise((resolve, reject) => {
+    execFile(provider.bin(), provider.logoutArgv, { timeout: LOGOUT_TIMEOUT_MS }, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+async function probeProvider(p) {
+  const bin = basename(String(p.bin?.() || p.id));
+  let installed;
+  try { installed = await p.probeInstalled(); } catch { installed = null; }
+  if (!installed?.ok) return { state: 'not-installed', bin };
+  let auth;
+  try { auth = await p.probeAuth(); } catch (e) { auth = { ok: false, error: e?.message || String(e) }; }
+  if (auth?.ok) return { state: 'connected', email: auth.email || null, plan: auth.plan || null, bin };
+  return { state: 'disconnected', bin, error: auth?.error || null };
+}
+
+function valueText(item, value, theme, settings, ctx) {
   if (item.kind === 'toggle') {
     return (
       <Text color={value ? theme.accent : theme.dim}>
@@ -20,7 +48,7 @@ function valueText(item, value, theme, settings) {
     return (
       <Text color={theme.fg}>
         <Text color={theme.dim}>◀ </Text>
-        {String(value)}
+        {item.format ? item.format(value) : String(value)}
         <Text color={theme.dim}> ▶</Text>
       </Text>
     );
@@ -36,7 +64,16 @@ function valueText(item, value, theme, settings) {
   }
   if (item.kind === 'computed') {
     // Read-only derived display — e.g. "webhook configured: ◆ yes (hidden)".
-    return <Text color={theme.dim}>{item.compute ? item.compute(settings) : String(value)}</Text>;
+    return <Text color={theme.dim}>{item.compute ? item.compute(settings, ctx) : String(value)}</Text>;
+  }
+  if (item.kind === 'action') {
+    const hint = item.hint ? item.hint(settings, ctx) : '';
+    return (
+      <Text color={theme.dim}>
+        {item.compute ? item.compute(settings, ctx) : ''}
+        {hint ? <Text color={theme.accent}>  {hint}</Text> : null}
+      </Text>
+    );
   }
   return <Text>{String(value)}</Text>;
 }
@@ -55,7 +92,7 @@ const NOTES_BODY = [
   [':history [n]',        'VIEW-ONLY browse of last N sessions (NOT restorable; reference only)'],
   [':sessions / :ls',     'list saved sessions for the current bySlot map'],
   [':forget <slot>',      'drop one slot from saved state'],
-  ['q  then  y',          'quit mc (sessions auto-save before exit)'],
+  ['q  then  s / d',      'quit mc · s=save sessions · d (or q again)=no save'],
   ['',           ''],
   ['',           'Auto-resume on launch: toggle `Auto-resume sessions on startup` (GENERAL).'],
   ['',           'History length: tune `Session history limit` (GENERAL · default 20).'],
@@ -80,10 +117,23 @@ const NOTES_BODY = [
   ['',  'Sparklines are ▁▂▃▄▅▆▇█. No glow. No mouse. Always-on, SSH-friendly.'],
 ];
 
-export default function Settings({ settings, setSettings, onClose, theme, width = 92, rows }) {
+export default function Settings({
+  settings, setSettings, onClose, theme, width = 92, rows,
+  // SUBSCRIPTIONS seams. `providers` defaults to the real registry; tests pass
+  // fakes with canned probe results. onConnect(id) is App's cue to open the
+  // login PTY; onProbed(id, status) lets App cache what the tab learned.
+  providers = listProviders(), onConnect, onDisconnected, onProbed,
+  runLogout = defaultLogout, initialTab,
+}) {
   const { stdout } = useStdout();
-  const [tabIdx, setTabIdx] = useState(0);
+  const [tabIdx, setTabIdx] = useState(() => Math.max(0, SETTINGS_SCHEMA.findIndex(t => t.id === initialTab)));
   const [rowIdx, setRowIdx] = useState(0);
+  const [subStatus, setSubStatus] = useState({});
+  const [notice, setNotice] = useState(null);
+  const [confirm, setConfirm] = useState(null); // provider id awaiting a y/n disconnect
+  const probedRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
   // 0408/I6: the body used to render every row of the active tab, so on a
   // short terminal (80×24) the modal outgrew the screen, Ink shrank the
   // column, and rows overlapped or vanished. Window the body the way
@@ -100,6 +150,51 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
   const [scrollTop, setScrollTop] = useState(0);
 
   useEffect(() => { setRowIdx(0); setScrollTop(0); }, [tabIdx]);
+  useEffect(() => { setNotice(null); }, [tabIdx, rowIdx]);
+
+  // The claude probe is a synchronous execFileSync; deferring it one macrotask
+  // lets the 'checking…' frame paint first.
+  const probe = (p) => {
+    setSubStatus(s => ({ ...s, [p.id]: { state: 'checking', bin: basename(String(p.bin?.() || p.id)) } }));
+    setTimeout(async () => {
+      const st = await probeProvider(p);
+      if (!mountedRef.current) return;
+      setSubStatus(s => ({ ...s, [p.id]: st }));
+      onProbed?.(p.id, st);
+    }, 0);
+  };
+
+  useEffect(() => {
+    if (tab.id !== 'subscriptions' || probedRef.current) return;
+    probedRef.current = true;
+    for (const p of providers) probe(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab.id]);
+
+  const ctx = {
+    status: (id) => subStatus[id],
+    connect: (id) => onConnect?.(id),
+    disconnect: (id) => setConfirm(id),
+    notice: setNotice,
+  };
+
+  const disconnect = async (id) => {
+    setConfirm(null);
+    const p = providers.find(x => x.id === id);
+    if (!p) return;
+    setNotice(`disconnecting ${p.label}…`);
+    try {
+      await runLogout(p);
+    } catch (e) {
+      if (mountedRef.current) setNotice(`✕ ${p.label} logout failed: ${String(e?.message || e).split('\n')[0]}`);
+      probe(p);
+      return;
+    }
+    if (!mountedRef.current) return;
+    setNotice(null);
+    onDisconnected?.(id);
+    probe(p);
+  };
 
   // Item tabs: one row per item, plus one desc row under the selection —
   // so at most (capacity - 1) items fit. Keep the selection in the window.
@@ -116,6 +211,8 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
   const cycle = (item, dir) => {
     const cur = settings[item.key];
     if (item.kind === 'toggle') {
+      const refusal = item.guard ? item.guard(!cur, ctx) : null;
+      if (refusal) { setNotice(refusal); return; }
       setSettings({ ...settings, [item.key]: !cur });
       return;
     }
@@ -140,6 +237,11 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
   };
 
   useInput((input, key) => {
+    if (confirm) {
+      if (input === 'y' || input === 'Y') disconnect(confirm);
+      else if (input === 'n' || input === 'N' || key.escape) setConfirm(null);
+      return;
+    }
     if (key.escape || input === ',') { onClose(); return; }
     if (key.tab) {
       const dir = key.shift ? -1 : 1;
@@ -178,7 +280,10 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
       return;
     }
     if (key.return || input === ' ') {
-      if (!isNotes && rowIdx < tab.items.length) cycle(tab.items[rowIdx], 1);
+      if (isNotes || rowIdx >= tab.items.length) return;
+      const item = tab.items[rowIdx];
+      if (item.kind === 'action') { item.run?.(ctx); return; }
+      cycle(item, 1);
     }
   });
 
@@ -192,17 +297,45 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
       width={width}
     >
       <Text color={theme.accent}>⚙ SETTINGS</Text>
-      {/* Tabs — one row, never wrapped: at narrow widths Yoga used to squeeze
-          the labels into garbage ("GENER AYOUT OLORS"). Overflowing tabs clip
-          instead; number keys still reach them. */}
+      {/* Tabs — one row, never wrapped. Slide a window so the active tab's
+          full label is always visible (NOTES was clipping to "NOT"). */}
       <Box marginTop={1} flexWrap="nowrap" overflow="hidden">
-        {SETTINGS_SCHEMA.map((t, i) => (
-          <Box key={t.id} marginRight={2} flexShrink={0}>
-            <Text color={i === tabIdx ? theme.accent : theme.dim}>
-              [{i + 1}] {t.title}
-            </Text>
-          </Box>
-        ))}
+        {(() => {
+          // width prop is the modal outer width; paddingX={2} eats 4 cells.
+          // Reserve 2 for a leading ‹ and 2 for a trailing › when the window
+          // does not cover the full schema.
+          const outer = Math.max(20, (width || 92) - 4);
+          const notesIdx = SETTINGS_SCHEMA.length - 1;
+          // First pass without chevrons to see if everything fits.
+          let { lo, hi } = visibleTabRange(SETTINGS_SCHEMA, tabIdx, outer);
+          const clippedLeft = lo > 0;
+          const clippedRight = hi < notesIdx;
+          const chevronBudget = (clippedLeft ? 2 : 0) + (clippedRight ? 2 : 0);
+          if (chevronBudget > 0) {
+            ({ lo, hi } = visibleTabRange(SETTINGS_SCHEMA, tabIdx, outer - chevronBudget));
+          }
+          const chips = [];
+          if (lo > 0) {
+            chips.push(
+              <Text key="lead" color={theme.faint}>‹ </Text>,
+            );
+          }
+          for (let i = lo; i <= hi; i++) {
+            const t = SETTINGS_SCHEMA[i];
+            const gap = i < hi ? '  ' : '';
+            chips.push(
+              <Text key={t.id} color={i === tabIdx ? theme.accent : theme.dim}>
+                [{i + 1}] {t.title}{gap}
+              </Text>,
+            );
+          }
+          if (hi < notesIdx) {
+            chips.push(
+              <Text key="trail" color={theme.faint}> ›</Text>,
+            );
+          }
+          return chips;
+        })()}
       </Box>
       {/* Body — FIXED height + overflow hidden + scroll window (Help.jsx
           pattern). A miscount clips; it never overlaps or drops rows. */}
@@ -224,11 +357,16 @@ export default function Settings({ settings, setSettings, onClose, theme, width 
                   <Text color={on ? theme.accent : theme.faint}>{on ? '▶ ' : '  '}</Text>
                   <Text color={on ? theme.accent : theme.fg} wrap="truncate">{item.label}</Text>
                   <Box flexGrow={1} />
-                  <Box flexShrink={0}>{valueText(item, settings[item.key], theme, settings)}</Box>
+                  <Box flexShrink={0}>{valueText(item, settings[item.key], theme, settings, ctx)}</Box>
                 </Box>
-                {on && item.desc && (
+                {on && confirm && (
                   <Box paddingLeft={4}>
-                    <Text color={theme.dim} wrap="truncate">{item.desc}</Text>
+                    <Text color={theme.yellow} wrap="truncate">disconnect {providers.find(p => p.id === confirm)?.label || confirm}? y/n</Text>
+                  </Box>
+                )}
+                {on && !confirm && (notice || item.desc) && (
+                  <Box paddingLeft={4}>
+                    <Text color={notice ? theme.yellow : theme.dim} wrap="truncate">{notice || item.desc}</Text>
                   </Box>
                 )}
               </Box>

@@ -26,8 +26,8 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
-import { MODELS, modelColor, modelByCli } from './lib/models.js';
-import { barCells, sparkLine, fmtK, fmtMoney, fmtMem, trunc, humanize, fmtDurShort, UNKNOWN } from './lib/format.js';
+import { modelColor, resolveAgentModel } from './lib/models.js';
+import { barCells, sparkLine, fmtK, fmtMem, trunc, humanize, fmtDurShort, UNKNOWN, UNMEASURED, fmtMoneyMeasured, fmtKMeasured } from './lib/format.js';
 import { readProjectHealth, healthColor, healthScoreText } from './lib/projectHealth.js';
 
 const STATUS_GLYPH = { working: '●', waiting: '◉', idle: '○', paused: '⏸', error: '✕', empty: '+' };
@@ -121,10 +121,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // Effective model = what claude is CURRENTLY on. A mid-session `/model`
   // switch only updates agent.resolvedModel (cli id), not agent.model (launch
   // model), so prefer the resolved catalog entry — keeps the card label,
-  // color and ctx% denominator in sync with the switch. See modelByCli().
-  const resolved = modelByCli(agent.resolvedModel);
-  const model = resolved || MODELS[agent.model];
-  const modelId = resolved ? resolved.id : agent.model;
+  // color and ctx% denominator in sync with the switch. `auto` launches
+  // resolve through resolveAgentModel so ctx% is not `?%`.
+  const model = resolveAgentModel(agent);
+  const modelId = model?.id || agent.model;
   // 0409: ctx% needs a DENOMINATOR, and the only source of one is the model's
   // maxCtx. When claude reports a model the catalog has never heard of there is
   // no denominator — the old `: 0` then rendered a confident `0%` beside a real
@@ -132,6 +132,9 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // ctxKnown gates every ctx visual: the bar and the % are replaced by the
   // unknown marker, and the measured token count (which IS a live figure) stays.
   const ctxKnown = !!(model && Number.isFinite(model.maxCtx) && model.maxCtx > 0);
+  // 0420/D1: a null context was never measured — no bar (an empty one reads as
+  // 0% used) and no %, just the `-` placeholder beside whatever limit we know.
+  const ctxMeasured = agent.context !== null;
   const ctxPct = ctxKnown ? (agent.context || 0) / model.maxCtx : 0;
   const ctxPctText = ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
   const overT = (agent.context || 0) >= threshold;
@@ -231,7 +234,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // whole bar is suppressed when there's no denominator to plot against.
   const ctxBarW = 14;
   const threshFrac = ctxKnown ? (threshold / model.maxCtx) : undefined;
-  const ctxCells = ctxKnown ? barCells({ value: ctxPct, width: ctxBarW, threshFrac }) : null;
+  const ctxCells = ctxKnown && ctxMeasured ? barCells({ value: ctxPct, width: ctxBarW, threshFrac }) : null;
   const ctxStatColor = overT ? theme.red : nearT ? theme.yellow : theme.fg;
 
   // Sparkline
@@ -245,6 +248,8 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // tool with no token flow still reads 'working'. Decay toward 0 by elapsed
   // time since agent.lastTokSampleTs for a live-throughput readout.
   const lastTpm = agent.status === 'working' ? Math.round(agent.lastTokRate || 0) : 0;
+  // 0420/D1: no token feed → no throughput to report, working or not.
+  const tpmText = agent.lastTokRate === null || agent.tokensOut === null ? UNMEASURED : fmtK(lastTpm);
 
   // Todos — the session's live TodoWrite checklist (agent.todos, normalized
   // to { content, status, activeForm } server-side). This is the closest
@@ -415,8 +420,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
                 c.kind === 'partial' ? theme.brBlue : theme.faint
               }>{c.char}</Text>
             ))
-          : <Text color={theme.faint}>limit {UNKNOWN}</Text>}
-        <Text color={ctxStatColor}> {fmtK(agent.context || 0)} {ctxPctText}</Text>
+          : <Text color={theme.faint}>limit {ctxKnown ? fmtK(model.maxCtx) : UNKNOWN}</Text>}
+        {ctxMeasured
+          ? <Text color={ctxStatColor}> {fmtK(agent.context || 0)} {ctxPctText}</Text>
+          : <Text color={theme.dim}> {UNMEASURED}</Text>}
       </Box>
 
       {/* Tok/min + sparkline · right side: subprocess CPU/RSS (0387).
@@ -424,7 +431,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           Hidden until the first fleet sample lands (both 0). */}
       <Box>
         <Text color={theme.dim}>tok/min </Text>
-        <Text color={theme.fg}>{fmtK(lastTpm)}  </Text>
+        <Text color={theme.fg}>{tpmText}  </Text>
         <Text color={theme.accent}>{sparkStr}</Text>
         <Box flexGrow={1} />
         {(agent.procMemKb || 0) > 0 && (
@@ -509,10 +516,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
       <Box>
         {/* 0408/M4: `~` marks a cost computed from an INHERITED pricing row
             (models.js estimatedPricing) — it must not pass for a billed figure. */}
-        <Text color={theme.dim}>{model && model.estimatedPricing ? '~' : ''}{fmtMoney(agent.costSession || 0)} </Text>
+        <Text color={theme.dim}>{model && model.estimatedPricing ? '~' : ''}{fmtMoneyMeasured(agent.costSession)} </Text>
         <Text color={theme.faint}>ses</Text>
         <Box flexGrow={1} />
-        <Text color={theme.green}>{fmtK(agent.tokensIn || 0)}↓ {fmtK(agent.tokensOut || 0)}↑</Text>
+        <Text color={theme.green}>{fmtKMeasured(agent.tokensIn)}↓ {fmtKMeasured(agent.tokensOut)}↑</Text>
       </Box>
     </Box>
   );

@@ -1,0 +1,32 @@
+
+  Cursor Agent
+  v2026.09.18-9a7762b
+  Tip: Use /plan to plan execution and reach the right outcome faster.
+
+
+
+
+  → hello worldhello worl
+    x
+
+
+  Ask (shift+tab to cycle)
+  Composer 2.5
+  /private/tmp/mc-cursor-spike · main
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

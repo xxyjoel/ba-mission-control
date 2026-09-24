@@ -1,0 +1,32 @@
+
+
+  Cursor Agent
+  v2026.09.18-9a7762b
+  Tip: Use /run-everything to skip all approvals.
+
+
+
+
+  → Plan, search, build anything
+
+
+  Composer 2.5
+  /private/tmp/mc-cursor-spike · main
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

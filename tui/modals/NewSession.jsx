@@ -14,13 +14,19 @@
 //
 // ←/→ cycles the model. `esc` cancels.
 //
+// Subscriptions (0420): with two or more usable providers a
+// `subscription ◀ … ▶` row appears above `model` and Tab gains a third stop
+// (path → list → subscription). ←/→ there switches provider, which swaps the
+// model list and resets the model to that provider's default. With one
+// provider the modal is exactly the pre-0420 one.
+//
 // Intentionally absent: mode toggle, create-new (mkdir + git init),
 // resume banner, branch input, permission picker, initial prompt.
 // Those are out of scope — the modal does one thing: pick a repo and
 // launch. Permission mode is swappable mid-session and the prompt can
 // be typed after attach.
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -29,9 +35,18 @@ import { dirname, basename, join } from 'node:path';
 import TextField from '../lib/TextField.jsx';
 import { modelIds, MODELS, resolveModelId } from '../lib/models.js';
 import RepoPicker from './RepoPicker.jsx';
+import { getProvider } from '../../server/providers/index.mjs';
 
 const SUGGEST_VIEW = 8;          // visible suggestion rows
 const RECENT_DEFAULT = 8;        // how many recents to show with empty query
+// Rows outside the suggestion list: border 2 + padding 2 + header 1 + path
+// (margin + row) 2 + list margin 1 + model (margin + row) 2 + footer (margin +
+// two wrapped rows) 3. The subscription row adds 1, an error 2.
+const CHROME_ROWS = 13;
+
+const DEFAULT_PROVIDERS = [getProvider('claude')];
+const defaultModelsFor = () => modelIds(); // live catalog — includes probe-discovered models
+const defaultModelLabel = (id) => MODELS[id]?.label || id;
 
 const HOME = homedir();
 
@@ -90,13 +105,46 @@ export default function NewSession({
   defaultModel,
   theme,
   width = 84,
+  // Subscriptions: enabled + connected descriptors, in registry order.
+  providers = DEFAULT_PROVIDERS,
+  initialProvider,
+  modelsFor = defaultModelsFor,
+  defaultModelFor,
+  modelLabel = defaultModelLabel,
+  // Max rows the modal may take (App passes overlayHeight). Unset = no clamp.
+  height,
 }) {
   const [view, setView] = useState('main');  // 'main' | 'browse'
   const [query, setQuery] = useState('');
   const [idx, setIdx] = useState(0);
+  const multi = providers.length >= 2;
+  const pickProvider = (want) => (providers.find(p => p.id === want) || providers[0])?.id || 'claude';
   // 'auto' resolves to the newest discovered Opus at open time; ←/→ then
   // cycles concrete catalog ids from there.
-  const [model, setModel] = useState(resolveModelId(defaultModel));
+  const defaultFor = (pid) => {
+    if (defaultModelFor) return defaultModelFor(pid);
+    if (pid === 'claude') return resolveModelId(defaultModel);
+    return modelsFor(pid)[0] ?? null;
+  };
+  const [provider, setProvider] = useState(() => pickProvider(initialProvider));
+  const [model, setModel] = useState(() => defaultFor(pickProvider(initialProvider)));
+  // Until the user picks a provider or model, a provider that becomes
+  // available after open (App's auth probe resolving) may take the preselect.
+  const touchedRef = useRef(false);
+  const providerIds = providers.map(p => p.id).join(',');
+  useEffect(() => {
+    const want = pickProvider(touchedRef.current ? provider : initialProvider);
+    if (want !== provider) { setProvider(want); setModel(defaultFor(want)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerIds, initialProvider]);
+  // Keep the cycler on a model that belongs to the current provider — e.g. after
+  // switching Claude ↔ Cursor, or when the catalog reloads under the same provider.
+  useEffect(() => {
+    const ids = modelsFor(provider);
+    if (!ids.length) return;
+    if (!model || !ids.includes(model)) setModel(defaultFor(provider));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, providerIds]);
   const [fsChildren, setFsChildren] = useState([]);
   const [error, setError] = useState(null);
   // Which field owns arrow keys. 'path' (default) → TextField gets ←/→
@@ -155,6 +203,7 @@ export default function NewSession({
       repoPath: chosenAbs,
       branch: branch || 'main',
       model,
+      provider,
     });
   };
 
@@ -175,7 +224,8 @@ export default function NewSession({
     if (key.escape) { onClose(); return; }
     if (key.ctrl && (input === 'b' || input === 'B')) { setView('browse'); return; }
     if (key.tab) {
-      setFocus(f => f === 'path' ? 'list' : 'path');
+      if (multi) setFocus(f => (f === 'path' ? 'list' : f === 'list' ? 'subscription' : 'path'));
+      else setFocus(f => f === 'path' ? 'list' : 'path');
       return;
     }
     // ↑/↓ are safe to claim in either focus — TextField is single-line
@@ -193,18 +243,25 @@ export default function NewSession({
       return;
     }
     // ←/→ are the conflict case — TextField uses them for cursor
-    // movement. Only claim them while focus === 'list'.
-    if (focus !== 'list') return;
-    // Enter while in list focus → submit (launch). TextField is
-    // inactive in this mode so it won't fire onSubmit itself.
+    // movement. Only claim them outside path focus.
+    if (focus === 'path') return;
+    // Enter in list/subscription focus → submit (launch). TextField is
+    // inactive in these modes so it won't fire onSubmit itself.
     if (key.return) { submit(); return; }
-    if (key.leftArrow || key.rightArrow) {
-      const ids = modelIds(); // live catalog — includes probe-discovered models
-      const i = ids.indexOf(model);
-      const dir = key.rightArrow ? 1 : -1;
-      setModel(ids[(i + dir + ids.length) % ids.length]);
+    if (!key.leftArrow && !key.rightArrow) return;
+    const dir = key.rightArrow ? 1 : -1;
+    touchedRef.current = true;
+    if (focus === 'subscription') {
+      const i = providers.findIndex(p => p.id === provider);
+      const next = providers[(i + dir + providers.length) % providers.length].id;
+      setProvider(next);
+      setModel(defaultFor(next));
       return;
     }
+    const ids = modelsFor(provider);
+    if (!ids.length) return;
+    const i = ids.indexOf(model);
+    setModel(ids[(i + dir + ids.length) % ids.length]);
   });
 
   if (view === 'browse') {
@@ -226,9 +283,17 @@ export default function NewSession({
     );
   }
 
-  const visible = suggestions.slice(0, SUGGEST_VIEW);
-  const hiddenBelow = Math.max(0, suggestions.length - SUGGEST_VIEW);
+  // The list box is SUGGEST_VIEW rows + one "▼ N more" row. Only when the
+  // modal would outgrow `height` does it shrink, and then it scrolls to keep
+  // the highlight in view.
+  const chrome = CHROME_ROWS + (multi ? 1 : 0) + (error ? 2 : 0);
+  const listBox = height ? Math.max(2, Math.min(SUGGEST_VIEW + 1, height - chrome)) : SUGGEST_VIEW + 1;
+  const viewRows = listBox - 1;
+  const start = viewRows < SUGGEST_VIEW ? Math.max(0, Math.min(idx - viewRows + 1, suggestions.length - viewRows)) : 0;
+  const visible = suggestions.slice(start, start + viewRows);
+  const hiddenBelow = Math.max(0, suggestions.length - (start + viewRows));
   const highlighted = suggestions[idx];
+  const providerLabel = providers.find(p => p.id === provider)?.label || provider;
 
   return (
     <Box
@@ -261,12 +326,12 @@ export default function NewSession({
         />
       </Box>
 
-      <Box flexDirection="column" marginTop={1} height={SUGGEST_VIEW + 1}>
+      <Box flexDirection="column" marginTop={1} height={listBox}>
         {visible.length === 0 && (
           <Text color={theme.dim}>  (no matches — ↵ tries the typed path · ctrl+b to browse)</Text>
         )}
         {visible.map((s, i) => {
-          const sel = i === idx;
+          const sel = start + i === idx;
           return (
             <Box key={s.abs}>
               <Text color={sel ? theme.accent : theme.faint}>{sel ? '▶ ' : '  '}</Text>
@@ -289,10 +354,21 @@ export default function NewSession({
         )}
       </Box>
 
-      <Box marginTop={1}>
-        <Text color={theme.dim}>model </Text>
+      {multi && (
+        <Box marginTop={1}>
+          <Text color={focus === 'subscription' ? theme.accent : theme.dim}>
+            {focus === 'subscription' ? '▶ subscription ' : '  subscription '}
+          </Text>
+          <Text color={theme.accent}>◀ </Text>
+          <Text color={theme.fg}>{providerLabel}</Text>
+          <Text color={theme.accent}> ▶</Text>
+        </Box>
+      )}
+
+      <Box marginTop={multi ? 0 : 1}>
+        <Text color={theme.dim}>{multi ? '  model ' : 'model '}</Text>
         <Text color={theme.accent}>◀ </Text>
-        <Text color={theme.fg}>{MODELS[model]?.label || model}</Text>
+        <Text color={theme.fg}>{modelLabel(model)}</Text>
         <Text color={theme.accent}> ▶</Text>
       </Box>
 
@@ -306,7 +382,9 @@ export default function NewSession({
         <Text color={theme.dim}>
           <Text color={theme.accent}>tab</Text> focus [{focus}]  ·  {focus === 'list'
             ? (<><Text color={theme.accent}>↑↓</Text> pick  ·  <Text color={theme.accent}>← →</Text> model  ·  </>)
-            : (<><Text color={theme.faint}>arrows = cursor (tab for list)</Text>  ·  </>)
+            : focus === 'subscription'
+              ? (<><Text color={theme.accent}>← →</Text> subscription  ·  </>)
+              : (<><Text color={theme.faint}>arrows = cursor (tab for list)</Text>  ·  </>)
           }<Text color={theme.accent}>↵</Text> launch{highlighted ? ` ${highlighted.name}` : ''}  ·  <Text color={theme.accent}>ctrl+b</Text> browse  ·  <Text color={theme.accent}>esc</Text> cancel
         </Text>
       </Box>

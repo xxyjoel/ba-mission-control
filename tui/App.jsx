@@ -11,8 +11,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useInput, useApp, useStdout } from 'ink';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve as pathResolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 
 import Header   from './Header.jsx';
 import Aggregate from './Aggregate.jsx';
@@ -30,12 +30,14 @@ import Settings    from './modals/Settings.jsx';
 import Zoom        from './modals/Zoom.jsx';
 import RepoPicker  from './modals/RepoPicker.jsx';
 import ShellOverlay from './modals/ShellOverlay.jsx';
+import SubscriptionLogin from './modals/SubscriptionLogin.jsx';
 
 import { cdToCwd } from '../server/shellSession.mjs';
+import { listProviders, enabledProviders, getProvider, cursorModeFor } from '../server/providers/index.mjs';
 
 import { THEMES, DEFAULT_THEME } from './lib/themes.js';
-import { MODELS, resolveModelId } from './lib/models.js';
-import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion } from './lib/modelProbe.js';
+import { MODELS, resolveModelId, modelIds, modelIds as catalogModelIds } from './lib/models.js';
+import { probeAll, saveModelCache, applyCacheToCatalog, getClaudeVersion, autoProbeOnVersionChange, loadModelCache } from './lib/modelProbe.js';
 import { loadSettings, saveSettings, FLEET_LOG_LINES_MAX } from './lib/settings.js';
 import { nextLaunchSlot } from './lib/slots.js';
 import { computeGridLayout, chunkRows, MAX_TOAST_ROWS } from './lib/gridLayout.js';
@@ -43,9 +45,9 @@ import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
 import { normalizeTypedText } from './lib/typedText.js';
 import { CostStore } from './lib/costStore.js';
 import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
-import { getTemplate, listTemplates } from './lib/templateStore.js';
+import { getTemplate, listTemplates, templateSessionProvider } from './lib/templateStore.js';
 import { probeAuth, authSummary } from './lib/auth.js';
-import { versionLine } from './lib/version.js';
+import { versionLine, VERSION } from './lib/version.js';
 import { removeSession } from '../server/claudeSessions.mjs';
 import { probeClaudeVersion } from './lib/claudeVersion.js';
 import { readUsage, fmtReset } from './lib/usage.js';
@@ -58,8 +60,9 @@ import { isDebugKeysActive, setDebugKeysActive, clearDebugKeysLog, DEBUG_KEYS_PA
 import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPathFor } from './lib/projectMemory.js';
 import { isPluginEnabled } from './lib/plugins.js';
 import { listIssuesForCwd } from './lib/tasks.js';
-import { fmtClock, fmtDuration, fmtMoney, humanize } from './lib/format.js';
+import { fmtClock, fmtDuration, fmtMoney, fmtMoneyMeasured, humanize } from './lib/format.js';
 import { resolveKillTarget } from './lib/killTarget.js';
+import { wireCursorUsageSync } from './lib/cursorUsage.js';
 
 // Permission modes claude CLI accepts. Source: `claude --help`.
 //   default              — prompt on every potentially-mutating tool
@@ -69,6 +72,26 @@ import { resolveKillTarget } from './lib/killTarget.js';
 //   dontAsk              — never prompt; for safe/observed sessions
 //   bypassPermissions    — no guardrails. Scratch dirs only.
 const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'];
+
+// 0420: which CLI runs a slot. Snapshots and records from before providers
+// existed carry no field and are Claude.
+function providerOf(agentOrRecord) {
+  return agentOrRecord?.provider || 'claude';
+}
+
+// Launch defaults for a non-Claude provider: its own settings when they name a
+// valid value, else the Claude default mapped across (D4) / the vendor's auto.
+function providerDefaultMode(provider, settings) {
+  const p = getProvider(provider);
+  const own = p && settings?.[p.defaultModeSetting];
+  if (own && p.permissionModes.includes(own)) return own;
+  return cursorModeFor(settings?.defaultPermission);
+}
+function providerDefaultModel(provider, settings) {
+  const p = getProvider(provider);
+  const own = (p && settings?.[p.defaultModelSetting]) || 'auto';
+  return String(own).startsWith(`${provider}:`) ? own : `${provider}:${own}`;
+}
 
 // Toast kinds drive color. Auto-dismissed by a timer in App.
 const TOAST_COLORS = { error: 'red', warn: 'yellow', info: 'accent', ok: 'green' };
@@ -138,7 +161,25 @@ export function overlayHeight(termRows, toastCount) {
   return Math.max(1, termRows - (3 + feedbackRows));
 }
 
-export default function App({ fleet, auth: initialAuth }) {
+// Model ids New Session cycles for a provider. Claude keeps the live catalog;
+// other providers only see their own namespaced (`<id>:…`) entries.
+// TODO(provider-models): simplify once models.js ships modelIds(provider).
+function modelsForProvider(id) {
+  if (id === 'claude') return modelIds();
+  try { return (modelIds(id) || []).filter(k => typeof k === 'string' && k.startsWith(`${id}:`)); } catch { return []; }
+}
+const providerModelLabel = (id) => {
+  if (!id) return '—';
+  return MODELS[id]?.label || String(id).replace(/^[a-z]+:/, '') || '—';
+};
+
+// `providers`, `loginSpawn` and the onProvider* callbacks are test seams;
+// main.jsx passes none of them.
+export default function App({
+  fleet, auth: initialAuth,
+  providers: providerList = listProviders(), loginSpawn,
+  onProviderConnected: onProviderConnectedProp, onProviderDisconnected: onProviderDisconnectedProp,
+}) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
@@ -160,7 +201,7 @@ export default function App({ fleet, auth: initialAuth }) {
   const [usage, setUsage] = useState(() => readUsage());
 
   const [focusedSlot, setFocusedSlot] = useState(1);
-  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom' | 'shell'
+  const [modal, setModal] = useState(null);  // null | 'help' | 'bcast' | 'new' | 'settings' | 'zoom' | 'shell' | 'login'
   const [helpView, setHelpView] = useState('main'); // which section Help should highlight
   const [newSlot, setNewSlot] = useState(null);
   const [zoomedId, setZoomedId] = useState(null);
@@ -335,6 +376,93 @@ export default function App({ fleet, auth: initialAuth }) {
   useEffect(() => { refreshRepos(); }, []);
   useEffect(() => { if (modal === 'new') refreshRepos(); }, [modal]);
 
+  // ── Subscriptions (0420) ────────────────────────────────
+  // New Session offers a provider when it is enabled. Claude is always on.
+  // Auth is probed as soon as a provider is enabled (boot / toggle / Settings
+  // discovery) — not deferred until New Session — so the subscription row is
+  // present on the first paint. Enabled + not-yet-probed is shown optimistically;
+  // a failed probe removes it. Settings → SUBSCRIPTIONS still refreshes the cache.
+  const [providerAuth, setProviderAuth] = useState({}); // id → { ok }
+  const [loginProviderId, setLoginProviderId] = useState(null);
+  const [settingsTab, setSettingsTab] = useState(null);
+  const lastProviderRef = useRef(null);   // last provider launched this run
+  const pendingConnectRef = useRef(null); // provider whose login PTY ran
+  const probingRef = useRef(new Set());
+  const enabledIds = new Set(enabledProviders(settings).map(p => p.id));
+  const enabledList = providerList.filter(p => enabledIds.has(p.id));
+  const enabledKey = enabledList.map(p => p.id).join(',');
+  const usableProviders = enabledList.filter((p) => {
+    if (p.id === 'claude') return true;
+    const auth = providerAuth[p.id];
+    // Unknown → show now (avoids the half-second pop-in). Hide only after ok:false.
+    if (!auth) return true;
+    return !!auth.ok;
+  });
+  useEffect(() => {
+    for (const p of enabledList) {
+      if (p.id === 'claude' || providerAuth[p.id] || probingRef.current.has(p.id)) continue;
+      probingRef.current.add(p.id);
+      Promise.resolve()
+        .then(() => p.probeAuth())
+        .then((r) => ({ ok: !!r?.ok }), () => ({ ok: false }))
+        .then((r) => { probingRef.current.delete(p.id); setProviderAuth(a => ({ ...a, [p.id]: r })); });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabledKey]);
+  const providerLabel = (id) => providerList.find(p => p.id === id)?.label || id;
+  // Aggregate / Header strip: every ENABLED subscription, including Cursor
+  // before/without a successful probe (shows ✕ until connected). Filtering to
+  // auth-ok only made the Cursor row vanish and collapsed Aggregate to the
+  // Claude-only classic line — no connection distinction at all.
+  const headerSubscriptions = enabledList.map((p) => {
+    if (p.id === 'claude') {
+      return {
+        id: 'claude',
+        short: p.short || 'CC',
+        label: p.label || 'Claude Code',
+        ok: !!auth?.ok,
+        detail: auth?.ok
+          ? (auth.subscription || auth.email || auth.method || null)
+          : 'not signed in',
+      };
+    }
+    const st = providerAuth[p.id];
+    const ok = !!st?.ok;
+    return {
+      id: p.id,
+      short: p.short || p.id,
+      label: p.label || p.id,
+      ok,
+      detail: ok
+        ? (st.email || st.plan || 'connected')
+        : (st ? 'not signed in' : 'checking…'),
+    };
+  });
+  const onSubscriptionProbed = (id, st) => {
+    const ok = st?.state === 'connected';
+    setProviderAuth(a => ({ ...a, [id]: { ok } }));
+    // Seamless: a successful connect (or Settings discovering an already-
+    // logged-in CLI) turns the subscription on for New Session. The toggle
+    // stays available to hide it again without logging out.
+    if (ok && id !== 'claude') {
+      const key = `subscriptions_${id}_enabled`;
+      setSettingsState(s => (s[key] ? s : { ...s, [key]: true }));
+    }
+    if (pendingConnectRef.current !== id) return;
+    pendingConnectRef.current = null;
+    if (!ok) return;
+    if (id === 'claude') setAuth(probeAuth());
+    pushToast(`${providerLabel(id)} connected`, 'ok');
+    onProviderConnectedProp?.(id);
+  };
+  const onSubscriptionDisconnected = (id) => {
+    pushToast(`${providerLabel(id)} disconnected`, 'ok');
+    onProviderDisconnectedProp?.(id);
+  };
+  const newSessionDefaultModel = (id) => (id === 'claude'
+    ? resolveModelId(settings.defaultModel)
+    : `${id}:${settings[getProvider(id)?.defaultModelSetting] || 'auto'}`);
+
   // ── Saved-session hint (or auto-resume) on boot ─────────
   // If there are any persisted sessions and every slot is currently
   // empty, either surface a `:resume-all` toast (default) or actually
@@ -408,6 +536,31 @@ export default function App({ fleet, auth: initialAuth }) {
   useEffect(() => {
     fleet.setCostCap(settings.costCapUSD || 0);
   }, [settings.costCapUSD, fleet]);
+
+  // Cursor dashboard usage → live agent token/cost fields while any Cursor slot runs.
+  useEffect(() => {
+    const ctl = wireCursorUsageSync({
+      fleet,
+      enabled: !!settings.cursorUsageSync,
+      onError: (e) => {
+        if (!e?.status) return;
+        if (e.status === 'no-credential') {
+          pushToast('Cursor usage sync: no keychain token — sign in to Cursor on this Mac', 'warn');
+        } else if (e.status === 'auth') {
+          pushToast('Cursor usage sync: session expired — sign in to Cursor again', 'warn');
+        } else if (e.status !== 'network') {
+          pushToast(`Cursor usage sync: ${e.status}`, 'warn');
+        }
+      },
+    });
+    const onFleetChange = () => ctl.sync();
+    fleet.on('change', onFleetChange);
+    ctl.sync();
+    return () => {
+      fleet.off('change', onFleetChange);
+      ctl.stop();
+    };
+  }, [fleet, settings.cursorUsageSync]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply "Maximum live sessions" (maxSlots) to the live fleet the moment it
   // changes — no restart needed. The fleet grows freely and refuses to shrink
@@ -537,6 +690,37 @@ export default function App({ fleet, auth: initialAuth }) {
     return () => clearInterval(t);
   }, []);
 
+  // ── Claude CLI upgrade → re-probe aliases ───────────────
+  // Brew upgrades do not restart mc. Boot already runs autoProbeOnVersionChange;
+  // also check periodically so a CLI bump while mc is open still refreshes the
+  // model list without waiting for a quit/relaunch.
+  useEffect(() => {
+    if (settings.syncModelsOnBoot === false) return undefined;
+    let busy = false;
+    const check = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const stamped = loadModelCache()?.claudeVersion || null;
+        const version = await getClaudeVersion();
+        if (!version || version === stamped) return;
+        pushToast(`claude ${stamped || '?'} → ${version} · probing models…`, 'info');
+        const r = await autoProbeOnVersionChange(MODELS);
+        if (r?.probed) {
+          const n = (r.added?.length || 0) + (r.updated?.length || 0);
+          pushToast(
+            n ? `models refreshed · ${n} change${n === 1 ? '' : 's'}` : `models probed · claude ${version}`,
+            'ok',
+          );
+        }
+      } catch { /* never block the UI */ }
+      finally { busy = false; }
+    };
+    check();
+    const t = setInterval(check, 60_000);
+    return () => clearInterval(t);
+  }, [settings.syncModelsOnBoot]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Derived ─────────────────────────────────────────────
   // costStore.weekCost is the FLEET total. It's shown once, authoritatively, in
   // the Aggregate bar (and Dashboard) — no longer stamped onto every agent's
@@ -630,6 +814,17 @@ export default function App({ fleet, auth: initialAuth }) {
     const [cmd, ...rest] = line.trim().split(/\s+/);
     const arg = rest.join(' ');
     if (!cmd) return null;
+    // 0420: a Claude-only verb aimed at another provider's slot. Returns true
+    // (and toasts) when the slot's provider lacks `capability` — or, with no
+    // capability named, whenever the slot is not Claude.
+    const refusedFor = (agent, capability) => {
+      const provider = providerOf(agent);
+      if (provider === 'claude') return false;
+      const p = getProvider(provider);
+      if (capability && p?.capabilities?.[capability]) return false;
+      pushToast(`not available for ${p?.label || provider} slots`, 'warn');
+      return true;
+    };
     switch (cmd) {
       case 'q':
       case 'quit':
@@ -694,12 +889,14 @@ export default function App({ fleet, auth: initialAuth }) {
           return null;
         }
 
-        // Live id list (Object.keys, not the import-time snapshot) so models
-        // discovered by `:model refresh` are immediately selectable.
-        const modelIds = Object.keys(MODELS);
+        // Live id list for the focused slot's provider (Claude by default).
+        // Cursor slots list cursor:* ids; :model default stays Claude-only.
+        const slotProvider = focusedAgent && focusedAgent.status !== 'empty'
+          ? providerOf(focusedAgent) : 'claude';
+        const modelIds = catalogModelIds(slotProvider);
         if (!maybeDefault) {
           if (!focusedAgent || focusedAgent.status === 'empty') {
-            pushToast(`available · ${modelIds.join(' · ')}  ·  :model refresh to re-probe`, 'info');
+            pushToast(`available · ${catalogModelIds('claude').join(' · ')}  ·  :model refresh to re-probe`, 'info');
             return null;
           }
           const reqId = focusedAgent.model;
@@ -707,17 +904,18 @@ export default function App({ fleet, auth: initialAuth }) {
           const resolved = focusedAgent.resolvedModel || '(pending init)';
           const mismatch = focusedAgent.resolvedModel && focusedAgent.resolvedModel !== reqCli;
           pushToast(
-            `slot ${focusedAgent.slot} · requested ${reqId} (${reqCli}) · resolved ${resolved}${mismatch ? ' ⚠ MISMATCH' : ''}`,
+            `slot ${focusedAgent.slot} · ${slotProvider} · requested ${reqId} (${reqCli}) · resolved ${resolved}${mismatch ? ' ⚠ MISMATCH' : ''}`,
             mismatch ? 'warn' : 'info',
           );
           return null;
         }
         const isDefault = maybeDefault === 'default';
         const newId = isDefault ? modelRest[0] : maybeDefault;
-        // 'auto' is valid for the DEFAULT only (follows discovery: newest
-        // Opus at launch time). A live agent needs a concrete id.
-        if (!modelIds.includes(newId) && !(isDefault && newId === 'auto')) {
-          pushToast(`unknown model · use one of: ${isDefault ? 'auto · ' : ''}${modelIds.join(' · ')}`, 'warn');
+        // 'auto' is valid for the Claude DEFAULT only (follows discovery).
+        // A live agent needs a concrete id in its provider's catalog.
+        const listForValidate = isDefault ? catalogModelIds('claude') : modelIds;
+        if (!listForValidate.includes(newId) && !(isDefault && newId === 'auto')) {
+          pushToast(`unknown model · use one of: ${isDefault ? 'auto · ' : ''}${listForValidate.join(' · ')}`, 'warn');
           return null;
         }
         if (isDefault) {
@@ -731,6 +929,10 @@ export default function App({ fleet, auth: initialAuth }) {
         }
         const a = fleet.agentById(focusedAgent.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
+        if (typeof a.changeModel !== 'function') {
+          pushToast(`not available for ${getProvider(slotProvider)?.label || slotProvider} slots`, 'warn');
+          return null;
+        }
         const changed = a.changeModel(newId);
         if (!changed) pushToast(`slot ${focusedAgent.slot} already on ${newId}`, 'info');
         else pushToast(`model: ${newId} (restarting session)`, 'ok');
@@ -740,12 +942,15 @@ export default function App({ fleet, auth: initialAuth }) {
       case 'permission': {
         // Two forms:
         //   :perm <mode>            — change the focused live session
-        //   :perm default <mode>    — change the fleet default for new launches
+        //   :perm default <mode>    — change the Claude default for new launches
         const [maybeDefault, ...modeRest] = rest;
         const isDefault = maybeDefault === 'default';
         const mode = isDefault ? modeRest[0] : maybeDefault;
-        if (!PERMISSION_MODES.includes(mode)) {
-          pushToast(`usage: :perm <mode>  or  :perm default <mode>  ·  modes: ${PERMISSION_MODES.join(', ')}`, 'warn');
+        const liveProvider = (!isDefault && focusedAgent && focusedAgent.status !== 'empty')
+          ? providerOf(focusedAgent) : 'claude';
+        const modes = getProvider(liveProvider)?.permissionModes || PERMISSION_MODES;
+        if (!modes.includes(mode)) {
+          pushToast(`usage: :perm <mode>  or  :perm default <mode>  ·  modes: ${modes.join(', ')}`, 'warn');
           return null;
         }
         if (isDefault) {
@@ -753,16 +958,19 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`default permission → ${mode}`, mode === 'bypassPermissions' ? 'warn' : 'ok');
           return null;
         }
-        // Per-session change — target the focused live session.
         if (!focusedAgent || focusedAgent.status === 'empty') {
           pushToast(`no live session focused — use :perm default <mode> for new launches`, 'warn');
           return null;
         }
         const a = fleet.agentById(focusedAgent.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
+        if (typeof a.changePermissionMode !== 'function') {
+          pushToast(`not available for ${getProvider(liveProvider)?.label || liveProvider} slots`, 'warn');
+          return null;
+        }
         const changed = a.changePermissionMode(mode);
         if (!changed) pushToast(`slot ${focusedAgent.slot} already in ${mode}`, 'info');
-        else pushToast(`permission: ${mode}`, mode === 'bypassPermissions' ? 'warn' : 'ok');
+        else pushToast(`permission: ${mode}`, (mode === 'bypassPermissions' || mode === 'force') ? 'warn' : 'ok');
         return null;
       }
       // /clear — kill the focused session and immediately relaunch a
@@ -783,6 +991,7 @@ export default function App({ fleet, auth: initialAuth }) {
           model: target.model,
           name: target.name,
           permissionMode: target.permissionMode,
+          provider: providerOf(target),
         };
         try { fleet.kill(target.id); } catch {}
         // Defer the relaunch one tick so the kill's snapshot emit lands
@@ -804,6 +1013,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
+        if (refusedFor(target, 'compact')) return null;
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         const prompt = arg && arg.trim()
@@ -830,6 +1040,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
+        if (refusedFor(target, 'compact')) return null;
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
         const cfg = {
@@ -839,6 +1050,7 @@ export default function App({ fleet, auth: initialAuth }) {
           model: target.model,
           name: target.name,
           permissionMode: target.permissionMode,
+          provider: providerOf(target),
         };
         const summaryPrompt = arg && arg.trim()
           ? `Please summarize our conversation so far, focusing on: ${arg.trim()}. 3-5 paragraphs covering decisions, code state, next steps. After your reply mc will auto-restart this session with your summary as the new first message.`
@@ -1154,7 +1366,8 @@ export default function App({ fleet, auth: initialAuth }) {
         // the task's next slice, behind its human checkpoint.
         const disk = probeClaudeVersion(true);
         if (!disk) { pushToast('claude not found on PATH (CLAUDE_BIN?)', 'error'); return null; }
-        const live = agents.filter(a => a.status !== 'empty');
+        // 0420: claude drift says nothing about another provider's slots.
+        const live = agents.filter(a => a.status !== 'empty' && providerOf(a) === 'claude');
         const drifted = live.filter(a => a.claudeVersion && a.claudeVersion !== disk);
         if (drifted.length === 0) {
           pushToast(`claude ${disk} — all ${live.length} session${live.length === 1 ? '' : 's'} current`, 'ok');
@@ -1184,6 +1397,9 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`transcripts dir · ${TRANSCRIPT_BASE_DIR}`, 'info');
           return null;
         }
+        // TODO(cursor-transcript-path): transcriptPathFor is claude's layout;
+        // Cursor's lives under ~/.cursor/projects/*/agent-transcripts/<chatId>/.
+        if (refusedFor(focused)) return null;
         const p = transcriptPathFor(focused.sessionId);
         pushToast(`transcript · ${p}`, 'info');
         return null;
@@ -1260,7 +1476,9 @@ export default function App({ fleet, auth: initialAuth }) {
         // One-stop "where does mc keep things?" report.
         const focused = focusedAgent;
         pushToast(`config · ${getConfigDir()}`, 'info');
-        if (focused && focused.status !== 'empty') {
+        if (focused && focused.status !== 'empty' && providerOf(focused) !== 'claude') {
+          refusedFor(focused);
+        } else if (focused && focused.status !== 'empty') {
           pushToast(`transcript · ${transcriptPathFor(focused.sessionId)}`, 'info');
         } else {
           pushToast(`transcripts · ${TRANSCRIPT_BASE_DIR}`, 'info');
@@ -1310,12 +1528,18 @@ export default function App({ fleet, auth: initialAuth }) {
           ? cwdRaw
           : (focusedAgent && focusedAgent.status !== 'empty' && focusedAgent.cwd) || process.cwd();
         sessions.forEach((s, i) => {
+          const provider = templateSessionProvider(s);
           launchSession({
             slot: empties[i],
             repoPath: cwd,
             branch: 'main',
-            model: s.model || resolveModelId(settings.defaultModel),
-            permissionMode: s.permissionMode || settings.defaultPermission || 'acceptEdits',
+            provider,
+            ...(provider === 'claude'
+              ? {
+                  model: s.model || resolveModelId(settings.defaultModel),
+                  permissionMode: s.permissionMode || settings.defaultPermission || 'acceptEdits',
+                }
+              : { model: s.model, permissionMode: s.permissionMode }),
             prompt: s.prompt || null,
           });
         });
@@ -1372,7 +1596,7 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no live session focused`, 'warn');
           return null;
         }
-        pushToast(`cost · session ${fmtMoney(a.costSession || 0)}  ·  fleet week ${fmtMoney(weekCost || 0)}`, 'info');
+        pushToast(`cost · session ${fmtMoneyMeasured(a.costSession)}  ·  fleet week ${fmtMoney(weekCost || 0)}`, 'info');
         return null;
       }
       case 'usage': {
@@ -1382,8 +1606,12 @@ export default function App({ fleet, auth: initialAuth }) {
           pushToast(`no usage data — claude hasn't written ~/.claude/abtop-rate-limits.json yet`, 'warn');
           return null;
         }
-        pushToast(`5h: ${u.fiveHour.usedPct.toFixed(0)}%  (resets in ${fmtReset(u.fiveHour.resetsAt) || '?'})`, u.fiveHour.usedPct >= 85 ? 'warn' : 'ok');
-        pushToast(`7d: ${u.sevenDay.usedPct.toFixed(0)}%  (resets in ${fmtReset(u.sevenDay.resetsAt) || '?'})`, u.sevenDay.usedPct >= 85 ? 'warn' : 'ok');
+        const five = u.fiveHour?.usedPct;
+        const seven = u.sevenDay?.usedPct;
+        if (five == null) pushToast(`5h: —  (claude has not written a five-hour window yet)`, 'info');
+        else pushToast(`5h: ${five.toFixed(0)}%  (resets in ${fmtReset(u.fiveHour.resetsAt) || '?'})`, five >= 85 ? 'warn' : 'ok');
+        if (seven == null) pushToast(`7d: —`, 'info');
+        else pushToast(`7d: ${seven.toFixed(0)}%  (resets in ${fmtReset(u.sevenDay.resetsAt) || '?'}) · from ~/.claude/abtop-rate-limits.json`, seven >= 85 ? 'warn' : 'ok');
         return null;
       }
       case 'repos': {
@@ -1736,6 +1964,7 @@ export default function App({ fleet, auth: initialAuth }) {
       }
 
       let { slot, repoPath, branch, model, permissionMode, prompt } = payload;
+      const provider = providerOf(payload);
       repoPath = expandTilde(repoPath);
 
       if (!repoPath) {
@@ -1743,7 +1972,13 @@ export default function App({ fleet, auth: initialAuth }) {
         return;
       }
 
-      const perm = permissionMode || settings.defaultPermission || 'acceptEdits';
+      // TODO(provider-usage-cost): with usage sync disabled a Cursor slot may
+      // report no cost, so costCapUSD / dailyBudgetUSD cannot see it — warn at
+      // when either limit is set (plan: "Cursor usage and cost → Budgets").
+      if (provider !== 'claude' && !model) model = providerDefaultModel(provider, settings);
+      const perm = provider === 'claude'
+        ? permissionMode || settings.defaultPermission || 'acceptEdits'
+        : permissionMode || providerDefaultMode(provider, settings);
       // Layer-2 memory: if plugin_projectMemory is enabled and the
       // launch cwd has a .mc/MEMORY.md, prepend its contents to the
       // first prompt. Silent no-op when memory file is absent.
@@ -1763,11 +1998,32 @@ export default function App({ fleet, auth: initialAuth }) {
         name: (repoPath || '').split('/').filter(Boolean).pop() || 'session',
         permissionMode: perm,
         prompt: finalPrompt,
+        provider,
+        autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
       });
       setModal(null);
       setNewSlot(null);
       setFocusedSlot(slot);
-      pushToast(`launched slot ${slot} · ${model} · ${perm}`, perm === 'bypassPermissions' ? 'warn' : 'ok');
+      if (provider === 'claude') {
+        pushToast(`launched slot ${slot} · ${model} · ${perm}`, perm === 'bypassPermissions' ? 'warn' : 'ok');
+      } else {
+        const label = MODELS[model]?.label || String(model || '').replace(/^[^:]+:/, '');
+        pushToast(`launched slot ${slot} · ${getProvider(provider)?.label || provider} · ${label} · ${perm}`, perm === 'force' ? 'warn' : 'ok');
+      }
+      // Soft warn: two agents on the same checkout race the working tree.
+      // Git commits are truth for history — not for concurrent mid-edit writers.
+      try {
+        const resolved = realpathSync(pathResolve(repoPath));
+        const peer = (fleet.snapshot()?.agents || []).find((a) => {
+          if (a.status === 'empty' || a.slot === slot || !a.cwd) return false;
+          try { return realpathSync(pathResolve(a.cwd)) === resolved; }
+          catch { return pathResolve(a.cwd) === pathResolve(repoPath); }
+        });
+        if (peer) {
+          const short = String(peer.cwd || '').replace(homedir(), '~');
+          pushToast(`slot ${peer.slot} already in ${short} — prefer a worktree or expect file races`, 'warn');
+        }
+      } catch { /* path unreadable — skip warn */ }
     } catch (e) {
       pushToast(`launch failed: ${e?.message || String(e)}`, 'error');
     }
@@ -1800,11 +2056,14 @@ export default function App({ fleet, auth: initialAuth }) {
       slot, name: rec.name, cwd: rec.cwd,
       sid: rec.sessionId ? String(rec.sessionId).slice(0, 8) : null, fresh: !!rec.fresh,
     });
-    const permissionMode = rec.permissionMode || settings.defaultPermission || 'acceptEdits';
+    const provider = providerOf(rec);
+    const permissionMode = rec.permissionMode
+      || (provider === 'claude' ? settings.defaultPermission || 'acceptEdits' : providerDefaultMode(provider, settings));
     if (rec.fresh || !rec.sessionId) {
       fleet.launch({
         slot, cwd: rec.cwd, branch: rec.branch, model: rec.model,
-        name: rec.name, permissionMode, prompt: null,
+        name: rec.name, permissionMode, prompt: null, provider,
+        autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
       });
       return 'fresh';
     }
@@ -1813,7 +2072,8 @@ export default function App({ fleet, auth: initialAuth }) {
       // A /model switch made inside claude lands in resolvedModel; prefer it
       // so a resume relaunches on the model the user actually chose. The
       // friendly launch id stays the fallback for records without one.
-      model: rec.resolvedModel || rec.model, name: rec.name, permissionMode,
+      model: rec.resolvedModel || rec.model, name: rec.name, permissionMode, provider,
+      autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
     });
     if (agent) {
       if (rec.tokensIn != null) agent.tokensIn = rec.tokensIn;
@@ -1878,21 +2138,26 @@ export default function App({ fleet, auth: initialAuth }) {
     if (a) a.send(text);
   };
 
-  // Cycle a session's permission mode through the three core dev modes.
-  // Used by Shift+Tab from both the main view and the Zoom modal.
+  // Cycle a session's permission mode. Claude: plan → auto → acceptEdits.
+  // Cursor: its own permissionModes list. Zoom forwards Shift+Tab to the
+  // embedded CLI, so this is the main-view path (and any Zoom chrome that
+  // still calls onCyclePerm).
   const cyclePerm = (agentLike) => {
     if (!agentLike || agentLike.status === 'empty') {
       pushToast(`no live session focused`, 'warn');
       return;
     }
     const a = fleet.agentById(agentLike.id);
-    if (!a) return;
-    const cycle = ['plan', 'auto', 'acceptEdits'];
-    const cur = agentLike.permissionMode || a.permissionMode || 'acceptEdits';
+    if (!a || typeof a.changePermissionMode !== 'function') return;
+    const provider = providerOf(agentLike);
+    const cycle = provider === 'claude'
+      ? ['plan', 'auto', 'acceptEdits']
+      : (getProvider(provider)?.permissionModes || ['default']);
+    const cur = agentLike.permissionMode || a.permissionMode || cycle[0];
     const i = cycle.indexOf(cur);
     const next = cycle[(i + 1) % cycle.length] || cycle[0];
     a.changePermissionMode(next);
-    pushToast(`permission: ${next}`, next === 'bypassPermissions' ? 'warn' : 'ok');
+    pushToast(`permission: ${next}`, (next === 'bypassPermissions' || next === 'force') ? 'warn' : 'ok');
   };
 
   // ── Layout ──────────────────────────────────────────────
@@ -2048,10 +2313,16 @@ export default function App({ fleet, auth: initialAuth }) {
             slot={newSlot}
             repos={repos}
             defaultModel={settings.defaultModel}
-            onLaunch={launchSession}
+            onLaunch={(payload) => { lastProviderRef.current = payload.provider; launchSession(payload); }}
             onClose={() => { setModal(null); setNewSlot(null); }}
             theme={theme}
             width={modalWidth(84, 180)}
+            height={overlayHeight(termRows, toasts.length)}
+            providers={usableProviders}
+            initialProvider={lastProviderRef.current || settings.defaultProvider}
+            modelsFor={modelsForProvider}
+            defaultModelFor={newSessionDefaultModel}
+            modelLabel={providerModelLabel}
           />
         </Box>
         <Box flexGrow={1} />
@@ -2063,10 +2334,50 @@ export default function App({ fleet, auth: initialAuth }) {
   if (modal === 'settings') {
     return (
       <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-        <Box flexShrink={0} paddingX={2} paddingY={1}><Settings settings={settings} setSettings={setSettingsState} onClose={() => setModal(null)} theme={theme} width={modalWidth(92, 140)} rows={termRows} /></Box>
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
+          <Settings
+            settings={settings}
+            setSettings={setSettingsState}
+            onClose={() => { setSettingsTab(null); setModal(null); }}
+            theme={theme}
+            width={modalWidth(92, 140)}
+            rows={termRows}
+            providers={providerList}
+            initialTab={settingsTab}
+            onConnect={(id) => { pendingConnectRef.current = id; setLoginProviderId(id); setModal('login'); }}
+            onDisconnected={onSubscriptionDisconnected}
+            onProbed={onSubscriptionProbed}
+          />
+        </Box>
         <Box flexGrow={1} />
         {feedbackStrip}
         {renderStatusBar('command')}
+      </Box>
+    );
+  }
+  const loginProvider = loginProviderId && providerList.find(p => p.id === loginProviderId);
+  if (modal === 'login' && loginProvider) {
+    // Back to SUBSCRIPTIONS either way; Settings remounts there and re-probes.
+    const backToSettings = () => { setLoginProviderId(null); setSettingsTab('subscriptions'); setModal('settings'); };
+    return (
+      <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
+        <Box flexShrink={0} paddingX={2} paddingY={1}>
+          <SubscriptionLogin
+            provider={loginProvider}
+            spawn={loginSpawn}
+            onExit={({ exitCode }) => {
+              if (exitCode) pushToast(`${loginProvider.label} login exited with code ${exitCode}`, 'warn');
+              backToSettings();
+            }}
+            onCancel={backToSettings}
+            theme={theme}
+            width={modalWidth(60, 160)}
+            height={overlayHeight(termRows, toasts.length)}
+          />
+        </Box>
+        <Box flexGrow={1} />
+        {feedbackStrip}
+        {renderStatusBar('normal')}
       </Box>
     );
   }
@@ -2167,8 +2478,8 @@ export default function App({ fleet, auth: initialAuth }) {
 
   return (
     <Box flexDirection="column" width={termCols} height={termRows} overflow="hidden">
-      <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} version={versionLine()} />
-      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} background={snapshot.background} />
+      <Header agents={agents} threshold={threshold} nowStr={nowStr} sessionStr={sessionStr} theme={theme} auth={auth} version={VERSION} subscriptions={headerSubscriptions} />
+      <Aggregate agents={agents} fleetTpm={fleetTpm} aggSpark={aggSpark} theme={theme} usage={usage} fmtReset={fmtReset} weekCost={weekCost} background={snapshot.background} providers={headerSubscriptions} cursorUsageSync={!!settings.cursorUsageSync} />
 
       {/* Grid of cards — empty slots are hidden; live cards autosize to
           fill the row. Filter pass dims non-matching slots. */}

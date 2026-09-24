@@ -1,0 +1,72 @@
+{
+  "_comment": "SYNTHETIC — hand-written from the cursor-price-tracking field names, not a recorded response. Replace with the spike's capture once it lands. Covers each usageBasedCosts form, proto3-style int64 strings and omitted zero fields, and one malformed row.",
+  "totalUsageEventsCount": 10,
+  "usageEventsDisplay": [
+    {
+      "timestamp": "1800000010000",
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO",
+      "usageBasedCosts": "$0.00",
+      "tokenUsage": { "inputTokens": "1200", "outputTokens": 300, "cacheWriteTokens": 800, "cacheReadTokens": "40000" }
+    },
+    {
+      "timestamp": "1800000020000",
+      "model": "claude-4.5-sonnet",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usageBasedCosts": 0.12,
+      "tokenUsage": { "inputTokens": 500, "outputTokens": 100, "cacheWriteTokens": 0, "cacheReadTokens": 1000 }
+    },
+    {
+      "timestamp": "1800000030000",
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usageBasedCosts": { "cost": "$0.05" },
+      "tokenUsage": { "inputTokens": 10, "outputTokens": 20, "cacheWriteTokens": 30, "cacheReadTokens": 40 }
+    },
+    {
+      "timestamp": "1800000040000",
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usageBasedCosts": ["$0.01", 0.02],
+      "tokenUsage": { "inputTokens": 1, "outputTokens": 2, "cacheWriteTokens": 3, "cacheReadTokens": 4 }
+    },
+    {
+      "timestamp": "1800000050000",
+      "model": "auto",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO",
+      "usageBasedCosts": "Included",
+      "tokenUsage": { "inputTokens": 7, "outputTokens": 8, "cacheWriteTokens": 0, "cacheReadTokens": 0 }
+    },
+    {
+      "timestamp": "1800000060000",
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usageBasedCosts": "n/a",
+      "tokenUsage": { "inputTokens": 1, "outputTokens": 1, "cacheWriteTokens": 1, "cacheReadTokens": 1 }
+    },
+    {
+      "timestamp": "1800000070000",
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_ERRORED_NOT_CHARGED",
+      "usageBasedCosts": "$0.30",
+      "tokenUsage": { "inputTokens": 5, "outputTokens": 0, "cacheWriteTokens": 0, "cacheReadTokens": 0 }
+    },
+    {
+      "timestamp": "1800000080000",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usageBasedCosts": "$1,234.50"
+    },
+    {
+      "timestamp": 1800000090000,
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO",
+      "tokenUsage": { "outputTokens": 64 }
+    },
+    {
+      "model": "gpt-5",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "usageBasedCosts": "$9.99",
+      "tokenUsage": { "inputTokens": 999 }
+    }
+  ]
+}

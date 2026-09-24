@@ -188,7 +188,7 @@ npm link
 mc
 ```
 
-**Scrolling back through output.** In the Zoom view press `Ctrl+Y` to enter
+**Scrolling back through output.** In the Zoom view press `Ctrl+F` to enter
 scroll mode, then `w`/`s` for a line, `f`/`b` for half a page, `g` for the top
 and `G` to return to the live output. In the `!` shell overlay use `PageUp` and
 `PageDown`; typing anything returns you to the live output. Both views hold
@@ -321,9 +321,29 @@ Each agent has exactly one status from this six-value enum (`server/agent.mjs`):
 | `error`   | crashed or API failure — auto-restart may retry |
 | `empty`   | slot is vacant, no agent assigned |
 
-The fleet header (`Header.jsx`) shows live counts for `work / wait / paused
-/ idle / err` plus the over-context-threshold count and an aggregate
-`NOMINAL / AWAITING / DEGRADED` pill.
+The fleet header (`Header.jsx`) shows live counts for `work / wait / err`
+plus (when any session is live) how many are over the context threshold
+(`ctx≥600k 0/3` = zero of three sessions above 600k tokens of context), and
+an aggregate `NOMINAL / AWAITING / DEGRADED` pill. Session uptime and UTC
+clock sit early in the strip so they survive a narrow resize. When two or
+more subscriptions are connected, the header says **all sessions** (count
+alongside); each provider’s green ◆ active marker lives on its Aggregate
+row, not as CC/CUR chips in the header.
+
+The Aggregate line under the header is Claude-only (tokens, session/week
+cost, 5h/7d plan %) when only Claude is connected. With multiple
+subscriptions it splits into **one Aggregate row per subscription** — each
+provider keeps its own meters (Claude’s rolling plan windows stay on the Claude
+row; Cursor shows measured $ / tokens when usage sync is on, otherwise
+`sync off` / `$-.--`). Metrics are never blended across providers whose
+baselines do not match.
+
+Two live slots may share a project path; transcripts and PTYs stay
+isolated, but the working tree and git index are shared. Prefer
+`git worktree` (or careful sequencing) for parallel writers — git commits
+are the source of truth for history, not for concurrent mid-edit races.
+Launching into a cwd already used by another live slot shows a soft warn
+toast.
 
 **Not states (derived indicators):**
 
@@ -439,7 +459,7 @@ Settings → LAYOUT. Keys available there:
 | `/` | Type a slash command — autocomplete dropdown appears above the composer. `Tab` fills the highlighted name (keeping any args you've typed); `↵` runs it. See below for the catalog. |
 | `⌥↵`  ·  `Ctrl+J` | Newline in composer (plain `↵` submits) |
 | `↑` / `↓` | Recall prior submitted prompt (history nav in composer) |
-| `Ctrl+Y` | Enter **scroll mode** — view scrollback without forwarding keys to claude (the embedded session owns the screen, so mc brackets a dedicated mode rather than fighting it for arrow keys) |
+| `Ctrl+F` | Enter **scroll mode** — view scrollback without forwarding keys to claude (the embedded session owns the screen, so mc brackets a dedicated mode rather than fighting it for arrow keys) |
 | `w` / `s` _(scroll mode)_ | Scroll one line back / forward through history |
 | `f` / `b` _(scroll mode)_ | Scroll half a page up / down |
 | `g` / `G` _(scroll mode)_ | Jump to the oldest / newest (live) line |
@@ -457,7 +477,7 @@ scrollback, so a resize costs you one extra, differently-wrapped copy of the
 conversation (measured: 1 copy → 2 after widening → 3 after widening again).
 Zooming in, zooming out, a toast landing, and opening the stats or tasks panel
 therefore resize nothing; the zoom pane renders the bottom slice of the
-emulator instead, and `Ctrl+Y` scroll reaches whatever the window skipped.
+emulator instead, and `Ctrl+F` scroll reaches whatever the window skipped.
 
 #### Slash commands (in zoom)
 
@@ -636,8 +656,8 @@ bin/
 tui/
   main.jsx            Boot: constructs Fleet, renders <App/>, wires shutdown
   App.jsx             Top-level: hotkeys, focus, modal routing, fleet sub
-  Header.jsx          Top status strip
-  Aggregate.jsx       Token/cost line + week budget bar + fleet sparkline
+  Header.jsx          Top status strip (+ connected subscription chips)
+  Aggregate.jsx       Token/cost line (per-sub when multi-provider)
   Card.jsx            One agent tile
   FleetLog.jsx        Bottom pane — aggregated activity stream
   StatusBar.jsx       Vim-style status bar

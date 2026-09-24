@@ -12,7 +12,7 @@
 //      All typing, scrolling, markdown, syntax highlighting, slash UI, etc.
 //      come from claude itself — Mission Control no longer re-renders the
 //      stream-json events for the zoomed agent.
-//   7. Footer hint: ⌃Q exit · ⌃J newline · ⌃Y scroll · ⌃K tools · ⌃U stats
+//   7. Footer hint: ⌃Q exit · ⌃J newline · ⌃F scroll · ⌃K tools · ⌃U stats
 //
 // Why this exists: the prior Zoom modal parsed claude's stream-json
 // events and laid them out in Ink. That pipeline had perpetual
@@ -24,8 +24,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
-import { MODELS, modelColor, modelByCli } from '../lib/models.js';
-import { barCells, fmtK, fmtMoney, fmtDuration, humanize, trunc, UNKNOWN } from '../lib/format.js';
+import { MODELS, modelColor, resolveAgentModel, modelByCli, resolveModelId } from '../lib/models.js';
+import { barCells, fmtK, fmtMoney, fmtMoneyMeasured, fmtKMeasured, fmtDuration, humanize, trunc, UNKNOWN, UNMEASURED } from '../lib/format.js';
 import { zoomInnerWidth } from '../lib/zoomGeometry.js';
 import { readProjectHealth, healthColor, healthScoreText } from '../lib/projectHealth.js';
 import PtyPane from '../zoom/PtyPane.jsx';
@@ -99,25 +99,36 @@ export default function Zoom({
   // Effective model = the model claude is CURRENTLY on. A mid-session `/model`
   // switch only updates agent.resolvedModel (the cli id), never agent.model
   // (the launch model) — so prefer the resolved catalog entry and fall back
-  // to the launch model. This is what makes the header label, color, and
-  // maxCtx track a /model switch instead of showing the stale launch model.
-  const resolved = modelByCli(agent.resolvedModel);
-  const model = resolved || MODELS[agent.model];
-  const modelId = resolved ? resolved.id : agent.model;
-  // True only when claude reports a cli model the catalog doesn't know — a
-  // genuine drift/unknown model, not an intentional in-catalog /model switch.
-  const unknownResolved = agent.resolvedModel && !resolved
-    && (!MODELS[agent.model] || agent.resolvedModel !== MODELS[agent.model].cliModel);
+  // through resolveModelId(`auto` → newest). See resolveAgentModel().
+  // Resume often stores a CLI id in agent.model; resolveAgentModel maps that
+  // back to a catalog label so the header never loses `[OPUS …]`.
+  const model = resolveAgentModel(agent);
+  const modelId = model?.id || agent.model;
+  const modelLabel = model?.label
+    || (agent.resolvedModel ? trunc(humanize(String(agent.resolvedModel)), 18) : '')
+    || (agent.model ? trunc(humanize(String(agent.model)), 18) : '')
+    || '—';
+  // Warn when claude reports a CLI id that is not an exact catalog match
+  // (and is not simply the launch model's cli id).
+  const launch = modelByCli(agent.model)
+    || MODELS[resolveModelId(agent.model)]
+    || MODELS[agent.model];
+  const unknownResolved = !!(agent.resolvedModel
+    && !modelByCli(agent.resolvedModel)
+    && (!launch || agent.resolvedModel !== launch.cliModel));
   // 0409: an unknown model has no maxCtx, so there is no ctx DENOMINATOR. The
   // old `: 0` rendered the compact stats line as `ctx 142k/0  0%` — a real
   // token count over a fabricated limit, reported as 0% used. Gate every ctx
   // ratio on ctxKnown and print the unknown marker instead.
   const ctxKnown = !!(model && Number.isFinite(model.maxCtx) && model.maxCtx > 0);
-  const ctxPct = ctxKnown ? (agent.context || 0) / model.maxCtx : 0;
-  const ctxPctText = ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
+  // 0420/D1: null context is unmeasured (`-`), not UNKNOWN (`?`).
+  const ctxMeasured = agent.context !== null;
+  const ctxPct = ctxKnown && ctxMeasured ? (agent.context || 0) / model.maxCtx : 0;
+  const ctxPctText = !ctxMeasured ? UNMEASURED
+    : ctxKnown ? `${(ctxPct * 100).toFixed(0)}%` : `${UNKNOWN}%`;
   const ctxMaxText = ctxKnown ? fmtK(model.maxCtx) : UNKNOWN;
-  const overT = (agent.context || 0) >= threshold;
-  const nearT = (agent.context || 0) >= threshold * 0.85;
+  const overT = ctxMeasured && (agent.context || 0) >= threshold;
+  const nearT = ctxMeasured && (agent.context || 0) >= threshold * 0.85;
 
   // 0417: read the DERIVED status, the same value the card shows. `agent` is
   // the live PtyAgent when zoom is opened from the grid, and its `.status` is
@@ -146,7 +157,7 @@ export default function Zoom({
   // itself is suppressed (cells === null) rather than drawn empty, which would
   // read as "0% of the context used".
   const barW = Math.max(10, Math.min(40, Math.floor(innerW / 2) - 4));
-  const cells = ctxKnown
+  const cells = ctxKnown && ctxMeasured
     ? barCells({ value: ctxPct, width: barW, threshFrac: threshold / model.maxCtx })
     : null;
 
@@ -232,7 +243,7 @@ export default function Zoom({
     + `${statusGlyph} ${statusWord}`.length;
   const nameStr = trunc(humanize(agent.name || '—'), 24);
   const leftFixedW = `[${agent.slot}] `.length + nameStr.length + 2
-    + (model ? `[${model.label}]  `.length : 0)
+    + `[${modelLabel}]  `.length
     + (resolvedText ? `⚠ resolved ${resolvedText}  `.length : 0)
     + 2; // '⎇ '
   const branchStr = trunc(humanize(agent.branch || '—'),
@@ -260,9 +271,7 @@ export default function Zoom({
         <Box flexShrink={0}>
           <Text color={theme.accent}>[{agent.slot}] </Text>
           <Text color={theme.accent}>{nameStr}  </Text>
-          {model && (
-            <Text color={modelColor(modelId, theme)}>[{model.label}]  </Text>
-          )}
+          <Text color={modelColor(modelId, theme)}>[{modelLabel}]  </Text>
           {/* Only warn when claude's resolved cli model is unknown to the catalog
               (genuine drift). An in-catalog /model switch updates the [label]
               above instead of showing a warning. resolvedText is humanized +
@@ -307,28 +316,37 @@ export default function Zoom({
           row — a narrow modal clips the tail chips instead of wrapping) ── */}
       <Box marginTop={1} height={1} overflow="hidden">
         <Text color={theme.dim}>ctx </Text>
-        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{fmtK(agent.context || 0)}</Text>
+        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxMeasured ? fmtK(agent.context || 0) : UNMEASURED}</Text>
         <Text color={theme.dim}>/{ctxMaxText}  </Text>
         <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxPctText}</Text>
         <Text color={theme.faint}>  ·  </Text>
         <Text color={theme.dim}>in </Text>
-        <Text color={theme.fg}>{fmtK(agent.tokensIn || 0)}↓</Text>
+        <Text color={theme.fg}>{fmtKMeasured(agent.tokensIn)}↓</Text>
         <Text color={theme.dim}>  out </Text>
-        <Text color={theme.fg}>{fmtK(agent.tokensOut || 0)}↑</Text>
+        <Text color={theme.fg}>{fmtKMeasured(agent.tokensOut)}↑</Text>
         <Text color={theme.dim}>  cache </Text>
-        <Text color={theme.faint}>{fmtK(agent.tokensCacheRead || 0)}</Text>
+        <Text color={theme.faint}>{fmtKMeasured(agent.tokensCacheRead)}</Text>
         <Text color={theme.faint}>  ·  </Text>
-        <Text color={theme.fg}>{costPrefix}{fmtMoney(agent.costSession || 0)}</Text>
+        <Text color={theme.fg}>{costPrefix}{fmtMoneyMeasured(agent.costSession)}</Text>
         <Text color={theme.dim}> (wk </Text>
         <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
         <Text color={theme.dim}>)</Text>
-        {usage && (
+        {usage && (usage.fiveHour?.usedPct != null || usage.sevenDay?.usedPct != null) && (
           <>
             <Text color={theme.faint}>  ·  </Text>
-            <Text color={theme.dim}>5h </Text>
-            <Text color={pctColor(usage.fiveHour.usedPct, theme)}>{usage.fiveHour.usedPct.toFixed(0)}%</Text>
-            <Text color={theme.dim}>  7d </Text>
-            <Text color={pctColor(usage.sevenDay.usedPct, theme)}>{usage.sevenDay.usedPct.toFixed(0)}%</Text>
+            {usage.fiveHour?.usedPct != null && (
+              <>
+                <Text color={theme.dim}>5h </Text>
+                <Text color={pctColor(usage.fiveHour.usedPct, theme)}>{usage.fiveHour.usedPct.toFixed(0)}%</Text>
+              </>
+            )}
+            {usage.fiveHour?.usedPct != null && usage.sevenDay?.usedPct != null && <Text color={theme.dim}>  </Text>}
+            {usage.sevenDay?.usedPct != null && (
+              <>
+                <Text color={theme.dim}>7d </Text>
+                <Text color={pctColor(usage.sevenDay.usedPct, theme)}>{usage.sevenDay.usedPct.toFixed(0)}%</Text>
+              </>
+            )}
           </>
         )}
         {health && (
@@ -450,22 +468,22 @@ export default function Zoom({
             <Box>
               <Text color={theme.dim}>tokens in  </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{fmtK(agent.tokensIn || 0)}↓</Text>
+              <Text color={theme.fg}>{fmtKMeasured(agent.tokensIn)}↓</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>tokens out </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{fmtK(agent.tokensOut || 0)}↑</Text>
+              <Text color={theme.fg}>{fmtKMeasured(agent.tokensOut)}↑</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cache read </Text>
               <Box flexGrow={1} />
-              <Text color={theme.faint}>{fmtK(agent.tokensCacheRead || 0)}</Text>
+              <Text color={theme.faint}>{fmtKMeasured(agent.tokensCacheRead)}</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cost · session </Text>
               <Box flexGrow={1} />
-              <Text color={theme.fg}>{costPrefix}{fmtMoney(agent.costSession || 0)}</Text>
+              <Text color={theme.fg}>{costPrefix}{fmtMoneyMeasured(agent.costSession)}</Text>
             </Box>
             <Box>
               <Text color={theme.dim}>cost · week    </Text>
@@ -523,7 +541,7 @@ export default function Zoom({
 
       {/* ── Footer hint row ──
           Keys mirror tui/zoom/zoomKeys.js (the single source of truth):
-          ⌃Q exit · ⌃J newline · ⌃Y scroll · ⌃K tools · ⌃U stats. Everything
+          ⌃Q exit · ⌃J newline · ⌃F scroll · ⌃K tools · ⌃U stats. Everything
           else — including Esc (interrupt claude) and ⇧⇥ (claude's own perm
           cycler) — is forwarded to the embedded claude session.
           height=1 + overflow=hidden: on a narrow modal the row clips instead
@@ -534,7 +552,7 @@ export default function Zoom({
           <Text color={theme.dim}> exit  ·  </Text>
           <Text color={theme.accent}>⌃J</Text>
           <Text color={theme.dim}> newline  ·  </Text>
-          <Text color={theme.accent}>⌃Y</Text>
+          <Text color={theme.accent}>⌃F</Text>
           <Text color={theme.dim}> scroll  ·  </Text>
           <Text color={theme.accent}>⌃K</Text>
           <Text color={theme.dim}> tools{showTools ? ' (on)' : ''}  ·  </Text>

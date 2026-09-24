@@ -23,26 +23,45 @@ test('modelByCli: every catalog entry round-trips through its cliModel', () => {
   }
 });
 
+test('opus-5.5 and opus-5 are selectable in the static catalog', () => {
+  assert.equal(MODELS['opus-5.5']?.cliModel, 'claude-opus-5-5');
+  assert.equal(MODELS['opus-5']?.cliModel, 'claude-opus-5');
+  assert.ok(modelIds().includes('opus-5.5'));
+  assert.ok(modelIds().includes('opus-5'));
+  assert.equal(modelByCli('claude-opus-5-5')?.id, 'opus-5.5');
+  assert.equal(newestModelId('opus'), 'opus-5.5');
+});
+
 test('a probe-DISCOVERED model becomes visible through the live modelIds() view', () => {
-  // Net-new models are never hand-added to MODELS — they arrive from the
-  // claude CLI via applyCacheToCatalog (e.g. Opus 5, which v2.1.220's bare
-  // `opus` alias resolves to). The selectors all read modelIds(), a live
-  // view, so a discovered model is immediately selectable.
-  assert.ok(!MODELS['opus-5'], 'precondition: opus-5 is not a static entry');
-  const cache = { fetchedAt: 1, models: { opus: { cliModel: 'claude-opus-5', contextWindow: 1000000, maxOut: 128000 } } };
+  // Net-new models still arrive via applyCacheToCatalog when the alias probe
+  // resolves a cli id that is not yet in the book (e.g. a future opus-5.6).
+  assert.ok(!MODELS['opus-9.9'], 'precondition: opus-9.9 is not a static entry');
+  const cache = { fetchedAt: 1, models: { opus: { cliModel: 'claude-opus-9-9', contextWindow: 1000000, maxOut: 128000 } } };
   const { added } = applyCacheToCatalog(MODELS, cache);
   try {
-    assert.deepEqual(added, ['opus-5']);
-    assert.ok(modelIds().includes('opus-5'), 'live id view sees the discovered model');
-    const e = modelByCli('claude-opus-5');
-    assert.equal(e.id, 'opus-5');
+    assert.deepEqual(added, ['opus-9.9']);
+    assert.ok(modelIds().includes('opus-9.9'), 'live id view sees the discovered model');
+    const e = modelByCli('claude-opus-9-9');
+    assert.equal(e.id, 'opus-9.9');
     assert.equal(e.maxCtx, 1000000);
     // Pricing is inherited from the newest same-kind sibling and flagged.
-    assert.equal(e.costPerMTokIn, MODELS['opus-4.8'].costPerMTokIn);
+    assert.equal(e.costPerMTokIn, MODELS['opus-5.5'].costPerMTokIn);
     assert.equal(e.estimatedPricing, true);
   } finally {
-    delete MODELS['opus-5']; // keep the shared catalog clean for other tests
+    delete MODELS['opus-9.9']; // keep the shared catalog clean for other tests
   }
+});
+
+test('applyCacheToCatalog ignores alias→wrong-family resolutions (haiku poison)', () => {
+  const before = { ...MODELS['opus-5.5'] };
+  const { added, updated } = applyCacheToCatalog(MODELS, {
+    fetchedAt: 1,
+    models: { opus: { cliModel: 'claude-haiku-4-5-20251001', contextWindow: 200000, maxOut: 32000 } },
+  });
+  assert.deepEqual(added, []);
+  assert.deepEqual(updated, []);
+  assert.equal(MODELS['opus-5.5'].cliModel, before.cliModel);
+  assert.equal(MODELS['opus-5.5'].maxCtx, before.maxCtx);
 });
 
 test('modelByCli: unknown / falsy cli model → null (genuine drift signal)', () => {
@@ -86,5 +105,5 @@ test('fable-5.1 outranks fable-5 as the newest of its kind', () => {
   // would tie with fable-5 and resolve by iteration order instead of version.
   assert.equal(newestModelId('fable'), 'fable-5.1');
   // The fable entries must not disturb the opus lineage that 'auto' follows.
-  assert.equal(newestModelId('opus'), 'opus-4.8');
+  assert.equal(newestModelId('opus'), 'opus-5.5');
 });

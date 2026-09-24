@@ -31,11 +31,12 @@ const SECTIONS = [
     ['Kill (uppercase K twice · 3s arm)', 'K K   or  :kill!'],
     ['Approve pending action (only while waiting)', 'a'],
     ['Cycle perm (plan → auto → acceptEdits)', 'shift+tab'],
+    ['Parallel agents on one repo', 'prefer git worktree — same checkout races files'],
   ]},
   { title: 'ZOOM (focused session)', views: ['zoom'], rows: [
     ['Exit zoom', 'ctrl+q'],
     ['Newline (plain ↵ submits)', 'ctrl+j · shift+↵'],
-    ['Scroll mode (w/s/f/b/g/G)', 'ctrl+y'],
+    ['Scroll mode (w/s/f/b/g/G)', 'ctrl+f'],
     ['Expand / collapse stats panel', 'ctrl+u'],
     ['Show / hide tool events', 'ctrl+k'],
     ['→ forwarded to claude', 'esc · ctrl+t · ctrl+s · shift+tab'],

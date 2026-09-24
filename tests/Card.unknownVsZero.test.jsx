@@ -34,6 +34,13 @@ test('a KNOWN model still draws its real percentage', () => {
   assert.doesNotMatch(f, new RegExp('\\' + UNKNOWN + '%'), 'not marked unknown when it is known');
 });
 
+test('launch model auto still has a ctx denominator (not ?%)', () => {
+  // Before resolveAgentModel, MODELS['auto'] was undefined → ctxKnown false → ?%.
+  const f = draw({ model: 'auto', resolvedModel: null, context: 12000 });
+  assert.match(f, /\d+%/, 'auto resolves to newest opus maxCtx');
+  assert.doesNotMatch(f, new RegExp('\\' + UNKNOWN + '%'));
+});
+
 test('missing uptime renders unknown, not a plausible zero', () => {
   const withOut = draw({ model: 'sonnet-4.6', resolvedModel: 'claude-sonnet-4-6' });
   const withIn = draw({ model: 'sonnet-4.6', resolvedModel: 'claude-sonnet-4-6', spawnedAt: Date.now() - 3000 });

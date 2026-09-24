@@ -1,0 +1,7 @@
+{"t":2,"ev":"spawn","bin":"cursor-agent","args":["--model","composer-2.5","--workspace","/tmp/mc-cursor-spike"],"cols":120,"rows":32}
+{"t":5964,"ev":"ctl","op":"snap","label":"ready-plain"}
+{"t":5968,"ev":"snap","label":"ready-plain","bracketedPaste":true,"cursorY":14}
+{"t":6576,"ev":"ctl","op":"write","label":"ctrl-d"}
+{"t":6577,"ev":"write","label":"ctrl-d","dataB64":"BA=="}
+{"t":6791,"ev":"exit","exitCode":0,"signal":0}
+{"t":6882,"ev":"snap","label":"final","bracketedPaste":false,"cursorY":14}

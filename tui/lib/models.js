@@ -29,39 +29,15 @@
 // skew badly on heavy-cache turns (cache_creation often dominates
 // the input column on mc's first-turn-per-session shape).
 
-// Pricing + context refreshed 2026-07-27 against the authoritative Claude model
-// catalog (Fable/Mythos 5, Opus 4.8/4.7/4.6, Sonnet 5/4.6, Haiku 4.5). Opus is
-// $5/$25 per MTok (previously mis-mirrored from an old 15/75 figure); Opus 4.7
-// and Sonnet 4.6 are 1M context (previously 200K). Cache rates follow the file
-// convention: cacheCreation = 1.25×in, cacheRead = 0.10×in.
-// NEW MODELS ARE NOT ADDED HERE BY HAND. This table is the offline pricing
-// book for models whose published rates we've verified. Net-new models
-// (e.g. Opus 5, which claude v2.1.220's bare `opus` alias resolves to) are
-// DISCOVERED from the source of truth — the claude CLI itself — via
-// tui/lib/modelProbe.js: probe → models-cache.json → applyCacheToCatalog()
-// merges them into this object at boot / on `:model refresh` / on a claude
-// version change, with pricing inherited from the newest same-kind sibling
-// and flagged estimatedPricing until a verified row is added here.
-//
-// fable-5.1 is the ONE hand-added exception, and it documents why the rule
-// above needs the discovery gap closed (2026-09-18). Neither automatic source
-// can reach it: the Models API sync reads ANTHROPIC_API_KEY /
-// ANTHROPIC_AUTH_TOKEN from the environment and silently returns "no API
-// credential" when (as here) the user is logged in through the claude CLI
-// instead, and the alias probe only walks KNOWN_ALIASES = opus/sonnet/haiku,
-// which has no entry for a fable-family model. Its limits below (1M ctx /
-// 128k out) come from a live GET /v1/models; its PRICING is NOT published-
-// verified — it is inherited from fable-5 and flagged estimatedPricing, same
-// contract a discovered model gets. Replace the flag with real rates when
-// they're confirmed. Delete this entry once the keychain credential source
-// lands and discovery adds it on its own.
-//
-// TODO(model-min-cli): a model can also require a MINIMUM claude version, and
-// the catalog has nowhere to say so. claude 2.1.220 answers a fable-5-1 launch
-// with "API Error: 400 … does not support this model; version 2.1.251 or newer
-// is required", which reaches the card as a generic session failure. Carry a
-// minCli field per entry and refuse/flag the selection before we spawn.
+// Pricing + context refreshed 2026-09-24 against Anthropic's published Opus 5.5
+// rates ($4/$20) and the prior Opus/Fable/Sonnet book. Opus 5.5 is the current
+// newest opus; Opus 5 stays in the book for pinned sessions.
+// NEW MODELS ARE ideally discovered (Models API / alias probe). Hand-add when
+// the CLI login has no API credential AND the alias probe cannot see a family
+// (or when a release is public before the next claude-code cask ships it).
 export const MODELS = {
+  'opus-5.5':   { label: 'OPUS 5.5',   cliModel: 'claude-opus-5-5',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 4,  costPerMTokOut: 20, costPerMTokCacheCreation: 5,     costPerMTokCacheRead: 0.4 },
+  'opus-5':     { label: 'OPUS 5',     cliModel: 'claude-opus-5',             kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.8':   { label: 'OPUS 4.8',   cliModel: 'claude-opus-4-8',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.7':   { label: 'OPUS 4.7',   cliModel: 'claude-opus-4-7',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.6':   { label: 'OPUS 4.6',   cliModel: 'claude-opus-4-6',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
@@ -87,7 +63,71 @@ export const MODELS = {
 // selector (Settings cycler, NewSession ←/→, :model validation) must see
 // discovered models. The old `MODEL_IDS = Object.keys(MODELS)` snapshot
 // silently excluded anything discovered after import.
-export function modelIds() { return Object.keys(MODELS); }
+//
+// 0420: other providers' models share this object under namespaced keys
+// (`cursor:<id>`, see registerProviderModels). A Claude entry is one with no
+// `provider` field, so `modelIds()` — every existing caller — still returns
+// exactly the Claude list.
+export function modelIds(provider = 'claude') {
+  return Object.keys(MODELS).filter((id) => (MODELS[id].provider || 'claude') === provider);
+}
+
+const isClaudeEntry = (m) => !m.provider;
+
+// ── Other providers (0420) ─────────────────────────────────────────────────
+// Keys and cliModel are both `<provider>:<id>`, so the card's existing
+// MODELS[agent.model] / modelByCli(agent.resolvedModel) lookups resolve them
+// and nothing can collide with a Claude id. No pricing fields: cost for these
+// comes from the provider's own usage feed or stays unknown.
+
+// maxCtx from a vendor label such as "Claude Opus 5 1M Thinking" / "… 300K".
+// Absent when the label names no size — the card already renders `limit ?`.
+function maxCtxFromLabel(label) {
+  const m = /(?:^|\s)(\d+(?:\.\d+)?)([MK])(?=\s|$)/i.exec(String(label || ''));
+  if (!m) return null;
+  return Math.round(parseFloat(m[1]) * (m[2].toUpperCase() === 'M' ? 1_000_000 : 1_000));
+}
+
+// registerProviderModels — replace `provider`'s entries with `models`
+// ([{ id, label }]). Claude entries are never touched.
+export function registerProviderModels(provider, models) {
+  if (!provider || provider === 'claude') return;
+  const prefix = `${provider}:`;
+  for (const k of Object.keys(MODELS)) if (k.startsWith(prefix)) delete MODELS[k];
+  for (const { id, label } of models || []) {
+    if (!id) continue;
+    const key = `${prefix}${id}`;
+    const entry = { label: label || id, cliModel: key, kind: provider, provider };
+    const maxCtx = maxCtxFromLabel(label);
+    if (maxCtx) entry.maxCtx = maxCtx;
+    MODELS[key] = entry;
+  }
+}
+
+// cursorCliArg — the `--model` value for a Cursor catalog id. 'auto' is a real
+// Cursor model id and passes through like any other.
+export function cursorCliArg(modelId) {
+  if (!modelId) return null;
+  const s = String(modelId);
+  return s.startsWith('cursor:') ? s.slice('cursor:'.length) || null : s;
+}
+
+// Zero-width / BOM characters the CLI pads some labels with.
+const ZERO_WIDTH_RX = /[\u200b-\u200d\u2060\ufeff]/g;
+
+// parseCursorModelList — `cursor-agent --list-models` stdout → [{ id, label }].
+// Lines are `id - Label`; the header, blank lines and anything else are
+// skipped. Never throws.
+export function parseCursorModelList(stdout) {
+  const out = [];
+  for (const raw of String(stdout || '').split(/\r?\n/)) {
+    const line = raw.replace(ZERO_WIDTH_RX, '').trim();
+    const m = /^(\S+) - (.+)$/.exec(line);
+    if (!m) continue;
+    out.push({ id: m[1], label: m[2].trim() });
+  }
+  return out;
+}
 
 // newestModelId — newest non-retired model of a kind, by the numeric version
 // in its friendly id ('opus-5' → 5, 'opus-4.8' → 4.8). A LIVE computation over
@@ -96,7 +136,7 @@ export function modelIds() { return Object.keys(MODELS); }
 export function newestModelId(kind = 'opus') {
   let best = null, bestV = -1;
   for (const [id, m] of Object.entries(MODELS)) {
-    if (m.kind !== kind || m.retired) continue;
+    if (!isClaudeEntry(m) || m.kind !== kind || m.retired) continue;
     const v = parseFloat(String(id).slice(String(id).lastIndexOf('-') + 1));
     if (Number.isFinite(v) && v > bestV) { bestV = v; best = id; }
   }
@@ -147,13 +187,60 @@ export function estimatedPricingFor(modelId) {
 // when the cli model isn't in the catalog (genuine drift / unknown model).
 export function modelByCli(cliModel) {
   if (!cliModel) return null;
+  const s = String(cliModel);
   for (const [id, m] of Object.entries(MODELS)) {
-    if (m.cliModel === cliModel) return { id, ...m };
+    if (m.cliModel === s) return { id, ...m };
+  }
+  // Friendly catalog key passed by mistake (or launch id reused as resolved).
+  if (MODELS[s]) return { id: s, ...MODELS[s] };
+  // Dated snapshot vs bare catalog id (…-20251001 / …-v1 suffixes).
+  const bare = s.replace(/-\d{8}(-v\d+)?$/i, '');
+  if (bare !== s) {
+    for (const [id, m] of Object.entries(MODELS)) {
+      if (m.cliModel === bare || String(m.cliModel).replace(/-\d{8}(-v\d+)?$/i, '') === bare) {
+        return { id, ...m };
+      }
+    }
   }
   return null;
 }
 
-// Display color per model (theme-relative, resolved at render).
+// resolveAgentModel — the entry Card / Zoom use for label, color, and ctx %.
+// Prefer the live resolved CLI id; fall back through resolveModelId so a
+// launch of `auto` still has a maxCtx denominator (otherwise Zoom shows
+// `ctx …/?  ?%`). Resume often puts a CLI id in `agent.model` (store saves
+// resolvedModel as the launch model) — modelByCli that too. Unknown CLI ids
+// inherit maxCtx from the newest same-kind sibling when we can infer the family.
+export function resolveAgentModel(agent) {
+  if (!agent) return null;
+  const resolved = modelByCli(agent.resolvedModel);
+  if (resolved) return resolved;
+  const launchId = resolveModelId(agent.model);
+  if (launchId && MODELS[launchId]) return { id: launchId, ...MODELS[launchId] };
+  if (agent.model && MODELS[agent.model]) return { id: agent.model, ...MODELS[agent.model] };
+  // CLI id (or dated snapshot) sitting in the launch field — common after
+  // :resume-all, which prefers store.resolvedModel over the friendly id.
+  const launchCli = modelByCli(agent.model);
+  if (launchCli) return launchCli;
+  const driftId = agent.resolvedModel || agent.model;
+  if (driftId) {
+    const kind = kindFromModelId(driftId);
+    const sibId = kind && newestModelId(kind);
+    if (sibId && MODELS[sibId]) {
+      return {
+        id: sibId,
+        ...MODELS[sibId],
+        cliModel: driftId,
+        label: String(driftId).replace(/^claude-/, '').toUpperCase(),
+        estimatedPricing: true,
+      };
+    }
+  }
+  return null;
+}
+
+// Display color per model (theme-relative, resolved at render). A non-Claude
+// kind (e.g. 'cursor') falls through to the default below.
 export function modelColor(id, theme) {
   const m = MODELS[id];
   if (!m) return theme.dim;

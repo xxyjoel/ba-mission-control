@@ -1,0 +1,358 @@
+{
+  "_note": "Redacted. Shape of POST /api/dashboard/get-filtered-usage-events (cookie built from CLI keychain token).",
+  "request": {
+    "teamId": 0,
+    "startDate": "1790112600000",
+    "endDate": "1790112960000",
+    "page": 1,
+    "pageSize": 20
+  },
+  "cookieUserIdForm": "jwt-sub-tail",
+  "attempts": [
+    {
+      "label": "jwt-sub-tail",
+      "status": 200
+    }
+  ],
+  "responseShape": {
+    "totalUsageEventsCount": "number",
+    "usageEventsDisplay": [
+      {
+        "timestamp": "string",
+        "model": "string",
+        "kind": "string",
+        "requestsCosts": "number",
+        "usageBasedCosts": "string",
+        "isTokenBasedCall": "boolean",
+        "tokenUsage": {
+          "inputTokens": "number",
+          "outputTokens": "number",
+          "cacheWriteTokens": "number",
+          "cacheReadTokens": "number",
+          "totalCents": "number"
+        },
+        "owningUser": "string",
+        "cursorTokenFee": "number",
+        "isChargeable": "boolean",
+        "serviceAccountId": "string",
+        "isHeadless": "boolean",
+        "chargedCents": "number",
+        "conversationId": "string",
+        "subscriptionProductId": "string"
+      }
+    ]
+  },
+  "topLevelKeys": [
+    "totalUsageEventsCount",
+    "usageEventsDisplay"
+  ],
+  "totalUsageEventsCount": 22,
+  "eventTimestamps": [
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112906191",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 5088,
+        "outputTokens": 665,
+        "totalCents": 0.3188900053501129
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-1",
+      "timestamp": "1790112885187",
+      "model": "composer-2.5-fast",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 10,
+        "outputTokens": 8,
+        "cacheReadTokens": 10464,
+        "totalCents": 0.5382000207901001
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-1",
+      "timestamp": "1790112879321",
+      "model": "composer-2.5-fast",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 27,
+        "outputTokens": 13,
+        "cacheReadTokens": 10432,
+        "totalCents": 0.5491999983787537
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-1",
+      "timestamp": "1790112831930",
+      "model": "composer-2.5-fast",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 6865,
+        "outputTokens": 156,
+        "cacheReadTokens": 13824,
+        "totalCents": 2.9846999645233154
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.699999988079071,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112829276",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 570,
+        "outputTokens": 672,
+        "cacheReadTokens": 42880,
+        "totalCents": 1.0541000366210938
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.30000001192092896,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112778919",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 150,
+        "outputTokens": 74,
+        "cacheReadTokens": 27616,
+        "totalCents": 0.5783200263977051
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112750065",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 140,
+        "outputTokens": 108,
+        "cacheReadTokens": 27264,
+        "totalCents": 0.5792800188064575
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112740451",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 41,
+        "outputTokens": 4,
+        "cacheReadTokens": 13600,
+        "totalCents": 0.27505001425743103
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112732887",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 140,
+        "outputTokens": 111,
+        "cacheReadTokens": 26976,
+        "totalCents": 0.5742700099945068
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112726617",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 9588,
+        "outputTokens": 83,
+        "cacheReadTokens": 17280,
+        "totalCents": 0.8457499742507935
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.20000000298023224,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112685607",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 24,
+        "outputTokens": 19,
+        "cacheReadTokens": 13248,
+        "totalCents": 0.27090999484062195
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112675502",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 17,
+        "outputTokens": 5,
+        "cacheReadTokens": 13248,
+        "totalCents": 0.2670600116252899
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112663263",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 11,
+        "outputTokens": 36,
+        "cacheReadTokens": 13216,
+        "totalCents": 0.27386999130249023
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    },
+    {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790112659235",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 9316,
+        "outputTokens": 37,
+        "cacheReadTokens": 3872,
+        "totalCents": 0.5524899959564209
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    }
+  ],
+  "sampleEvents": [
+    {
+      "timestamp": "1790112906191",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-",
+      "isTokenBasedCall": true,
+      "tokenUsage": {
+        "inputTokens": 5088,
+        "outputTokens": 665,
+        "totalCents": 0.3188900053501129
+      },
+      "owningUser": "<owningUser>",
+      "cursorTokenFee": 0,
+      "isChargeable": true,
+      "serviceAccountId": "<serviceAccountId>",
+      "isHeadless": false,
+      "chargedCents": 0.3188900053501129,
+      "conversationId": "dc1435e1-18b7-4868-8a51-8e811dc470e4",
+      "subscriptionProductId": "<subscriptionProductId>"
+    },
+    {
+      "timestamp": "1790112885187",
+      "model": "composer-2.5-fast",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-",
+      "isTokenBasedCall": true,
+      "tokenUsage": {
+        "inputTokens": 10,
+        "outputTokens": 8,
+        "cacheReadTokens": 10464,
+        "totalCents": 0.5382000207901001
+      },
+      "owningUser": "<owningUser>",
+      "cursorTokenFee": 0,
+      "isChargeable": true,
+      "serviceAccountId": "<serviceAccountId>",
+      "isHeadless": false,
+      "chargedCents": 0.5382000207901001,
+      "conversationId": "bec7e166-d885-4fc4-893d-524717960093",
+      "subscriptionProductId": "<subscriptionProductId>"
+    },
+    {
+      "timestamp": "1790112929418",
+      "model": "claude-opus-5-5-medium",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "requestsCosts": 9.199999809265137,
+      "usageBasedCosts": "-",
+      "isTokenBasedCall": true,
+      "tokenUsage": {
+        "inputTokens": 14,
+        "outputTokens": 6504,
+        "cacheWriteTokens": 9666,
+        "cacheReadTokens": 956800,
+        "totalCents": 36.982601165771484
+      },
+      "owningUser": "<owningUser>",
+      "cursorTokenFee": 0,
+      "isChargeable": true,
+      "serviceAccountId": "<serviceAccountId>",
+      "isHeadless": false,
+      "chargedCents": 36.982601165771484,
+      "conversationId": "<other-conversation>",
+      "subscriptionProductId": "<subscriptionProductId>"
+    }
+  ],
+  "conversationIdMap": {
+    "probe-chat-0": "dc1435e1-18b7-4868-8a51-8e811dc470e4 (slot chat, session.*)",
+    "probe-chat-1": "bec7e166-d885-4fc4-893d-524717960093 (Task subagent chat)"
+  },
+  "otherConversationEventsInWindow": 8,
+  "otherModelsInWindow": [
+    "claude-opus-5-5-medium"
+  ],
+  "latencyProbe": {
+    "_note": "print-mode turn (cursor-agent -p) t0=CLI start, t1=CLI exit; first poll at pollAt already contained the event",
+    "t0": 1790113063250,
+    "t1": 1790113073791,
+    "pollAt": 1790113079212,
+    "event": {
+      "conversation": "probe-chat-0",
+      "timestamp": "1790113071723",
+      "model": "composer-2.5",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_PRO_PLUS",
+      "tokenUsage": {
+        "inputTokens": 6880,
+        "outputTokens": 31,
+        "cacheReadTokens": 3915,
+        "totalCents": 0.43004998564720154
+      },
+      "isHeadless": false,
+      "requestsCosts": 0.10000000149011612,
+      "usageBasedCosts": "-"
+    }
+  }
+}
