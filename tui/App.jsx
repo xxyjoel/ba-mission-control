@@ -50,6 +50,7 @@ import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine, VERSION } from './lib/version.js';
 import { removeSession } from '../server/claudeSessions.mjs';
 import { probeClaudeVersion } from './lib/claudeVersion.js';
+import { watchInstall } from './lib/installWatch.js';
 import { readUsage, fmtReset } from './lib/usage.js';
 import { dlog } from './lib/debugLog.js';
 import { postSlack } from './lib/slack.js';
@@ -691,10 +692,11 @@ export default function App({
   }, []);
 
   // ── Claude CLI upgrade → re-probe aliases ───────────────
-  // Brew upgrades do not restart mc. Boot already runs autoProbeOnVersionChange;
-  // also check periodically so a CLI bump while mc is open still refreshes the
-  // model list without waiting for a quit/relaunch. Skip in a sandboxed config
-  // dir (tests / MC_CONFIG_DIR) unless MC_SYNC_MODELS=1 — same gate as boot.
+  // Upgrades do not restart mc. Boot already runs autoProbeOnVersionChange;
+  // a CLI bump while mc is open still refreshes the model list without a
+  // relaunch. 0428: no timer — the check runs once here, then only when the
+  // install on disk changes (watchInstall). Skip in a sandboxed config dir
+  // (tests / MC_CONFIG_DIR) unless MC_SYNC_MODELS=1 — same gate as boot.
   useEffect(() => {
     if (settings.syncModelsOnBoot === false) return undefined;
     if (isSandboxed() && process.env.MC_SYNC_MODELS !== '1') return undefined;
@@ -706,6 +708,9 @@ export default function App({
         const stamped = loadModelCache()?.claudeVersion || null;
         const version = await getClaudeVersion();
         if (!version || version === stamped) return;
+        // New spawns stamp this cached value; refresh it so `:update` drift
+        // reports compare against the binary now on disk.
+        probeClaudeVersion(true);
         pushToast(`claude ${stamped || '?'} → ${version} · probing models…`, 'info');
         const r = await autoProbeOnVersionChange(MODELS);
         if (r?.probed) {
@@ -719,8 +724,7 @@ export default function App({
       finally { busy = false; }
     };
     check();
-    const t = setInterval(check, 60_000);
-    return () => clearInterval(t);
+    return watchInstall(process.env.CLAUDE_BIN || 'claude', check);
   }, [settings.syncModelsOnBoot]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Derived ─────────────────────────────────────────────
