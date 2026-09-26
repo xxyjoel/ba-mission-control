@@ -49,3 +49,24 @@ export function matchUpdateBanner(rowText) {
   const m = t.match(VERSION_RE);
   return { version: m ? m[1] : null, text: t.slice(0, 80) };
 }
+
+// A composer border: claude ≥2.1.2xx draws its input box between two
+// full-width `─` rules; older builds drew a ╭──╮ / ╰──╯ box.
+const RULE_RE = /^(?:[─━═]{10,}|[╭╰][─━]{8,}[╮╯])$/;
+
+// composerSpan — the rows of claude's composer, as [top, bottom] inclusive,
+// so the caller never lifts the user's own typing out as a "banner" (0429;
+// 0366 was the same bug, fixed then by narrowing the regex). The span is the
+// run of rows between the nearest rule above the cursor and the nearest rule
+// below it. Without both rules, only the cursor row is protected.
+export function composerSpan(rowTexts, cursorRow) {
+  if (!Array.isArray(rowTexts) || !Number.isInteger(cursorRow)) return null;
+  if (cursorRow < 0 || cursorRow >= rowTexts.length) return null;
+  const isRule = (y) => RULE_RE.test(String(rowTexts[y] ?? '').trim());
+  let top = cursorRow;
+  while (top >= 0 && !isRule(top)) top--;
+  let bottom = cursorRow;
+  while (bottom < rowTexts.length && !isRule(bottom)) bottom++;
+  if (top < 0 || bottom >= rowTexts.length) return [cursorRow, cursorRow];
+  return [top + 1, bottom - 1];
+}

@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { matchUpdateBanner } from '../tui/zoom/claudeBanner.js';
+import { matchUpdateBanner, composerSpan } from '../tui/zoom/claudeBanner.js';
 
 test('matches the common update-available wordings', () => {
   for (const s of [
@@ -86,4 +86,23 @@ test('tolerates non-string input', () => {
   assert.equal(matchUpdateBanner(null), null);
   assert.equal(matchUpdateBanner(undefined), null);
   assert.equal(matchUpdateBanner(42), null);
+});
+
+test('composerSpan: rows between the rules around the cursor (0429)', () => {
+  const R = '─'.repeat(40);
+  const rows = ['header', '', R, '❯ line one', '  line two', R, '  status'];
+  assert.deepEqual(composerSpan(rows, 4), [3, 4]);
+  assert.deepEqual(composerSpan(rows, 3), [3, 4]);
+});
+
+test('composerSpan: the older ╭──╮ box counts as a border', () => {
+  const rows = ['╭' + '─'.repeat(30) + '╮', '│ > typing │', '╰' + '─'.repeat(30) + '╯'];
+  assert.deepEqual(composerSpan(rows, 1), [1, 1]);
+});
+
+test('composerSpan: without both rules only the cursor row is protected', () => {
+  assert.deepEqual(composerSpan(['a', 'b', 'c'], 1), [1, 1]);
+  assert.deepEqual(composerSpan(['─'.repeat(40), 'b', 'c'], 2), [2, 2]);
+  assert.equal(composerSpan(['a'], -1), null);
+  assert.equal(composerSpan(['a'], 5), null);
 });
