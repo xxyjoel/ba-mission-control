@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Zoom no longer hides a line of your own typing when it reads like claude's
+  "update available" notice. Rows inside claude's composer are never treated
+  as the notice.
+
+### Changed
+- New-model discovery no longer polls `claude --version` every 60 s. mc checks
+  at boot, then only when an install changes the folder holding `claude`.
+
 ## [1.2.3] — 2026-09-24
 
 ### Fixed

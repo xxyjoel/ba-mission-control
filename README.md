@@ -452,7 +452,8 @@ Configurable in Settings → GENERAL:
 is lifted out of the body and shown as a discrete `⬆ update` chip on the right
 of the zoom header so it doesn't encroach on the conversation — toggle with
 **Hide claude update banner in zoom** (`hideClaudeUpdateBanner`, default on) in
-Settings → LAYOUT. Keys available there:
+Settings → LAYOUT. Rows inside claude's composer are never hidden, so your own
+typing can't be mistaken for the banner. Keys available there:
 
 | Keys | Action |
 | --- | --- |
@@ -557,8 +558,10 @@ a model by hand:
    installs. Each probe is a billed turn, so it fires only when
    `claude --version` differs from the version stamped in
    `models-cache.json`. That's how Opus 5 appeared with zero code changes
-   when v2.1.220 shipped. Failed probes don't stamp, so discovery retries
-   next boot. A brand-new model *family* (its own alias) reaching
+   when v2.1.220 shipped. mc checks the version at boot, then again only
+   when an install changes the folder holding `claude` (a file-system watch,
+   no timer) — so upgrading while mc runs refreshes the list within a few
+   seconds. Failed probes don't stamp, so discovery retries next boot. A brand-new model *family* (its own alias) reaching
    credential-less installs needs a one-string addition to `KNOWN_ALIASES`
    in `tui/lib/modelProbe.js` — the API path needs nothing.
 
