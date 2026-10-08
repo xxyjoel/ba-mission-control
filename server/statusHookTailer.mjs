@@ -87,7 +87,10 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
           // background agents are still working. toJSON keeps an idle card
           // on 'working' while this clock is fresh (focus-duck read IDLE
           // with three builders running, 2026-08-30).
-          agent.lastSubHookTs = Date.now();
+          // 0449: the record's own time, never the read time — a replay from
+          // offset 0 must not make a 14 h old sub event look live. max() so an
+          // older record (repointed file) can't move the clock backwards.
+          agent.lastSubHookTs = Math.max(agent.lastSubHookTs || 0, eventTs(ev));
           continue;
         }
         // 0439: claude reports its permission mode on the hook payload, so a
@@ -117,7 +120,7 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
         // above).
         if (ev?.event === 'PostToolUse' && agent.hookStatus === 'waiting') {
           agent.hookStatus = 'working';
-          agent.hookStatusTs = Date.now();
+          agent.hookStatusTs = eventTs(ev); // 0449
           agent.emit?.('change');
           continue;
         }
@@ -125,7 +128,18 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
         if (s != null) {
           const changed = agent.hookStatus !== s;
           agent.hookStatus = s;
-          agent.hookStatusTs = Date.now();
+          // 0449: working/waiting stamp the EVENT time (clamped to now).
+          // Replay from offset 0 used to stamp read time, so a 14 h old
+          // PreToolUse looked 0.3 s old. IDLE keeps the read time on purpose:
+          // its only reader is deriveStatus's hook-idle branch, which compares
+          // it with lastConnectorTs — and that clock (jsonlConnector.mjs:238)
+          // is the time mc READ the transcript line. Stamping a Stop with its
+          // own ts let any transcript record read after the Stop beat it (up to
+          // 1.5 s of stat-poll on cloud paths), turning a finished turn into
+          // WAITING/WORKING. Both sides of that comparison must share a clock.
+          // TODO(0449): move lastConnectorTs to the record's own time too, then
+          // drop this idle exception (jsonlConnector is another lane's file).
+          agent.hookStatusTs = s === 'idle' ? Date.now() : eventTs(ev);
           if (changed) agent.emit?.('change');
         }
         // null-mapping events leave hookStatus/hookStatusTs unchanged and do not emit
@@ -199,6 +213,20 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
       }
     },
   };
+}
+
+// eventTs(ev) — 0449. The record's own ms timestamp (emit-status.mjs writes
+// Date.now() at hook time), clamped to now so a skewed or hand-edited future
+// ts can't pin freshness. The file is untrusted: anything but a finite number
+// of MILLISECONDS (no coercion of true/"5"/[7]; a seconds value like 1.7e9 is
+// below MIN_EVENT_TS_MS) falls back to now. Date.now() is read per call so
+// tests that mock the clock (status.replay) keep working.
+const MIN_EVENT_TS_MS = 1e12; // 2001-09-09 in ms; any seconds-based ts is far below
+export function eventTs(ev) {
+  const now = Date.now();
+  const ts = ev?.ts;
+  return typeof ts === 'number' && Number.isFinite(ts) && ts >= MIN_EVENT_TS_MS
+    ? Math.min(ts, now) : now;
 }
 
 // applyHookPermissionMode — 0439. Set agent.permissionMode from a hook record's
