@@ -23,7 +23,7 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { modelColor, resolveAgentModel } from '../lib/models.js';
-import { fmtK, fmtMoney, fmtMoneyMeasured, fmtDuration, trunc, UNMEASURED } from '../lib/format.js';
+import { fmtK, fmtMoney, fmtMoneyMeasured, fmtDuration, trunc, padCol, humanize, UNMEASURED } from '../lib/format.js';
 
 // Ordered list of sortable columns — `S` cycles through these.
 const SORT_KEYS = ['slot', 'status', 'ctx', 'tpm', 'cost', 'age'];
@@ -226,7 +226,11 @@ export default function Dashboard({
           <Box key={a.id}>
             <Text color={sel ? theme.accent : theme.faint}>{sel ? '▶ ' : '  '}</Text>
             <Text color={sel ? theme.accent : theme.dim}>{`[${a.slot}]`.padEnd(4)}</Text>
-            <Text color={sel ? theme.fg : theme.dim} bold={sel}>{trunc(a.name || '—', 17).padEnd(18)}</Text>
+            {/* 0460: pad in display cells (padCol), not code units — a wide-glyph
+                name misaligned every column to its right. humanize() strips any
+                escape a name could carry, same as Zoom; the '—' fallback comes
+                after it so an escape-only name still shows a placeholder. */}
+            <Text color={sel ? theme.fg : theme.dim} bold={sel}>{padCol(trunc(humanize(a.name || '') || '—', 17), 18)}</Text>
             <Text color={modelColor(runId, theme)}>{modelBadge(runId).padEnd(6)}</Text>
             <Text color={statusColor(a.status, theme)}>{(STATUS_LABEL[a.status] || a.status).padEnd(8)}</Text>
             <Text color={ctxPct >= 90 ? theme.red : ctxPct >= 80 ? theme.yellow : theme.fg}>{(ctxPct === null ? UNMEASURED : `${ctxPct}%`).padEnd(7)}</Text>
@@ -234,7 +238,10 @@ export default function Dashboard({
             <Text color={theme.fg}>{fmtMoneyMeasured(a.costSession).padEnd(9)}</Text>
             <Text color={theme.faint}>{ageStr.padEnd(8)}</Text>
             <Box flexGrow={1} flexShrink={1} overflow="hidden">
-              <Text color={theme.faint} wrap="truncate">{a.activity || ''}</Text>
+              {/* 0460: activity is raw session text (a Bash command line); humanize()
+                  strips OSC 8 / BEL / C1 so it cannot reach the terminal, as Card does
+                  for its todo and subagent rows. */}
+              <Text color={theme.faint} wrap="truncate">{humanize(a.activity || '')}</Text>
             </Box>
           </Box>
         );
