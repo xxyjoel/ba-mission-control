@@ -258,6 +258,13 @@ export class Fleet extends EventEmitter {
     // this slot by index. PtyAgent forwards it to the tailer as claimedSids.
     const siblingSids = () =>
       this.agents.filter((a, i) => a && i !== slot - 1).map((a) => a.sessionId).filter(Boolean);
+    // 0454: one live slot per session id. Resuming a sid already live in
+    // another slot ran two claudes on one transcript (two pids, one sid) and
+    // gave two cards one conversation — the identity shape behind 0365.
+    if (sessionId && siblingSids().includes(sessionId)) {
+      const other = this.agents.findIndex((a, i) => a && i !== slot - 1 && a.sessionId === sessionId) + 1;
+      throw new Error(`session ${String(sessionId).slice(0, 8)} is already live in slot ${other}`);
+    }
     // Selection order for claude: MOCK_FIXTURE always wins (test/dev replay),
     // then FLEET_USE_PTY chooses the new single-pipeline class, otherwise
     // fall back to the legacy stream-json Agent. Other providers are built by

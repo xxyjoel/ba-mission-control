@@ -1322,7 +1322,7 @@ export default function App({
           return null;
         }
         // Multi-restore: iterate, skip slots in use or without records.
-        let resumed = 0, fresh = 0, skipped = 0, missing = 0, blocked = false;
+        let resumed = 0, fresh = 0, fallback = 0, skipped = 0, missing = 0, blocked = false;
         for (const slot of tokens) {
           const rec = getResumeRecord(slot);
           if (!rec) { missing++; continue; }
@@ -1333,17 +1333,21 @@ export default function App({
             // enough. dayCost() can't move inside this synchronous loop, so a
             // refusal only ever happens on the first launch attempted.
             if (how === 'blocked') { blocked = true; break; }
-            if (how === 'fresh') fresh++; else resumed++;
+            // 0454: only a real resume counts as "resumed".
+            if (how === 'fresh') fresh++;
+            else if (how === 'fallback') fallback++;
+            else resumed++;
           } catch (e) {
             pushToast(`slot ${slot} failed: ${e?.message || String(e)}`, 'warn');
           }
         }
         if (blocked) return null; // 0447: budget toast says it all; nothing launched
-        const parts = [`resumed ${resumed + fresh}/${tokens.length}`];
+        const parts = [`resumed ${resumed}/${tokens.length}`];
         if (fresh) parts.push(`${fresh} fresh`);
+        if (fallback) parts.push(`${fallback} opened fresh (no saved transcript)`);
         if (skipped) parts.push(`${skipped} skipped (in use)`);
         if (missing) parts.push(`${missing} unknown`);
-        pushToast(parts.join(' · '), (resumed + fresh) ? 'ok' : 'warn');
+        pushToast(parts.join(' · '), (resumed + fresh + fallback) ? 'ok' : 'warn');
         return null;
       }
       case 'resume-all': {
@@ -2085,8 +2089,9 @@ export default function App({
   //   - location-only ("fresh") record → fleet.launch a brand-new session in
   //     the repo, no history, totals at 0. This is what every non-save exit
   //     (don't-save, terminal close, crash) leaves behind.
-  // Returns 'resumed' | 'fresh' | 'blocked' (0447: daily budget reached —
-  // budgetBlocked already toasted). Throws on launch failure.
+  // Returns 'resumed' | 'fresh' | 'fallback' (0454: a resume opened fresh
+  // because the transcript was missing) | 'blocked' (0447: daily budget
+  // reached — budgetBlocked already toasted). Throws on launch failure.
   const launchFromRecord = (slot, rec) => {
     if (budgetBlocked()) return 'blocked';
     // 0365: identity trail — every record→slot mapping is logged so a future
@@ -2115,6 +2120,15 @@ export default function App({
       model: rec.resolvedModel || rec.model, name: rec.name, permissionMode, provider,
       autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
     });
+    // 0454: the agent falls back to a fresh `--session-id` when the transcript
+    // is missing (resuming flips to false in start()). That is a new, empty
+    // conversation — say so, and don't carry the old totals onto it.
+    if (agent && agent.resuming === false) {
+      dlog('store', 'launchFromRecord: transcript missing, opened fresh', {
+        slot, sid: String(rec.sessionId).slice(0, 8),
+      });
+      return 'fallback';
+    }
     if (agent) {
       if (rec.tokensIn != null) agent.tokensIn = rec.tokensIn;
       if (rec.tokensCacheRead != null) agent.tokensCacheRead = rec.tokensCacheRead;
@@ -2131,7 +2145,12 @@ export default function App({
       setModal(null);
       setNewSlot(null);
       setFocusedSlot(slot);
-      pushToast(`${how === 'fresh' ? 'opened fresh' : 'resumed'} slot ${slot} · ${rec.name}`, 'ok');
+      if (how === 'fallback') {
+        // 0454: same wording as :resume-all for the same event.
+        pushToast(`slot ${slot}: no saved transcript — opened fresh · ${rec.name}`, 'warn');
+      } else {
+        pushToast(`${how === 'fresh' ? 'opened fresh' : 'resumed'} slot ${slot} · ${rec.name}`, 'ok');
+      }
     } catch (e) {
       pushToast(`resume failed: ${e?.message || String(e)}`, 'error');
     }
@@ -2168,7 +2187,13 @@ export default function App({
       const doResume = () => {
         if (refused) return;
         try {
-          if (launchFromRecord(r.slot, r) === 'blocked') refused = true;
+          const how = launchFromRecord(r.slot, r);
+          if (how === 'blocked') refused = true;
+          // 0454: planned as a resume but the transcript was missing — the
+          // up-front "resuming N" toast can't know, so say it per slot.
+          else if (how === 'fallback') {
+            pushToast(`slot ${r.slot}: no saved transcript — opened fresh`, 'warn');
+          }
         } catch (e) {
           pushToast(`slot ${r.slot} failed: ${e?.message || String(e)}`, 'warn');
         }

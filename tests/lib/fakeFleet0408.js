@@ -48,7 +48,14 @@ export class FakeFleet extends EventEmitter {
   }
   setCostCap() {} setViewport() { return 0; } killAll() {}
   launch(cfg) { this.calls.push(['launch', cfg]); }
-  resume(cfg) { this.calls.push(['resumeFromRecord', cfg]); return null; }
+  // 0454: return an agent like the real fleet does. `resumeAgent(cfg)` lets a
+  // test shape it — e.g. { resuming: false } for a transcript-missing fallback,
+  // or throw to stand in for the fleet refusing a sid live in another slot.
+  resume(cfg) {
+    this.calls.push(['resumeFromRecord', cfg]);
+    if (typeof this.resumeAgent === 'function') return this.resumeAgent(cfg);
+    return { slot: cfg.slot, sessionId: cfg.sessionId, resuming: true };
+  }
   kill(id) { this.calls.push(['kill', id]); }
   broadcast(ids, text) { this.calls.push(['broadcast', ids, text]); return { sent: ids.length, skipped: 0 }; }
   // 0448: recorded so :cap tests can see which slot reached the fleet.
