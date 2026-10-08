@@ -175,8 +175,16 @@ export class PtyAgent extends PtyCore {
     // 0404: fixed PTY geometry from Fleet's viewport (see PtyCore).
     cols,
     rows,
+    // 0437: per-agent binary and env overlay for the opt-in real-claude tests,
+    // which start the real claude under the real HOME while mc itself stays in
+    // the test sandbox. Unset → CLAUDE_BIN and the inherited env, as before.
+    // bin still goes to spawn() as argv[0], never through a shell.
+    bin,
+    env,
   } = {}) {
     super({ spawn, cols, rows });
+    this._bin = bin || null;
+    this._envOverlay = env && typeof env === 'object' ? { ...env } : null;
     this.slot = slot;
     this.id = id || `slot-${slot}`;
     this.name = name;
@@ -285,7 +293,18 @@ export class PtyAgent extends PtyCore {
     const _hookSettings = buildHookSettings({ emitterPath: EMITTER_PATH });
     args.push('--settings', JSON.stringify(_hookSettings));
 
-    return { bin: CLAUDE_BIN, args, modelArg };
+    // TODO(child-env): the child inherits claude's own session markers
+    // (CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, …) when mc is started from inside
+    // a claude session; claude then turns transcript saving off ("inherited
+    // CLAUDE_CODE_CHILD_SESSION marker"), so the tailer, resume and :model have
+    // no JSONL. Seen by the 0437 real tests. Strip them from the spawn env?
+    // TODO(claude-trust): a claude slot in a folder claude has not trusted opens
+    // on the trust dialog, and the READY_MS drain types the first send into it
+    // (its Enter picks "No, exit"). autoTrust only reaches non-claude factories.
+    const spec = { bin: this._bin || CLAUDE_BIN, args, modelArg };
+    // 0437: an env overlay is applied on top of PtyCore's default env.
+    if (this._envOverlay) spec.env = { ...process.env, TERM: 'xterm-256color', ...this._envOverlay };
+    return spec;
   }
 
   onSpawned({ modelArg }) {
