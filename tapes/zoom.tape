@@ -12,7 +12,7 @@ Set Padding 16
 Set Framerate 24
 
 # A fixture with tool activity reads well in the zoom body.
-Type "MC_MOCK=tool-loop npm start"
+Type "MC_CONFIG_DIR=/tmp/mc-demo/config MC_MOCK=tool-loop npm start"
 Enter
 Sleep 4s
 
@@ -20,7 +20,7 @@ Sleep 4s
 # before Enter launches; "~" resolves (cwd is cosmetic under MC_MOCK).
 Type "n"
 Sleep 800ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 500ms
 Enter
 Sleep 3s
