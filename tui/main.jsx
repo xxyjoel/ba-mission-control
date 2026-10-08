@@ -140,7 +140,11 @@ if (!lock.ok) {
   setStoreReadOnly(true);
   // eslint-disable-next-line no-console
   console.error(
-    `mc: another instance (pid ${lock.holderPid}) owns this config dir — `
+    // 0445: ok:false now also covers "the lock could not be created" (error set,
+    // or a racer mid-write with no readable pid yet) — don't print "pid undefined".
+    (lock.error
+      ? `mc: could not create the instance lock (${lock.error}) — `
+      : `mc: another instance${lock.holderPid ? ` (pid ${lock.holderPid})` : ''} owns this config dir — `)
     + `session/settings/cost saving is DISABLED in this one. Close the other `
     + `mc, or use MC_CONFIG_DIR for an isolated sandbox / MC_ALLOW_MULTI=1 to override.`,
   );
@@ -212,7 +216,10 @@ const shutdown = () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
   persistOpenSet();          // capture live set BEFORE killing
-  try { releaseInstanceLock(); } catch {}
+  // 0445: the instance lock is released LAST (in the reaper below, and in the
+  // 'exit' net when the loop drains first) — not here. Releasing before the
+  // children are dead let a new mc claim the config dir while this one's
+  // final persists and wedged claudes were still live.
   try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
   try { fleet.stopPolling(); } catch {}
@@ -229,6 +236,7 @@ const shutdown = () => {
   // reaper lands the SIGKILL.
   const reaper = setTimeout(() => {
     try { fleet.hardKillAll(); } catch {}
+    try { releaseInstanceLock(); } catch {} // 0445: last, after every kill
     process.exit(0);
   }, 1500);
   reaper.unref?.();
@@ -307,6 +315,11 @@ process.on('exit', () => {
   if (altScreen) {
     try { process.stdout.write('\x1b[?1049l'); } catch {}
   }
+  // 0445: release the instance lock LAST on every exit path (clean drain,
+  // crash, signal) — after the kills above. releaseInstanceLock only unlinks
+  // a lock that names this pid, so a read-only second instance never removes
+  // the owner's lock.
+  try { releaseInstanceLock(); } catch {}
 });
 
 // Wait for the Ink render to exit (Ctrl-C or `q` → useApp().exit()).
@@ -324,8 +337,12 @@ try { fleet.killAll(); } catch {}
 // Give SIGTERM a short grace, SIGKILL stragglers, and exit explicitly —
 // matching the signal path's semantics. unref() keeps the timer from
 // holding the loop open itself: a clean drain still exits immediately.
+// 0445: the clean quit used to never release the lock (only the signal path
+// did). It is released last here, after hardKillAll, and by the 'exit' net
+// when the loop drains before this timer fires.
 const reapTimer = setTimeout(() => {
   try { fleet.hardKillAll(); } catch {}
+  try { releaseInstanceLock(); } catch {}
   process.exit(0);
 }, 1500);
 reapTimer.unref?.();
