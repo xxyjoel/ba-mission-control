@@ -203,8 +203,12 @@ fleet.on('change', () => { try { onPausedChange(fleet.agents); } catch {} });
 const altScreen = process.stdout.isTTY === true;
 if (altScreen) process.stdout.write('\x1b[?1049h');
 
+// 0464: incrementalRendering rewrites only the lines that changed instead of
+// erasing and redrawing the whole frame (the review measured -73% terminal
+// output with it).
 const app = render(<App fleet={fleet} auth={auth} />, {
   exitOnCtrlC: true,
+  incrementalRendering: true,
 });
 
 // Capture the open-set to the resume store at the LAST possible moment before
@@ -284,8 +288,10 @@ process.on('SIGHUP',  shutdown);
 process.on('SIGTSTP', () => { dlog('app', 'sigtstp-swallowed', {}); });
 // Defense in depth: if the process is stopped by some OTHER means (`kill -STOP`)
 // and later resumed (`kill -CONT` / `fg`), re-enter the alt-screen so the fleet
-// view isn't left painted into the normal buffer; the render loop repaints on
-// its next tick.
+// view isn't left painted into the normal buffer. 0464: App's own SIGCONT
+// listener (registered after this one) then forces Ink's full redraw — with
+// incrementalRendering and an idle fleet, no tick would repaint the cleared
+// screen.
 process.on('SIGCONT', () => {
   if (altScreen) { try { process.stdout.write('\x1b[?1049h'); } catch {} }
   dlog('app', 'sigcont-reinit', {});

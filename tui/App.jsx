@@ -173,6 +173,27 @@ const RENDER_COALESCE_MS = 100;
 // clock backs off to this cadence instead of the active tickRate — no
 // per-second CPU wakeups when nothing is happening.
 const IDLE_TICK_MS = 3000;
+
+// 0464: a string signature of everything a fleet snapshot can draw. Two
+// snapshots with the same signature draw the same screen. The top-level `now`
+// stamp differs on every snapshot() call and is not drawn, so it is left out.
+// A string, not a structural compare against the previous object: a field a
+// toJSON returns by reference (and later mutates in place) would be the SAME
+// object in both snapshots and hide a real change.
+// The sampled process stats are compared at the resolution the card shows
+// (whole % and MiB, the same rounding Fleet uses to decide whether to emit):
+// raw ps samples jitter every few seconds on an idle claude.
+const sigReplacer = (k, v) => {
+  if (k === 'procCpu' && typeof v === 'number') return Math.round(v);
+  if (k === 'procMemKb' && typeof v === 'number') return Math.round(v / 1024);
+  return v;
+};
+export const snapshotSig = (snap) => JSON.stringify(snap ? { ...snap, now: 0 } : null, sigReplacer);
+// 0464: the fleet is "active" while any agent is working or waiting. Only then
+// does the header clock tick in seconds; at idle it shows minutes, so an idle
+// screen changes at most once a minute.
+const fleetActive = (agents) => (agents || []).some(a => a.status === 'working' || a.status === 'waiting');
+const clockStamp = (active, ms = Date.now()) => (active ? ms : Math.floor(ms / 60_000) * 60_000);
 // How long a terminal resize must be quiet before the fleet's PTY geometry
 // follows it. A window drag emits a stream of intermediate sizes and each one
 // applied would make every session's claude reprint its whole frame, leaving
@@ -212,7 +233,7 @@ export default function App({
   providers: providerList = listProviders(), loginSpawn,
   onProviderConnected: onProviderConnectedProp, onProviderDisconnected: onProviderDisconnectedProp,
 }) {
-  const { exit } = useApp();
+  const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
 
   const [snapshot, _setSnapshot] = useState(() => fleet.snapshot());
@@ -223,7 +244,15 @@ export default function App({
   // (audit #57). The ref read is sync and always points to the last
   // committed render's snapshot.
   const snapshotRef = useRef(snapshot);
+  // 0464: an equal snapshot is dropped before it reaches React. The idle tick
+  // used to hand React a new object every 3 s, so App re-rendered and Ink
+  // rewrote the whole screen with nothing changed.
+  const snapshotSigRef = useRef(null);
+  if (snapshotSigRef.current === null) snapshotSigRef.current = snapshotSig(snapshot);
   const setSnapshot = (snap) => {
+    const sig = snapshotSig(snap);
+    if (sig === snapshotSigRef.current) return;
+    snapshotSigRef.current = sig;
     snapshotRef.current = snap;
     _setSnapshot(snap);
   };
@@ -238,8 +267,39 @@ export default function App({
   const [newSlot, setNewSlot] = useState(null);
   const [zoomedId, setZoomedId] = useState(null);
   const [repos, setRepos] = useState([]);
-  const [now, setNow] = useState(Date.now());
-  const [aggSpark, setAggSpark] = useState(() => Array(22).fill(0)); // 0 = idle (blank spark), not fill(1) which pinned a full block (M2)
+  // 0464: `now` is minute-floored while the fleet is idle (see clockStamp).
+  // The refs let the tick skip a setter whose value would not change.
+  // The zoom view keeps the seconds clock even at idle: its "in <status>" and
+  // "session age" rows read Date.now() at render, so they only move when App
+  // re-renders (review of 0464, finding 3).
+  const zoomOpenRef = useRef(false);
+  zoomOpenRef.current = modal === 'zoom';
+  const secondsClock = (agents) => fleetActive(agents) || zoomOpenRef.current;
+  const [now, _setNow] = useState(() => clockStamp(fleetActive(snapshot.agents)));
+  const nowRef = useRef(now);
+  const setNow = (t) => { if (t === nowRef.current) return; nowRef.current = t; _setNow(t); };
+  // Opening or closing zoom switches the clock resolution straight away.
+  useEffect(() => {
+    setNow(clockStamp(secondsClock(snapshotRef.current.agents)));
+  }, [modal]);
+  // 0464 (review finding 2): after `kill -STOP` / `kill -CONT` main.jsx
+  // re-enters the alternate screen, which comes back blank. With
+  // incrementalRendering Ink rewrites only CHANGED lines, and an idle fleet
+  // may not commit at all for a minute, so the screen would stay blank. A
+  // suspend/resume round trip is Ink's own forced full redraw (it also
+  // re-asserts raw mode). main.jsx registers its SIGCONT listener first, so
+  // the alt-screen switch is written before this redraw.
+  useEffect(() => {
+    const onCont = () => {
+      (async () => {
+        try { const s = await suspendTerminal(); await s.resume(); } catch {}
+      })();
+    };
+    process.on('SIGCONT', onCont);
+    return () => { process.off('SIGCONT', onCont); };
+  }, [suspendTerminal]);
+  const [aggSpark, _setAggSpark] = useState(() => Array(22).fill(0)); // 0 = idle (blank spark), not fill(1) which pinned a full block (M2)
+  const aggSparkRef = useRef(aggSpark);
 
   // Force re-render bumper, used by SIGWINCH listener so cardW recomputes
   // when the user resizes the terminal.
@@ -282,7 +342,14 @@ export default function App({
   const changeTimerRef = useRef(null);
   const changePendingRef = useRef(false);
   useEffect(() => {
-    const flush = () => { changePendingRef.current = false; setSnapshot(fleet.snapshot()); };
+    const flush = () => {
+      changePendingRef.current = false;
+      const snap = fleet.snapshot();
+      setSnapshot(snap);
+      // 0464: an idle → working transition switches the clock to seconds now,
+      // not on the next tick, so it never shows a minute-floored ":00".
+      setNow(clockStamp(secondsClock(snap.agents)));
+    };
     const onChange = () => {
       if (changeTimerRef.current) { changePendingRef.current = true; return; }
       flush(); // leading edge — first change paints now
@@ -324,8 +391,11 @@ export default function App({
     const activeMs = Math.max(300, settings.tickRate);
     let timer = null;
     const tick = () => {
-      setNow(Date.now());
       const fresh = fleet.snapshot();
+      const active = fleetActive(fresh.agents);
+      // 0464: both setters skip a value equal to the current one, so an idle
+      // tick with an unchanged fleet causes no render at all.
+      setNow(clockStamp(secondsClock(fresh.agents)));
       setSnapshot(fresh);
       // Read `fresh` directly (snapshot isn't in our deps — listing it would
       // tear down + rebuild this timer on every change; audit #57).
@@ -337,8 +407,14 @@ export default function App({
       // sparkLine's all-zero guard render nothing.
       const rate = fresh.agents.reduce((s, a) =>
         a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0);
-      setAggSpark(prev => [...prev.slice(1), Math.max(0, rate)]);
-      const active = fresh.agents.some(a => a.status === 'working' || a.status === 'waiting');
+      // 0464: an all-zero spark that would shift in another 0 is unchanged.
+      const sample = Math.max(0, rate);
+      const prevSpark = aggSparkRef.current;
+      if (!prevSpark.every(v => v === sample)) {
+        const next = [...prevSpark.slice(1), sample];
+        aggSparkRef.current = next;
+        _setAggSpark(next);
+      }
       timer = setTimeout(tick, active ? activeMs : IDLE_TICK_MS);
     };
     timer = setTimeout(tick, activeMs);
@@ -643,8 +719,8 @@ export default function App({
   // ── Session persistence (for resume) ───────────────────
   // Mirror the snapshot into ~/.config/claude-mc/sessions.json so sessions can be
   // resumed later. THROTTLED to ~2s: each syncFromSnapshot() does a readFileSync +
-  // JSON.parse AND — because quitMode defaults to 'save', every in-session sync is
-  // "dirty" — a persist() (copyFileSync + writeFileSync + renameSync). Keyed on
+  // JSON.parse, plus a persist() (copyFileSync + writeFileSync + renameSync) when
+  // a record really changed (0464: save mode used to persist on EVERY sync). Keyed on
   // snapshot (frame rate while active, every 3s idle) that was a full read+write
   // disk cycle up to ~10×/s. Nothing needs sub-2s persistence (lastSeen only moves
   // every 60s), and shutdown calls persistOpenSet() DIRECTLY (main.jsx), bypassing
@@ -665,7 +741,10 @@ export default function App({
     } else if (!syncTimerRef.current) {
       syncTimerRef.current = setTimeout(() => { syncTimerRef.current = null; run(); }, THROTTLE_MS - since);
     }
-  }, [snapshot, settings.sessionHistoryLimit]);
+    // 0464: `now` is a dep so an idle fleet (whose snapshot no longer changes)
+    // still syncs once a minute and the >60 s lastSeen refresh keeps running.
+    // The store writes only when a record changed or lastSeen is >60 s old.
+  }, [snapshot, now, settings.sessionHistoryLimit]);
   // Clear the trailing timer on unmount only (not on every dep change — that would
   // starve the trailing flush during a burst).
   useEffect(() => () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); }, []);
@@ -860,8 +939,14 @@ export default function App({
     return Math.round(agents.reduce((s, a) =>
       a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0));
   }, [agents]);
-  const sessionStr = fmtDuration(now - snapshot.sessionStart);
-  const nowStr = fmtClock(now, settings.clock24);
+  // 0464: minutes only while idle — a seconds digit would change the screen on
+  // every tick and defeat Ink's identical-frame skip.
+  // Must match the predicate the tick uses to floor `now`. The session length
+  // is clamped at 0: an idle `now` is floored to the minute and can be earlier
+  // than a sessionStart taken just before boot (review finding 1: "-1:-1").
+  const clockSeconds = secondsClock(agents);
+  const sessionStr = fmtDuration(Math.max(0, now - snapshot.sessionStart), { seconds: clockSeconds });
+  const nowStr = fmtClock(now, settings.clock24, { seconds: clockSeconds });
 
   // ── Command bar processing ──────────────────────────────
   // Run `:cmd args` against a tiny dispatch table. Returns a status string

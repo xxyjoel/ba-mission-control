@@ -113,6 +113,10 @@ function migrate(rec) {
 // 0420: null is a provider's "not measured" — keep it, so a resume does not
 // seed a fabricated 0 onto the card. undefined still saves as 0.
 const savedTotal = (v) => (v === null ? null : (v || 0));
+// 0464: true when any field of the new record (other than the lastSeen stamp)
+// differs from the stored one. Record fields are primitives.
+const recordChanged = (prev, rec) =>
+  Object.keys(rec).some(k => k !== 'lastSeen' && prev[k] !== rec[k]);
 
 // Try to read+parse a candidate file. Returns the parsed store on
 // success, null on any failure (file missing, JSON corrupt, etc.). The
@@ -249,9 +253,11 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
     if (identityChanged) {
       store.bySlot[a.slot] = rec;
       dirty = true;
-    } else if (Date.now() - (prev.lastSeen || 0) > 60_000 || prev.live === false || saving) {
+    } else if (Date.now() - (prev.lastSeen || 0) > 60_000 || prev.live === false || recordChanged(prev, rec)) {
       // Refresh lastSeen periodically, immediately when a closed slot reopens,
-      // and always on an explicit save (so the persisted totals are current).
+      // and whenever a field of the record really changed (so the persisted
+      // totals are current). 0464: save mode used to rewrite on EVERY sync —
+      // an idle fleet rewrote sessions.json on every App render.
       store.bySlot[a.slot] = { ...prev, ...rec };
       dirty = true;
     }
