@@ -1,7 +1,7 @@
 // tests/templateStore.test.mjs — covers the bundled defaults and the
 // loader/lookup contract. Doesn't touch the real config file; we point
-// HOME at a tmpdir per-test so the load path creates a clean defaults
-// file each time.
+// MC_CONFIG_DIR at a tmpdir so the load path creates a clean defaults
+// file.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,19 +9,22 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// templateStore reads HOME at module-load time (via homedir()), so we
-// must override the env var BEFORE the dynamic import. Each test
-// imports fresh under a fresh HOME.
-let savedHome;
-let scratchHome;
+// templateStore resolves its file through configDir.js, which prefers
+// MC_CONFIG_DIR over HOME and caches it at module load (0436: isolating
+// through HOME alone pinned the wrong assumption). Set the override BEFORE
+// the first dynamic import; later `?fresh=N` imports reload templateStore
+// but share the cached config dir.
+let savedCfg;
+let scratchCfg;
 before(() => {
-  savedHome = process.env.HOME;
-  scratchHome = mkdtempSync(join(tmpdir(), 'mc-tplstore-'));
-  process.env.HOME = scratchHome;
+  savedCfg = process.env.MC_CONFIG_DIR;
+  scratchCfg = mkdtempSync(join(tmpdir(), 'mc-tplstore-'));
+  process.env.MC_CONFIG_DIR = scratchCfg;
 });
 after(() => {
-  process.env.HOME = savedHome;
-  try { rmSync(scratchHome, { recursive: true, force: true }); } catch {}
+  if (savedCfg === undefined) delete process.env.MC_CONFIG_DIR;
+  else process.env.MC_CONFIG_DIR = savedCfg;
+  try { rmSync(scratchCfg, { recursive: true, force: true }); } catch {}
 });
 
 test('templateStore: first load writes the bundled defaults to disk', async () => {
@@ -30,7 +33,7 @@ test('templateStore: first load writes the bundled defaults to disk', async () =
   assert.ok(t.review, 'should ship a `review` template');
   assert.ok(t.explore, 'should ship an `explore` template');
   assert.ok(t['spec-then-implement'], 'should ship a `spec-then-implement` template');
-  const file = join(scratchHome, '.config', 'claude-mc', 'templates.json');
+  const file = join(scratchCfg, 'templates.json');
   assert.ok(existsSync(file), 'defaults should be persisted on first load');
   const onDisk = JSON.parse(readFileSync(file, 'utf8'));
   assert.deepEqual(Object.keys(onDisk).sort(), Object.keys(t).sort());

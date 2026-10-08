@@ -12,6 +12,10 @@ import { runRecipePty } from '../lib/recipe-pty.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const mcBin = join(here, '..', '..', 'bin', 'mc.mjs');
 
+// 0436: process.env here is the per-file sandbox from scripts/run-tests.mjs
+// (temp HOME, MC_CONFIG_DIR, XDG_STATE_HOME). Spreading it is what keeps the
+// real mc off the user's config; NODE_TEST_CONTEXT is inherited too, so
+// configDir.js throws instead of falling back to ~/.config/claude-mc.
 const env = {
   ...process.env,
   MC_MOCK: 'quick-reply',

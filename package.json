@@ -55,7 +55,7 @@
     "preversion": "npm test",
     "postversion": "git push --follow-tags",
     "prepublishOnly": "node scripts/prepublish-guard.mjs",
-    "test:watch": "MC_NO_TRANSCRIPT=1 find tests -name '*.test.*' -type f -exec node --import tsx --test --test-timeout=30000 --test-force-exit --watch {} +",
+    "test:watch": "node scripts/run-tests.mjs --watch",
     "postinstall": "node scripts/fix-node-pty.mjs"
   },
   "dependencies": {
