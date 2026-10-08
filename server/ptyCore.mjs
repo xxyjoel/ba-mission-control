@@ -313,6 +313,8 @@ export class PtyCore extends EventEmitter {
     // ready flips true, then drains.
     this.ready = false;
     this.readyTimer = null;
+    // 0458: the pty a queued-message drain is running on (null when idle).
+    this._drainPty = null;
     ({ cols: this.cols, rows: this.rows } = clampPtyDims(cols, rows, DEFAULT_COLS, DEFAULT_ROWS));
   }
 
@@ -678,13 +680,18 @@ export class PtyCore extends EventEmitter {
     // Queue path: no PTY (need respawn) OR PTY exists but not ready
     // (still in the banner-draw window). Both drain into the same
     // pendingSends and flush on ready / on init.
-    if (!this.pty || !this.ready) {
+    // 0458: a drain in progress on this pty also queues, so a message sent
+    // between two queued ones waits its turn instead of landing mid-drain.
+    const draining = !!this.pty && this._drainPty === this.pty;
+    if (!this.pty || !this.ready || draining) {
       this.pendingSends.push(text);
       this.appendTail({
         kind: 'sys',
-        text: this.pty
-          ? `queued · waiting for PTY ready (${this.pendingSends.length} pending)`
-          : 'respawning — queued; will resume session',
+        text: !this.pty
+          ? 'respawning — queued; will resume session'
+          : draining
+            ? `queued · sending earlier messages first (${this.pendingSends.length} pending)`
+            : `queued · waiting for PTY ready (${this.pendingSends.length} pending)`,
       });
       this.emit('change');
       if (!this.pty && !this.killed) {
@@ -708,7 +715,12 @@ export class PtyCore extends EventEmitter {
     return this.#writePtyMessage(text);
   }
 
-  #writePtyMessage(text) {
+  // `onSubmitted()` (0458) runs once this message's Enter is settled: at once
+  // when the CR rides in the same write, or one tick AFTER the deferred CR
+  // (so the next message never shares a tick with this Enter). It runs
+  // whether or not the CR was written; the drain re-checks the pty itself.
+  #writePtyMessage(text, onSubmitted = null) {
+    let submittedNow = false;
     try {
       const bracketed = !!this.term?.modes?.bracketedPasteMode;
       const isSlash = text.trimStart().startsWith('/');
@@ -721,7 +733,7 @@ export class PtyCore extends EventEmitter {
         // at all).
         this.pty.write(content);
         const pty = this.pty;
-        setImmediate(() => { try { if (pty && !this.killed) pty.write('\r'); } catch {} });
+        this.#deferSubmitCR(pty, onSubmitted);
       } else if (bracketed) {
         // Normal text, claude's bracketed-paste mode ON (the live case at the
         // prompt): write the 200~..201~ paste, then the submit CR on a
@@ -731,16 +743,18 @@ export class PtyCore extends EventEmitter {
         // session (#24 redux). Same separate-tick rule the slash path uses.
         this.pty.write(content);
         const pty = this.pty;
-        setImmediate(() => { try { if (pty && !this.killed) pty.write('\r'); } catch {} });
+        this.#deferSubmitCR(pty, onSubmitted);
       } else {
         // Paste mode off (e.g. unit tests, or a session not at its prompt):
         // historical single-write `text\r`.
         this.pty.write(content + '\r');
+        submittedNow = true;
       }
       this.status = 'working';
       this.activity = `▸ sending: ${text.slice(0, 120)}`;
       this.appendTail({ kind: 'user', text });
       this.emit('change');
+      if (submittedNow) onSubmitted?.();
       return true;
     } catch (e) {
       this.appendTail({ kind: 'err', text: `pty write failed: ${e.message}` });
@@ -748,16 +762,55 @@ export class PtyCore extends EventEmitter {
     }
   }
 
+  // The submit CR on its own tick (#24, #25). Captures `pty` so a respawn or
+  // kill mid-defer writes to the right target (or not at all). 0458: the
+  // caller's next step goes on a further tick, so a following paste is never
+  // written in the same tick as this Enter (the separate-tick rule again).
+  #deferSubmitCR(pty, onSubmitted) {
+    setImmediate(() => {
+      try { if (pty && !this.killed) pty.write('\r'); } catch {}
+      if (onSubmitted) setImmediate(onSubmitted);
+    });
+  }
+
+  // 0458: queued messages go out ONE AT A TIME — message N, its Enter, and
+  // only then message N+1. Writing every paste first and the Enters after
+  // (the old loop) merged the queue into one prompt under bracketed paste.
+  // _drainPty marks the pty a drain is running on; send() queues behind it.
   #drainPendingSends() {
     if (this.pendingSends.length === 0) return;
-    const drained = this.pendingSends.splice(0, this.pendingSends.length);
+    const n = this.pendingSends.length;
     this.appendTail({
       kind: 'sys',
-      text: `PTY ready · draining ${drained.length} queued message${drained.length === 1 ? '' : 's'}`,
+      text: `PTY ready · draining ${n} queued message${n === 1 ? '' : 's'}`,
     });
-    for (const text of drained) {
-      this.#writePtyMessage(text);
+    this.#drainNext(this.pty);
+  }
+
+  #drainNext(pty) {
+    // A respawn or kill since the last message: stop. Whatever is left stays
+    // in pendingSends and drains when the new pty is ready.
+    if (!pty || pty !== this.pty || !this.ready || this.killed) {
+      if (this._drainPty === pty) this._drainPty = null;
+      return;
     }
+    if (this.pendingSends.length === 0) {
+      this._drainPty = null;
+      return;
+    }
+    // TODO(0458): a message send() accepted into the queue is written even if
+    // the cost cap was reached while it waited (unchanged from before 0458).
+    // Re-checking the cap per queued message needs the owner's sign-off.
+    const text = this.pendingSends.shift();
+    this._drainPty = pty;
+    // Continue on success AND on a failed write: a failed message is lost and
+    // logged (as before 0458), but the drain keeps going so the rest are not
+    // stranded and a later send() cannot overtake them. `continued` guards against
+    // a write that throws after its CR was already scheduled.
+    let continued = false;
+    const next = () => { if (!continued) { continued = true; this.#drainNext(pty); } };
+    const ok = this.#writePtyMessage(text, next);
+    if (!ok) setImmediate(next);
   }
 
   // 0442: send `sig` to `pty`'s process tree (its group plus setsid'd

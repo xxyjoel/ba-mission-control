@@ -126,7 +126,11 @@ test('PtyAgent.start: PTY spawned with default 80x24 dimensions', () => {
 
 // ─── send: queue during ready window ──────────────────────────────
 
-test('PtyAgent.send: queues during pre-ready window, drains on ready', async () => {
+test('PtyAgent.send: queues during pre-ready window, drains on ready', (t) => {
+  // 0458: drive the REAL drain (the readiness timer) instead of re-creating
+  // it in the test. Paste mode off here: each message is one `text\r` write;
+  // tests/ptyCore.drainOneAtATime.test.mjs pins the bracketed-paste order.
+  t.mock.timers.enable({ apis: ['setTimeout', 'setImmediate'] });
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
@@ -135,22 +139,9 @@ test('PtyAgent.send: queues during pre-ready window, drains on ready', async () 
   p.send('second prompt');
   assert.equal(fake.spawned[0]._writes.length, 0, 'nothing written yet');
   assert.equal(p.pendingSends.length, 2);
-  // Force ready manually (real path uses a 3s timer; test is faster)
-  clearTimeout(p.readyTimer);
-  p.readyTimer = null;
-  p.ready = true;
-  p._PtyAgent__drainPendingSends?.(); // private — instead just trigger via a fresh send below
-  // Simpler: call the private method by sending a third — but drain
-  // runs only inside the ready-flip timer. We call the internal
-  // pattern directly: drain via another send while ready=true.
-  // Actually the real drain fires from the timer; for the test we
-  // shortcut by re-creating the drain logic externally.
-  const drained = p.pendingSends.splice(0, p.pendingSends.length);
-  for (const text of drained) {
-    p.pty.write(text + '\r');
-  }
-  assert.equal(fake.spawned[0]._writes.length, 2);
-  assert.equal(fake.spawned[0]._writes[0], 'first prompt\r');
+  t.mock.timers.tick(3000); // READY_MS: ready flips and the queue drains
+  assert.deepEqual(fake.spawned[0]._writes, ['first prompt\r', 'second prompt\r']);
+  assert.equal(p.pendingSends.length, 0);
   p.kill();
 });
 
