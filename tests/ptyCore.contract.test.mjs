@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PtyCore, pasteForSubmit, bottomContentRows } from '../server/ptyCore.mjs';
+import { PtyCore, pasteForSubmit, bottomContentRows, childEnv } from '../server/ptyCore.mjs';
 import * as agentMod from '../server/ptyAgent.mjs';
 
 const T0 = 1_700_000_000_000;
@@ -85,7 +85,8 @@ test('start(): hook order and argv handed to spawn', (t) => {
   assert.deepEqual(p.calls, ['buildSpawn', 'onSpawned:toy-cli:8800', 'startSidecars', 'readiness', 'afterStart']);
   assert.equal(spawn.spawned[0]._bin, 'toy-cli');
   assert.deepEqual(spawn.spawned[0]._args, ['--resume', 'toy-chat-1']);
-  assert.deepEqual(spawn.spawned[0]._opts.env, { ...process.env, TERM: 'xterm-256color' });
+  // 0469: the default env is process.env minus claude's session markers.
+  assert.deepEqual(spawn.spawned[0]._opts.env, childEnv());
 });
 
 test('buildSpawn env replaces the default env', (t) => {

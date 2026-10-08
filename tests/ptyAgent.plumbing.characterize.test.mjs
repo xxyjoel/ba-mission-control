@@ -12,6 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PtyAgent } from '../server/ptyAgent.mjs';
+import { childEnv } from '../server/ptyCore.mjs';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 
 const T0 = 1_800_000_000_000;
@@ -82,7 +83,8 @@ test('spawn: bin, argv prefix, and PTY options', (t) => {
   assert.equal(p._opts.cols, 80);
   assert.equal(p._opts.rows, 24);
   assert.equal(p._opts.cwd, CWD);
-  assert.deepEqual(p._opts.env, { ...process.env, TERM: 'xterm-256color' });
+  // 0469: the default env is process.env minus claude's session markers.
+  assert.deepEqual(p._opts.env, childEnv());
 });
 
 test('spawn: viewport geometry from the constructor, clamped like clampPtyDims', (t) => {

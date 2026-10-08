@@ -23,7 +23,8 @@
 //       argv for this (re)spawn. Called by start() on every spawn, so it
 //       reads this.resuming / model / mode fresh. bin and args go to spawn()
 //       as an argv array — never a shell string (bins are user-controlled).
-//       env defaults to { ...process.env, TERM: 'xterm-256color' }; a provider
+//       env defaults to childEnv() (process.env minus claude's session
+//       markers, TERM=xterm-256color, 0469); a provider
 //       that needs a least-privilege env returns its own.
 //   appendTail(ln)
 //       push a { kind, text } line onto the slot's tail ring. Core reports
@@ -159,6 +160,46 @@ export function signalProcessTree(pid, sig, list = psTable) {
   for (const t of extra) {
     try { process.kill(t, sig); } catch {}
   }
+}
+
+// 0469: env keys a running claude sets for ITS OWN session. When mc is started
+// from inside a claude session they are in process.env, and a slot's claude
+// that inherits them treats itself as that session's child: with
+// CLAUDE_CODE_CHILD_SESSION it turns transcript saving off ("inherited
+// CLAUDE_CODE_CHILD_SESSION marker"), so status, resume and :model have no
+// JSONL. The list is claude's own (the keys claude 2.1.x keeps out of the env
+// it hands its child shells), plus its per-session entrypoint, messaging IPC
+// and bridge ids. Exact names, not a CLAUDE_CODE_* prefix: user settings such
+// as CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_MAX_OUTPUT_TOKENS, CLAUDE_CODE_TMPDIR
+// and ANTHROPIC_* must still reach the child.
+export const CLAUDE_SESSION_ENV_KEYS = Object.freeze([
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_INVOKED_SKILLS',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT',
+  'AI_AGENT',
+  'TRACEPARENT',
+]);
+
+// 0469: the env a spawned agent CLI starts from — process.env minus the
+// parent claude's session markers, with TERM set for the PTY.
+// TODO(0469): other spawn paths still pass the markers through, outside this
+// lane: server/agent.mjs (legacy FLEET_USE_PTY=0 slots, env: process.env),
+// server/shellSession.mjs (shell pane; a claude run there saves no
+// transcript), server/loginPty.mjs (claude auth login) and the cursor
+// provider (stripAnthropicEnv, its own env). Each should build on childEnv().
+export function childEnv(base = process.env) {
+  const env = { ...base, TERM: 'xterm-256color' };
+  for (const k of CLAUDE_SESSION_ENV_KEYS) delete env[k];
+  return env;
 }
 
 // pasteForSubmit — build the content chunk a programmatic send (broadcast /
@@ -378,7 +419,7 @@ export class PtyCore extends EventEmitter {
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd || process.cwd(),
-      env: spec.env || { ...process.env, TERM: 'xterm-256color' },
+      env: spec.env || childEnv(), // 0469: no inherited claude session markers
     });
 
     this.onSpawned(spec);

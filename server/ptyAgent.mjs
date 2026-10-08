@@ -31,7 +31,7 @@
 // - R13: spawn is injectable for tests — defaults to node-pty.spawn.
 
 import { deriveStatus } from './deriveStatus.mjs';
-import { PtyCore, bottomContentRows } from './ptyCore.mjs';
+import { PtyCore, bottomContentRows, childEnv } from './ptyCore.mjs';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { MODELS, modelByCli } from '../tui/lib/models.js';
@@ -331,11 +331,6 @@ export class PtyAgent extends PtyCore {
     const _hookSettings = buildHookSettings({ emitterPath: EMITTER_PATH });
     args.push('--settings', JSON.stringify(_hookSettings));
 
-    // TODO(child-env): the child inherits claude's own session markers
-    // (CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, …) when mc is started from inside
-    // a claude session; claude then turns transcript saving off ("inherited
-    // CLAUDE_CODE_CHILD_SESSION marker"), so the tailer, resume and :model have
-    // no JSONL. Seen by the 0437 real tests. Strip them from the spawn env?
     // 0468: a claude slot in a folder claude has not trusted opens on the trust
     // dialog; readiness() holds queued sends until it is gone. mc never answers
     // it (autoTrust still only reaches non-claude factories, by design).
@@ -345,7 +340,8 @@ export class PtyAgent extends PtyCore {
     // still pick it. Needs a real capture before adding an anchor.
     const spec = { bin: this._bin || CLAUDE_BIN, args, modelArg };
     // 0437: an env overlay is applied on top of PtyCore's default env.
-    if (this._envOverlay) spec.env = { ...process.env, TERM: 'xterm-256color', ...this._envOverlay };
+    // 0469: childEnv() drops the parent claude's session markers on both paths.
+    if (this._envOverlay) spec.env = { ...childEnv(), ...this._envOverlay };
     return spec;
   }
 
