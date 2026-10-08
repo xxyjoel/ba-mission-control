@@ -19,6 +19,7 @@ import { loadSettings } from './lib/settings.js';
 import { zoomBodyDims } from './lib/zoomGeometry.js';
 import { syncFromSnapshot, setQuitMode, pruneSessions, setStoreReadOnly } from './lib/sessionStore.js';
 import { acquireInstanceLock, releaseInstanceLock, tightenStateModes } from './lib/instanceLock.js';
+import { reapOrphanedPaused, createPausedWatcher } from './lib/pausedPids.js';
 import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange, syncModelsFromApi } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
@@ -154,6 +155,19 @@ try {
   if (dropped || deduped || closed) dlog('store', 'prune', { dropped, deduped, closed });
 } catch { /* hygiene must never block boot */ }
 
+// 0443: a slot paused (SIGSTOP) when the last mc died hard is still frozen
+// under pid 1. End it before any slot launches or auto-resumes. Only the lock
+// holder does this — a second instance must not act on the owner's records.
+if (lock.ok) {
+  try {
+    // Awaited: SIGTERM, a grace period, then SIGKILL, and auto-resume must not
+    // start until the old claude has let go of its session. Costs nothing
+    // when no record is orphaned.
+    const { reaped, killed, skipped } = await reapOrphanedPaused();
+    if (reaped.length || skipped.length) dlog('store', 'paused-reap', { reaped, killed, skipped });
+  } catch { /* hygiene must never block boot */ }
+}
+
 // 0404: fix every agent's PTY geometry to the zoom body size BEFORE the first
 // spawn. A claude that is resized later reprints its whole frame and leaves the
 // pre-resize copy in the emulator's scrollback, which is what made zoom text
@@ -170,6 +184,13 @@ const fleet = new Fleet({
 // in which case it logs rss/heap + per-structure counts every 60s. Never keeps
 // mc alive (unref'd) and never throws into the app.
 const stopHeapProbe = startHeapProbe(fleet);
+
+// 0443: save {pid, startTime} of every paused slot so the next boot can end a
+// slot that is still frozen after a crash. 'change' fires synchronously from
+// pause() / resume() / kill(), so the record is on disk before any later
+// SIGKILL of mc. The watcher writes only when the paused set moves.
+const onPausedChange = createPausedWatcher();
+fleet.on('change', () => { try { onPausedChange(fleet.agents); } catch {} });
 
 // Enter the terminal alt-screen so mc's render lives in a dedicated
 // buffer that the OS restores on exit. Without this, mc draws inline
