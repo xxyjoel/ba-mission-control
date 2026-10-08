@@ -165,10 +165,20 @@ export async function removeSession(shortId, { claudeBin = CLAUDE_BIN, timeoutMs
       execFile(claudeBin, ['rm', shortId], { timeout: timeoutMs }, (err, stdout, stderr) => {
         if (err) return resolve({ ok: false, error: String(stderr || err.message).trim().slice(0, 200) });
         cache = { at: 0, value: null, inFlight: null };   // the list just changed
+        // 0463: tell the fleet now; its own poll is 120 s apart.
+        for (const fn of [...changeListeners]) { try { fn(); } catch {} }
         resolve({ ok: true, output: String(stdout).trim().slice(0, 200) });
       });
     } catch (e) { resolve({ ok: false, error: e?.message || 'spawn failed' }); }
   });
+}
+
+// 0463: called after this module changed claude's list (a `claude rm`).
+// Returns the unsubscribe function.
+const changeListeners = new Set();
+export function onSessionsChanged(fn) {
+  changeListeners.add(fn);
+  return () => changeListeners.delete(fn);
 }
 
 // Test seam: drop the cache so a test never sees another test's answer.

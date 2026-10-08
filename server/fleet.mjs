@@ -9,7 +9,7 @@
 // never a live agent (so the floor is the highest occupied slot).
 
 import { EventEmitter } from 'node:events';
-import { listClaudeSessions, backgroundSessionCount, otherLiveSessionsInRepo } from './claudeSessions.mjs';
+import { listClaudeSessions, backgroundSessionCount, otherLiveSessionsInRepo, onSessionsChanged } from './claudeSessions.mjs';
 import { isSandboxed } from '../tui/lib/configDir.js';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 import { Agent } from './agent.mjs';
@@ -29,9 +29,24 @@ const DEFAULT_SLOTS = 10;
 // the next tick). Unref'd so a dangling Fleet never blocks process exit.
 const TAILER_POLL_MS = 1500;
 // Reading claude's session list spawns a process, so it runs far slower than
-// the tailer poll. Background sessions change on the order of minutes, not
-// frames; 20 s is well inside that and costs one short-lived process.
-const SESSION_POLL_MS = 20_000;
+// the tailer poll. 0463: each run costs 0.10 s CPU and 156 MB peak memory;
+// every 20 s that was ~0.5% of a core at any fleet size. Background sessions
+// change on the order of minutes, so 120 s at idle, plus one refresh soon
+// after a slot launches, is killed or its process exits (the moments the
+// list is most likely to move). The delay coalesces a burst — `:resume-all`
+// launching ten slots — into one listing.
+const SESSION_POLL_MS = 120_000;
+const SESSION_REFRESH_DEBOUNCE_MS = 2000;
+// 0463: what a listing change is judged on — every background field (state
+// and staleness show on screen), and for attached sessions only what
+// otherLiveSessionsInRepo reads, so their idle/working flicker wakes nothing.
+function sessionsKey(list) {
+  if (!list) return 'null';
+  return JSON.stringify([
+    list.background ?? null,
+    (list.attached ?? []).map((e) => [e?.sessionId ?? null, e?.cwd ?? null]),
+  ]);
+}
 const TAILER_POLL_IDLE_MS = 3000;
 // 0387: per-agent CPU/RSS sampling rides the same tick, divided — one `ps`
 // fork per PROC_SAMPLE_EVERY ticks (→ 3s active / 6s idle) covering all pids.
@@ -66,11 +81,20 @@ export class Fleet extends EventEmitter {
   #tailerTimer = null;
   #sessionTimer = null;
   #sessionPollEnabled = false;
+  #listSessions = listClaudeSessions;
+  #timers = { setTimeout, clearTimeout };
+  #sessionRefreshTimer = null;
+  #sessionInflight = false;
+  #sessionRefreshAgain = false;
+  #offSessionsChanged = null;
   // 0448: agents with a per-slot cap (setSlotCostCap) that setCostCap skips.
   #capOverrides = new WeakSet();
 
-  constructor({ slots = DEFAULT_SLOTS, viewport = null, agentFactories = {} } = {}) {
+  constructor({ slots = DEFAULT_SLOTS, viewport = null, agentFactories = {}, listSessions = null, timers = null } = {}) {
     super();
+    // 0463: test seams for the session poll — the listing and the clock.
+    this.#listSessions = listSessions || listClaudeSessions;
+    this.#timers = timers || { setTimeout, clearTimeout };
     // 0420: builders for non-Claude slots, keyed by provider id:
     // `(launchOpts) → agent` with the PtyAgent surface. Claude never goes
     // through here — its selection order below is fixed.
@@ -107,8 +131,13 @@ export class Fleet extends EventEmitter {
     // the user's live sessions either — the verification pass caught this
     // returning the user's real session data inside a test that had stubbed
     // the binary. Same gate the model probes use at boot.
-    this.#sessionPollEnabled = !MOCK_FIXTURE && !isSandboxed();
-    if (this.#sessionPollEnabled) this.#scheduleSessionPoll(0);
+    // 0463: an injected listing forks nothing, so it is allowed anywhere.
+    this.#sessionPollEnabled = listSessions ? true : !MOCK_FIXTURE && !isSandboxed();
+    if (this.#sessionPollEnabled) {
+      this.#scheduleSessionPoll(0);
+      // 0463: a `claude rm` from the TUI must not leave its row for 120 s.
+      this.#offSessionsChanged = onSessionsChanged(() => this.#requestSessionRefresh());
+    }
     this.#scheduleTailerPoll(TAILER_POLL_MS);
   }
 
@@ -117,21 +146,48 @@ export class Fleet extends EventEmitter {
   // Refresh claude's session list. Spawning a process is not free, so this
   // runs on its own slow timer and never on a render.
   #scheduleSessionPoll(ms) {
-    this.#sessionTimer = setTimeout(async () => {
+    if (this.#sessionTimer) this.#timers.clearTimeout(this.#sessionTimer);
+    this.#sessionTimer = this.#timers.setTimeout(async () => {
+      this.#sessionTimer = null;
+      // 0463: a refresh that lands while a listing is running waits for it,
+      // then runs once — never two claude forks at a time.
+      if (this.#sessionInflight) { this.#sessionRefreshAgain = true; return; }
+      this.#sessionInflight = true;
       try {
-        const next = await listClaudeSessions();
+        // 0463: skip listClaudeSessions' 5 s cache. A refresh can land inside
+        // it (a slot exiting 3 s after its launch refresh; the run-again path
+        // right after a listing) and would get the stale copy.
+        const next = await this.#listSessions({ cacheMs: 0 });
         if (next) {
           // Any change matters, not just the count: a session going from
           // blocked to working, or crossing the one-day staleness line, must
           // wake the UI too.
-          const before = JSON.stringify(this.claudeSessions?.background ?? null);
+          // 0463: `attached` feeds each card's otherSessions count too.
+          const before = sessionsKey(this.claudeSessions);
           this.claudeSessions = next;
-          if (before !== JSON.stringify(next.background)) this.emit('change');
+          if (before !== sessionsKey(next)) this.emit('change');
         }
       } catch { /* a listing failure leaves the previous answer in place */ }
-      this.#scheduleSessionPoll(SESSION_POLL_MS);
+      this.#sessionInflight = false;
+      // stopPolling() ran while the listing was in flight: stay stopped.
+      if (!this.#sessionPollEnabled) return;
+      const again = this.#sessionRefreshAgain;
+      this.#sessionRefreshAgain = false;
+      this.#scheduleSessionPoll(again ? 0 : SESSION_POLL_MS);
     }, ms);
     this.#sessionTimer.unref?.();
+  }
+
+  // 0463: a slot launched, was killed or its process exited. Refresh the list
+  // once, SESSION_REFRESH_DEBOUNCE_MS from the first such event; the listing
+  // then restarts the 120 s cadence.
+  #requestSessionRefresh() {
+    if (!this.#sessionPollEnabled || this.#sessionRefreshTimer) return;
+    this.#sessionRefreshTimer = this.#timers.setTimeout(() => {
+      this.#sessionRefreshTimer = null;
+      if (this.#sessionPollEnabled) this.#scheduleSessionPoll(0);
+    }, SESSION_REFRESH_DEBOUNCE_MS);
+    this.#sessionRefreshTimer.unref?.();
   }
 
   #scheduleTailerPoll(ms) {
@@ -298,9 +354,20 @@ export class Fleet extends EventEmitter {
     // snapshot() runs toJSON() on every agent (incl. terminal-buffer scans).
     // The sole consumer (App.jsx) now recomputes the snapshot once per painted
     // frame inside its coalesced flush, so it runs per-frame, not per-event.
-    agent.on('change', () => this.emit('change'));
+    // 0463: a slot whose process goes away (pid → none) refreshes claude's
+    // session list once. One property read per change event.
+    let hadProcess = false;
+    agent.on('change', () => {
+      // PtyCore agents hold `pty`; the stream-json Agent holds `proc`.
+      const live = !!(agent.pty || agent.proc);
+      if (hadProcess && !live) this.#requestSessionRefresh();
+      hadProcess = live;
+      this.emit('change');
+    });
     this.agents[slot - 1] = agent;
     agent.start();
+    hadProcess = !!(agent.pty || agent.proc);
+    this.#requestSessionRefresh();
     if (prompt) {
       // small defer so the system 'init' event lands before the first user msg
       setTimeout(() => agent.send(prompt), 250);
@@ -339,7 +406,11 @@ export class Fleet extends EventEmitter {
     // process ends, keep the agent reachable for hardKillAll.
     if (agent.stopping) {
       this.stopping.add(agent);
-      agent.once('stopped', () => this.stopping.delete(agent));
+      // 0463: refresh once the process is gone; at +2 s it may still be
+      // inside its SIGTERM grace and still listed.
+      agent.once('stopped', () => { this.stopping.delete(agent); this.#requestSessionRefresh(); });
+    } else {
+      this.#requestSessionRefresh(); // 0463
     }
     this.agents[idx] = null;
     this.emit('change');
@@ -380,7 +451,10 @@ export class Fleet extends EventEmitter {
   // never fire against a torn-down fleet.
   stopPolling() {
     if (this.#tailerTimer) { clearTimeout(this.#tailerTimer); this.#tailerTimer = null; }
-    if (this.#sessionTimer) { clearTimeout(this.#sessionTimer); this.#sessionTimer = null; }
+    if (this.#sessionTimer) { this.#timers.clearTimeout(this.#sessionTimer); this.#sessionTimer = null; }
+    if (this.#sessionRefreshTimer) { this.#timers.clearTimeout(this.#sessionRefreshTimer); this.#sessionRefreshTimer = null; }
+    this.#sessionPollEnabled = false; // 0463: no refresh after shutdown
+    if (this.#offSessionsChanged) { this.#offSessionsChanged(); this.#offSessionsChanged = null; }
   }
 
   killAll() {
