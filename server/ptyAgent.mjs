@@ -34,7 +34,7 @@ import { deriveStatus } from './deriveStatus.mjs';
 import { PtyCore, bottomContentRows, childEnv } from './ptyCore.mjs';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { MODELS, modelByCli } from '../tui/lib/models.js';
+import { MODELS, modelByCli, resolveModelId } from '../tui/lib/models.js';
 import { fullStatus } from './git.mjs';
 import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
 import { pushTail } from './jsonlConnector.mjs';
@@ -547,7 +547,17 @@ export class PtyAgent extends PtyCore {
 
   changeModel(model) {
     if (!model) return false;
-    if (model === this.model) return false;
+    // 0453: compare against the model claude is RUNNING. After an in-claude
+    // `/model`, resolvedModel holds it and this.model is stale; after
+    // :resume-all this.model may be a CLI-form id. Both sides go to a catalog
+    // id ('auto' → newest opus) so `:model <launch model>` is not a no-op.
+    // A resolvedModel the catalog does not know stays as its raw cli id, so it
+    // never equals a catalog request and `:model <catalog id>` still restarts.
+    const asId = (m) => modelByCli(resolveModelId(m))?.id ?? m;
+    const running = this.resolvedModel
+      ? (modelByCli(this.resolvedModel)?.id ?? this.resolvedModel)
+      : asId(this.model);
+    if (asId(model) === running) return false;
     const prev = this.model;
     this.model = model;
     this.resolvedModel = null;
