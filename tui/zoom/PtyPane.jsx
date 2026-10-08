@@ -115,6 +115,9 @@ export default function PtyPane({
   // unsubscribe or every re-zoom adds another stale listener.
   const dataDisposeRef = useRef(null);
   const exitDisposeRef = useRef(null);
+  // 0446: unsubscribes the agent 'change' listener that waits for the
+  // successor pty after a changeModel/changePermissionMode respawn.
+  const followOffRef = useRef(null);
   // Rows of the emulator's viewport the render window is currently skipping
   // (see the view memo). Read by the scroll-mode key handler so its maximum
   // offset matches the window the user is actually looking at.
@@ -135,6 +138,10 @@ export default function PtyPane({
   const [tick, setTick] = useState(0);
   const [error, setError] = useState(null);
   const [exited, setExited] = useState(false);
+  // 0446: the cap refusal text from agent.capMessage(), shown as a footer
+  // notice after zoom refused an Enter or a paste. Cleared on the next
+  // accepted submit/paste.
+  const [capNotice, setCapNotice] = useState(null);
 
   // Scroll mode. Activated by Ctrl+F (0x06). Not Ctrl+Y (Cursor chat picker)
   // and not Ctrl+B (New Session filesystem browse).
@@ -175,7 +182,12 @@ export default function PtyPane({
   // missing mid-screen the moment you press Ctrl+F (the "misshapen rows while
   // scrolling" half of the duplicated/misshapen-zoom-text report). Reserve the
   // footer's row instead, and keep the hint to exactly one row (truncated).
-  const footerRows = (scrollMode ? 1 : 0) + (exited ? 1 : 0);
+  // 0446: the cap notice shows only while the cap still holds — after :cap
+  // is raised it drops on the next render instead of waiting for a submit.
+  const capShown = capNotice && (typeof agent?.capMessage === 'function'
+    ? agent.capMessage()
+    : capNotice);
+  const footerRows = (scrollMode ? 1 : 0) + (exited ? 1 : 0) + (capShown ? 1 : 0);
   const viewRows = Math.max(1, rows - footerRows);
 
   // ── PTY lifecycle ─────────────────────────────────────────────
@@ -251,12 +263,46 @@ export default function PtyPane({
       // throwing, but guard anyway — a null/absent session.pty (failed
       // revive, or a future caller shape) must fall through to the
       // error banner below, not an unguarded crash here.
-      exitDisposeRef.current = session.pty?.onExit?.(() => {
-        if (cancelled) return;
-        setExited(true);
-        // Defer onClose so React finishes the current render first.
-        setTimeout(() => onClose?.(), 0);
-      });
+      // 0446: the exit listener follows the agent's pty. A changeModel /
+      // changePermissionMode respawn stops the mount-time pty on purpose; its
+      // exit used to run setExited + onClose and close zoom under the user.
+      // An exit from a pty the agent replaced (agent.replacedByRestart) now
+      // re-binds to the successor once it is spawned; any other exit still
+      // closes zoom as before.
+      const bindExit = (pty) => {
+        exitDisposeRef.current = pty?.onExit?.(() => {
+          if (cancelled) return;
+          if (agent?.replacedByRestart?.(pty)) { followSuccessor(pty); return; }
+          setExited(true);
+          // Defer onClose so React finishes the current render first.
+          setTimeout(() => onClose?.(), 0);
+        });
+      };
+      const followSuccessor = (oldPty) => {
+        try { exitDisposeRef.current?.dispose?.(); } catch {}
+        exitDisposeRef.current = null;
+        const tryBind = () => {
+          if (cancelled) return true;
+          if (agent.killed) {
+            setExited(true);
+            setTimeout(() => onClose?.(), 0);
+            return true;
+          }
+          if (!agent.pty || agent.pty === oldPty) return false;
+          ptyRef.current = agent.pty;
+          bindExit(agent.pty);
+          return true;
+        };
+        if (tryBind() || typeof agent?.on !== 'function') return;
+        const onChange = () => {
+          if (!tryBind()) return;
+          agent.off?.('change', onChange);
+          followOffRef.current = null;
+        };
+        agent.on('change', onChange);
+        followOffRef.current = () => agent.off?.('change', onChange);
+      };
+      bindExit(session.pty);
 
       // Event-driven repaints — fires only when xterm-headless has a
       // real change to surface. Three streams cover every state
@@ -308,6 +354,8 @@ export default function PtyPane({
       // and leak per-zoom listeners across re-zooms.
       try { dataDisposeRef.current?.dispose?.(); } catch {}
       try { exitDisposeRef.current?.dispose?.(); } catch {}
+      try { followOffRef.current?.(); } catch {}
+      followOffRef.current = null;
       dataDisposeRef.current = null;
       exitDisposeRef.current = null;
       // Render-trigger subscriptions are PER-MOUNT — always dispose.
@@ -402,6 +450,23 @@ export default function PtyPane({
     if (!focus) return;
     const pty = ptyRef.current;
     if (!pty) return;
+    // 0446: every write goes through the agent's guarded input path. The
+    // cached ptyRef is the pty from MOUNT time; after a changeModel /
+    // changePermissionMode respawn it is dead, and writing to it also skipped
+    // the cost cap. agent.writeInput writes to the current pty and refuses
+    // submit/paste once capped. The raw pty.write fallback is only for a
+    // session without it (legacy startZoomSession; 0444 removes that path).
+    const write = (bytes, opts = {}) => {
+      if (typeof agent?.writeInput === 'function') {
+        const ok = agent.writeInput(bytes, opts) !== false;
+        if (opts.submit || opts.paste) {
+          const capText = ok ? null : (agent.capMessage?.() || null);
+          setCapNotice(capText);
+        }
+        return ok;
+      }
+      try { pty.write(bytes); return true; } catch { return false; }
+    };
 
     // ── Scroll mode ────────────────────────────────────────────
     // While scroll mode is active, w/s/b/f/g/G drive the viewport
@@ -521,10 +586,8 @@ export default function PtyPane({
       // Insert a newline WITHOUT submitting. Wrapped in bracketed paste when
       // claude has the mode on so it's treated as content, not another submit.
       const term = termRef.current;
-      try {
-        if (term?.modes?.bracketedPasteMode) pty.write('\x1b[200~\n\x1b[201~');
-        else pty.write('\n');
-      } catch {}
+      if (term?.modes?.bracketedPasteMode) write('\x1b[200~\n\x1b[201~');
+      else write('\n');
       return;
     }
 
@@ -536,24 +599,32 @@ export default function PtyPane({
     // (it writes ESC[?2004h; xterm-headless flips term.modes
     // .bracketedPasteMode), wrap multi-char input in CSI 200~ /
     // 201~ so claude treats it as paste rather than typing.
-    if (
-      input && input.length > 1 &&
+    // 0446: isPaste is computed once and also flags the paste-mode-OFF case
+    // below — a multi-char chunk forwarded raw through keyToBytes is still a
+    // paste for the cost cap.
+    const isPaste = !!(
+      // 0446: count code points, not UTF-16 units — one emoji is a key, not
+      // a paste the cost cap would refuse.
+      input && Array.from(input).length > 1 &&
       !key.ctrl && !key.meta && !key.shift &&
       !key.return && !key.escape && !key.tab &&
       !key.backspace && !key.delete &&
       !key.upArrow && !key.downArrow && !key.leftArrow && !key.rightArrow &&
       !key.home && !key.end && !key.pageUp && !key.pageDown
-    ) {
+    );
+    if (isPaste) {
       const term = termRef.current;
       if (term?.modes?.bracketedPasteMode) {
-        try { pty.write('\x1b[200~' + input + '\x1b[201~'); } catch {}
+        write('\x1b[200~' + input + '\x1b[201~', { paste: true });
         return;
       }
     }
 
     const bytes = keyToBytes(input, key);
     if (bytes != null) {
-      try { pty.write(bytes); } catch {}
+      const accepted = write(bytes, { submit: !!key.return, paste: isPaste });
+      // 0446: a refused Enter (cost cap) must not flip the card to working.
+      if (!accepted) return;
       // Flip status to 'working' the instant the user submits a
       // prompt — otherwise the card sits on 'idle' for the 200-800ms
       // it takes claude to commit the JSONL user event. PtyAgent
@@ -736,6 +807,9 @@ export default function PtyPane({
           <Text color={theme?.fg || 'white'}>{scrollOffset} </Text>
           <Text color={theme?.dim || 'gray'}>· w/s line · f/b half-page up/down · g/G top/bottom · Esc resume claude</Text>
         </Text>
+      )}
+      {capShown && (
+        <Text color={theme?.red || 'red'} wrap="truncate">{capShown}</Text>
       )}
       {exited && (
         <Text color={theme?.dim || 'gray'} wrap="truncate">(claude exited)</Text>

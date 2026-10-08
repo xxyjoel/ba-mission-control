@@ -289,6 +289,13 @@ export class PtyCore extends EventEmitter {
     // 0441: start() was called while an old pty was still stopping; spawn
     // when the last one ends (exit or SIGKILL).
     this._startDeferred = false;
+    // 0446: ptys _teardownForRestart replaced on purpose. A zoom pane bound
+    // to one of them must not read its exit as "claude exited" and close.
+    this._restartReplaced = new WeakSet();
+    // 0446: the cap text zoom last wrote to the tail, so a held Enter or
+    // repeated pastes log one line, not one per key. Reset on an accepted
+    // submit/paste.
+    this._zoomCapNoted = null;
     this.lastEventTs = Date.now();
     // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
     // bumps on every parsed JSONL line), this advances ONLY when claude writes
@@ -612,15 +619,61 @@ export class PtyCore extends EventEmitter {
     this.emit('change');
   }
 
-  send(text) {
-    if (this.costCapUSD > 0 && this.costSession >= this.costCapUSD) {
-      this.appendTail({
-        kind: 'err',
-        text: `cost cap reached · $${this.costSession.toFixed(2)} / $${this.costCapUSD.toFixed(2)} · raise with :cap ${this.slot} <usd>`,
-      });
-      this.emit('change');
+  // 0446: the one cost-cap check. Returns the refusal text once the cap is
+  // reached, else null. send() and writeInput() both refuse through
+  // #refuseIfCapped, so the cap holds on every input path; PtyPane reads this
+  // to show the same text in zoom.
+  capMessage() {
+    if (!(this.costCapUSD > 0 && this.costSession >= this.costCapUSD)) return null;
+    return `cost cap reached · $${this.costSession.toFixed(2)} / $${this.costCapUSD.toFixed(2)} · raise with :cap ${this.slot} <usd>`;
+  }
+
+  // `quiet` (0446, zoom only): refuse without logging when the same text was
+  // already logged for this run of refusals.
+  #refuseIfCapped({ quiet = false } = {}) {
+    const text = this.capMessage();
+    if (!text) return false;
+    if (quiet && this._zoomCapNoted === text) return true;
+    if (quiet) this._zoomCapNoted = text;
+    this.appendTail({ kind: 'err', text });
+    this.emit('change');
+    return true;
+  }
+
+  // 0446: true when `pty` was stopped by a changeModel/changePermissionMode
+  // respawn (the agent has, or is about to have, a successor). PtyPane uses it
+  // to stay open and follow the new pty instead of closing zoom.
+  replacedByRestart(pty) {
+    return !!pty && this._restartReplaced.has(pty);
+  }
+
+  // 0446: raw keystrokes from zoom. Writes to the CURRENT this.pty, so a pane
+  // opened before a changeModel/changePermissionMode respawn reaches the new
+  // claude, not the dead one. Once the cap is reached, a submit (Enter) or a
+  // paste is refused with send()'s message; plain keys still go through so the
+  // user can edit the prompt or back out with Esc. A chunk carrying a CR is
+  // treated as a submit even when the caller did not flag it.
+  //
+  // No pty (the 0441 window between teardown and the old claude's exit, or an
+  // exited slot): the bytes are dropped and false returned. Keystrokes are not
+  // queued into pendingSends (that queue holds whole messages) and do not
+  // revive the slot; attachZoomView owns the revive.
+  writeInput(bytes, { submit = false, paste = false } = {}) {
+    if (bytes == null || bytes === '') return false;
+    const gated = submit || paste || String(bytes).includes('\r');
+    if (gated && this.#refuseIfCapped({ quiet: true })) return false;
+    if (!this.pty) return false;
+    try {
+      this.pty.write(bytes);
+      if (gated) this._zoomCapNoted = null;
+      return true;
+    } catch {
       return false;
     }
+  }
+
+  send(text) {
+    if (this.#refuseIfCapped()) return false;
 
     // Queue path: no PTY (need respawn) OR PTY exists but not ready
     // (still in the banner-draw window). Both drain into the same
@@ -916,6 +969,7 @@ export class PtyCore extends EventEmitter {
     if (this.pty) {
       const oldPty = this.pty;
       this.pty = null;
+      this._restartReplaced.add(oldPty); // 0446: see replacedByRestart
       // We're tearing down on purpose; suppress the auto-restart
       // path in #onExit by flipping killed briefly. start() resets
       // it back to false implicitly via constructor state.

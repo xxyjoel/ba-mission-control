@@ -457,8 +457,8 @@ export class PtyAgent extends PtyCore {
   // 200-800ms for claude to commit the JSONL user event. parseEvent
   // will subsequently confirm via the JSONL stream (idempotent).
   // Programmatic sends (send/broadcast/approve) already flip status
-  // via PtyCore's write path; this method covers the zoom-typed path
-  // that goes pty.write(...) directly.
+  // via PtyCore's write path; this method covers the zoom-typed path,
+  // which writes keystrokes through PtyCore.writeInput (0446).
   markUserSubmitted() {
     this.status = 'working';
     this.lastEventTs = Date.now();
