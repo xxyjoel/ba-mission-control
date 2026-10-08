@@ -40,29 +40,40 @@ export async function currentBranch(cwd) {
   return await runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
 }
 
+// 0452: null when git fails — a failed read is unknown, never a clean 0. An
+// empty porcelain listing with exit 0 is a genuinely clean tree and stays 0.
 export async function dirtyCount(cwd) {
   const out = await runGit(cwd, ['status', '--porcelain']);
-  if (out == null) return 0;
+  if (out == null) return null;
   if (!out) return 0;
   return out.split('\n').filter(Boolean).length;
 }
 
 // { ahead, behind } against configured upstream; falls back to origin/<branch>.
-// Returns zeros when no upstream exists.
+// 0452: returns { ahead: null, behind: null } when no upstream exists or git
+// fails — "no comparison possible" is not the same as "in step" (0/0).
 export async function aheadBehind(cwd, branch) {
   let out = await runGit(cwd, ['rev-list', '--left-right', '--count', '@{upstream}...HEAD']);
   if (out == null && branch) {
     out = await runGit(cwd, ['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`]);
   }
-  if (out == null) return { ahead: 0, behind: 0 };
+  if (out == null) return { ahead: null, behind: null };
   const m = out.split(/\s+/).map((n) => parseInt(n, 10));
-  if (m.length !== 2 || m.some(Number.isNaN)) return { ahead: 0, behind: 0 };
+  if (m.length !== 2 || m.some(Number.isNaN)) return { ahead: null, behind: null };
   return { behind: m[0], ahead: m[1] };
 }
 
+// 0452 contract for the Card: dirty/ahead/behind null = unknown (render '?'
+// for dirty), isRepo false = not a repo (render no git chips).
+// TODO(0452): the agents (server/ptyAgent.mjs, server/agent.mjs,
+// server/providers/cursor/cursorAgent.mjs — other lanes) still start
+// dirty/ahead/behind at 0 and return early from refreshGit on !isRepo, and
+// their snapshot carries no isRepo. Until they start at null, assign this
+// result on a non-repo too, and snapshot isRepo, a non-repo slot still reaches
+// the Card as dirty 0 and draws the clean dot.
 export async function fullStatus(cwd) {
   if (!(await isGitRepo(cwd))) {
-    return { isRepo: false, branch: null, dirty: 0, ahead: 0, behind: 0 };
+    return { isRepo: false, branch: null, dirty: null, ahead: null, behind: null };
   }
   const branch = await currentBranch(cwd);
   const [dirty, ab] = await Promise.all([

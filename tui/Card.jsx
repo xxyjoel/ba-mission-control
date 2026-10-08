@@ -199,7 +199,13 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // with background work running is never advertised as safe to interrupt.
 
   // Branch row
-  const branchClean = (agent.dirty || 0) === 0;
+  // 0452: git state contract (server/git.mjs fullStatus). isRepo false → not a
+  // repo → no git chips. dirty === null → the read failed → UNKNOWN, never the
+  // green clean dot. Only an explicit null is unknown; an absent field keeps the
+  // old rendering (same rule as UNMEASURED in format.js).
+  const gitNone     = agent.isRepo === false;
+  const dirtyKnown  = agent.dirty !== null;
+  const branchClean = dirtyKnown && (agent.dirty || 0) === 0;
   // model.label is a trusted catalog string; on genuine model drift (cli id
   // not in the catalog) we surface the sanitized resolved id rather than a
   // bare '—', routing the attacker-influenceable resolvedModel through the
@@ -350,7 +356,8 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
     + (nearT ? ` · ${(ctxPct * 100).toFixed(0)}%`.length : 0)
     + (agent.stuckMin > 0 ? ` · STUCK ${agent.stuckMin}m`.length : 0);
   const nameStr = trunc(agent.name || '—', Math.max(3, innerW - slotTagW - statusTagW - 1));
-  const gitChipsW = (branchClean ? 1 : `+${agent.dirty}`.length)
+  const gitChipsW = gitNone ? 0
+    : (!dirtyKnown ? UNKNOWN.length : branchClean ? 1 : `+${agent.dirty}`.length)
     + (agent.ahead  > 0 ? ` ↑${agent.ahead}`.length : 0)
     + (agent.behind > 0 ? ` ↓${agent.behind}`.length : 0);
   const branchStr = trunc(humanize(agent.branch || '—'), Math.max(3, innerW - `${modelLabel}${sidTag}${othersTag}  ⎇ `.length - gitChipsW - 1));
@@ -399,11 +406,14 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
             right-aligns the git chips. e.g. ops/db-recovery-incident-20 → … */}
         <Text color={theme.fg}>{branchStr}</Text>
         <Box flexGrow={1} />
-        {branchClean
-          ? <Text color={theme.green}>●</Text>
-          : <Text color={theme.yellow}>+{agent.dirty}</Text>}
-        {agent.ahead  > 0 && <Text color={theme.accent}> ↑{agent.ahead}</Text>}
-        {agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
+        {/* 0452: no chips for a non-repo; '?' when the dirty count is unknown. */}
+        {gitNone ? null
+          : !dirtyKnown ? <Text color={theme.dim}>{UNKNOWN}</Text>
+          : branchClean
+            ? <Text color={theme.green}>●</Text>
+            : <Text color={theme.yellow}>+{agent.dirty}</Text>}
+        {!gitNone && agent.ahead  > 0 && <Text color={theme.accent}> ↑{agent.ahead}</Text>}
+        {!gitNone && agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
       </Box>
 
       {/* CTX bar. 0409: with no known maxCtx the bar is SUPPRESSED rather than
