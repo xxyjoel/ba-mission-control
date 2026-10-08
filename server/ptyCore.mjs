@@ -28,12 +28,14 @@
 //   appendTail(ln)
 //       push a { kind, text } line onto the slot's tail ring. Core reports
 //       queue / signal / exit / restart events through it.
-//   readiness() → { delayMs } | { predicate(core) → bool, pollMs? }
-//       when the first queued send may be typed. delayMs is a fixed timer
-//       (claude: READY_MS). predicate is polled every pollMs (default 250)
-//       until it returns true — for a CLI that can show a dialog before its
-//       composer (cursor-agent's workspace trust), so a queued prompt is never
-//       typed into the dialog. A throwing predicate reads as not ready.
+//   readiness() → { delayMs } | { predicate(core) → bool, pollMs?, delayMs? }
+//       when the first queued send may be typed. delayMs alone is a fixed
+//       timer. predicate is polled every pollMs (default 250) until it
+//       returns true — for a CLI that can show a dialog before its composer
+//       (cursor-agent's workspace trust; claude's folder trust, 0468), so a
+//       queued prompt is never typed into the dialog. With both (claude:
+//       READY_MS), the first poll runs at delayMs instead of pollMs. A
+//       throwing predicate reads as not ready.
 //
 // Optional (default no-op / false):
 //   onSpawned(spec)            right after spawn(), with buildSpawn()'s spec —
@@ -309,8 +311,8 @@ export class PtyCore extends EventEmitter {
     this.restartTimer = null;
     this.pendingSends = [];
     // false until readiness() says the CLI can take input (claude: the
-    // READY_MS window after spawn). send() queues into pendingSends until
-    // ready flips true, then drains.
+    // READY_MS window after spawn, held while its trust dialog shows — 0468).
+    // send() queues into pendingSends until ready flips true, then drains.
     this.ready = false;
     this.readyTimer = null;
     // 0458: the pty a queued-message drain is running on (null when idle).
@@ -526,7 +528,8 @@ export class PtyCore extends EventEmitter {
         if (ok) becomeReady();
         else this.readyTimer = setTimeout(poll, pollMs);
       };
-      this.readyTimer = setTimeout(poll, pollMs);
+      // 0468: delayMs with a predicate is the earliest the first poll runs.
+      this.readyTimer = setTimeout(poll, r.delayMs ?? pollMs);
       return;
     }
     this.readyTimer = setTimeout(becomeReady, r.delayMs ?? 0);

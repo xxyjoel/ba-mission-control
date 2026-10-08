@@ -31,6 +31,7 @@
 //   scanApproval()    → bool: a permission prompt is on screen
 //   scanWorking()     → bool: an active-turn indicator is on screen
 //   liveSubAgents({withinMs, now}) → [{id, lastGrowTs}] sub-agent files still growing
+//   scanTrust()       → bool: the CLI's folder-trust dialog is on screen (0468)
 //
 // Returns { status, approvalWaiting, stuckMin, bgCount, bgStatus,
 // activeSubagents, reason }. `reason` names the branch that decided status
@@ -76,6 +77,7 @@ export function deriveStatus(signals, now) {
     scanApproval,
     scanWorking,
     liveSubAgents,
+    scanTrust,
   } = signals || {};
 
   // 0180: the JSONL has no permission-prompt event, so when the connector
@@ -237,6 +239,9 @@ export function deriveStatus(signals, now) {
   // counted err 0. An errored slot that looks idle is worse than a visibly
   // broken one — the user has no reason to press K and recover it.
   if (!hasPty && errored) { status = 'error'; reason = 'error-no-pty'; }
+  // 0468: a live process parked on its folder-trust dialog is waiting on the
+  // user. No hook fires and no transcript exists yet, so nothing above sees it.
+  else if (hasPty && tryBool(scanTrust)) { status = 'waiting'; reason = 'trust-dialog'; }
   // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
   // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
   // user (waiting) or done (idle). Hooked: only a stuck outstanding tool

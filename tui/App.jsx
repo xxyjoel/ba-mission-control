@@ -1292,10 +1292,19 @@ export default function App({
         //                         slot, several, or a comma-separated list).
         // Distinct from `:resume-all` (whole open-set) and `:history`
         // (view-only reference list).
-        const tokens = (arg || '')
-          .split(/[\s,]+/)
-          .map(s => parseInt(s, 10))
-          .filter(n => n >= 1 && n <= (settings.maxSlots || 10));
+        // 0455: branch on whether an argument was GIVEN, not on whether any
+        // token survived parsing. Invalid tokens used to be dropped silently,
+        // so `:resume 99` fell into the bare-verb branch and resumed the
+        // focused slot (default 1) with a success toast. Any invalid token now
+        // warns with the valid range and nothing launches.
+        const max = settings.maxSlots || 10;
+        const raw = (arg || '').split(/[\s,]+/).filter(Boolean);
+        const bad = raw.filter(s => !/^\d+$/.test(s) || +s < 1 || +s > max);
+        if (bad.length) {
+          pushToast(`resume: invalid slot ${bad.join(', ')} — use :resume <slot 1-${max}>`, 'warn');
+          return null;
+        }
+        const tokens = raw.map(s => parseInt(s, 10));
         if (tokens.length === 0) {
           // Bare verb: un-pause the focused live session…
           if (focusedAgent && focusedAgent.status !== 'empty') {

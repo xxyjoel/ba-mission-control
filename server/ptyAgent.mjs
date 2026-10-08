@@ -121,6 +121,41 @@ const WORKING_RX = /esc to interrupt/i;
 // verdict stands again).
 const SUB_ACTIVE_MS = 15_000;
 
+// 0468: claude's folder-trust dialog. claude opens on it in a folder it has not
+// trusted, BEFORE its composer, with "No, exit" highlighted — an Enter typed
+// into it ends the session. Anchors from a real capture (claude 2.1.294, fresh
+// temp dir, no input; tests/fixtures/claude-trust-dialog.screen.txt):
+//
+//    ❯ No, exit
+//      Yes, I trust this folder
+//
+// It must be the live bottom of the screen, not a copy in scrollback: both
+// option rows, the ❯ cursor on one of them, and the "Enter to confirm" footer
+// as the LAST content row. A resumed transcript that quotes the dialog has
+// claude's composer and status line below it, so it does not match (0468
+// review: a false match would hold the queue for good).
+const TRUST_YES_RX = /Yes, I trust this folder/;
+const TRUST_NO_RX = /\bNo, exit\b/;
+const TRUST_CURSOR_RX = /❯\s*(No, exit|Yes, I trust this folder)/;
+const TRUST_FOOTER_RX = /^\s*Enter to confirm\b.*\bEsc to cancel\s*$/;
+
+// 0468: once the dialog was seen, the queue waits this long after it leaves so
+// claude's composer is drawn before the first message is typed.
+const TRUST_SETTLE_MS = 1000;
+
+export function detectTrustDialog(rows) {
+  if (!Array.isArray(rows)) return false;
+  const content = rows.filter((r) => typeof r === 'string' && r.trim() !== '');
+  if (!content.length || !TRUST_FOOTER_RX.test(content[content.length - 1])) return false;
+  let yes = false, no = false, cursor = false;
+  for (const r of content) {
+    if (!yes && TRUST_YES_RX.test(r)) yes = true;
+    if (!no && TRUST_NO_RX.test(r)) no = true;
+    if (!cursor && TRUST_CURSOR_RX.test(r)) cursor = true;
+  }
+  return yes && no && cursor;
+}
+
 // detectWorking — true when the rendered rows show claude's active-turn
 // interrupt hint. Pure (mirrors detectApprovalPrompt) so it's unit-testable.
 export function detectWorking(rows) {
@@ -301,9 +336,13 @@ export class PtyAgent extends PtyCore {
     // a claude session; claude then turns transcript saving off ("inherited
     // CLAUDE_CODE_CHILD_SESSION marker"), so the tailer, resume and :model have
     // no JSONL. Seen by the 0437 real tests. Strip them from the spawn env?
-    // TODO(claude-trust): a claude slot in a folder claude has not trusted opens
-    // on the trust dialog, and the READY_MS drain types the first send into it
-    // (its Enter picks "No, exit"). autoTrust only reaches non-claude factories.
+    // 0468: a claude slot in a folder claude has not trusted opens on the trust
+    // dialog; readiness() holds queued sends until it is gone. mc never answers
+    // it (autoTrust still only reaches non-claude factories, by design).
+    // TODO(claude-bypass-dialog): with permissionMode bypassPermissions, claude's
+    // first-use warning is another pre-composer dialog with "No, exit"
+    // highlighted; readiness() does not detect it, so the first send's Enter can
+    // still pick it. Needs a real capture before adding an anchor.
     const spec = { bin: this._bin || CLAUDE_BIN, args, modelArg };
     // 0437: an env overlay is applied on top of PtyCore's default env.
     if (this._envOverlay) spec.env = { ...process.env, TERM: 'xterm-256color', ...this._envOverlay };
@@ -401,10 +440,44 @@ export class PtyAgent extends PtyCore {
     return false;
   }
 
-  // R1: a fixed banner-draw window, not a scrape — claude's composer is ready
-  // well inside it and there is no pre-composer dialog to wait out.
+  // R1: a banner-draw window — claude's composer is ready well inside READY_MS.
+  // 0468: plus a scrape for claude's folder-trust dialog (not the bypass
+  // warning — see TODO(claude-bypass-dialog) in buildSpawn). While it is on
+  // screen queued sends are held (typing into it would pick "No, exit") and
+  // the slot reads 'waiting'; once it is gone the queue drains after
+  // TRUST_SETTLE_MS. The user answers it in zoom — never mc.
   readiness() {
-    return { delayMs: READY_MS };
+    this._trustSeenTs = 0;
+    this._trustNoted = false;
+    return {
+      delayMs: READY_MS,
+      pollMs: 250,
+      predicate: () => {
+        const now = Date.now();
+        if (this.#scanTrustDialog()) {
+          this._trustSeenTs = now;
+          if (!this._trustNoted) {
+            this._trustNoted = true;
+            this.appendTail({
+              kind: 'sys',
+              text: 'claude is asking whether to trust this folder — answer it in zoom; queued messages wait',
+            });
+            this.emit('change');
+          }
+          return false;
+        }
+        return !this._trustSeenTs || now - this._trustSeenTs >= TRUST_SETTLE_MS;
+      },
+    };
+  }
+
+  // 0468: the trust dialog is on screen. Fails closed (false) on a term error.
+  #scanTrustDialog() {
+    try {
+      return detectTrustDialog(bottomContentRows(this.term, APPROVE_SCAN_ROWS));
+    } catch {
+      return false;
+    }
   }
 
   afterStart() {
@@ -531,6 +604,9 @@ export class PtyAgent extends PtyCore {
       scanApproval:    () => this.#scanApprovalPrompt(),
       scanWorking:     () => this.#scanWorking(),
       liveSubAgents:   (opts) => this.usageTailer?.liveAgents?.(opts),
+      // 0468: only before the first drain — after it the dialog has been
+      // answered, and a quoted copy in the transcript must not flip status.
+      scanTrust:       () => !this.ready && this.#scanTrustDialog(),
     };
   }
 
