@@ -65,12 +65,6 @@ export async function aheadBehind(cwd, branch) {
 
 // 0452 contract for the Card: dirty/ahead/behind null = unknown (render '?'
 // for dirty), isRepo false = not a repo (render no git chips).
-// TODO(0452): the agents (server/ptyAgent.mjs, server/agent.mjs,
-// server/providers/cursor/cursorAgent.mjs — other lanes) still start
-// dirty/ahead/behind at 0 and return early from refreshGit on !isRepo, and
-// their snapshot carries no isRepo. Until they start at null, assign this
-// result on a non-repo too, and snapshot isRepo, a non-repo slot still reaches
-// the Card as dirty 0 and draws the clean dot.
 export async function fullStatus(cwd) {
   if (!(await isGitRepo(cwd))) {
     return { isRepo: false, branch: null, dirty: null, ahead: null, behind: null };

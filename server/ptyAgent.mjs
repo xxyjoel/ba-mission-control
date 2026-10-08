@@ -263,9 +263,12 @@ export class PtyAgent extends PtyCore {
     // mutated by jsonlConnector on tool_use/tool_result. Surfaced as
     // activeSubagents in toJSON for the ⋔{n} card indicator + Zoom list.
     this.pendingSubagents = new Map();
-    this.dirty = 0;
-    this.ahead = 0;
-    this.behind = 0;
+    // 0452: git state is unknown (null) until refreshGit reads it; isRepo
+    // null = not checked yet, false = cwd is not a repo (no git chips).
+    this.isRepo = null;
+    this.dirty = null;
+    this.ahead = null;
+    this.behind = null;
     this.spark = Array(SPARK_LEN).fill(0); // 0385: blank cold-start — fill(1) rendered a FULL bar at 0 tok/min
     // tok/min sparkline baseline — jsonlConnector.updateSpark() reads
     // these to normalize the rate over elapsed wall time (#26).
@@ -497,7 +500,9 @@ export class PtyAgent extends PtyCore {
 
   async refreshGit() {
     const st = await fullStatus(this.cwd);
-    if (!st.isRepo) return;
+    // 0452: assign the non-repo result too — isRepo false and null counts are
+    // what tell the Card/Zoom to draw no clean dot. Null is unknown, never 0.
+    this.isRepo = st.isRepo;
     if (st.branch) this.branch = st.branch;
     this.dirty = st.dirty;
     this.ahead = st.ahead;
@@ -639,6 +644,7 @@ export class PtyAgent extends PtyCore {
       model: this.model,
       resolvedModel: this.resolvedModel,
       branch: this.branch,
+      isRepo: this.isRepo,
       dirty: this.dirty,
       ahead: this.ahead,
       behind: this.behind,

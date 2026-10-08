@@ -9,6 +9,7 @@
 // 0450 changed two quirks on purpose: a hooked AskUserQuestion wait no longer
 // accrues stuckMin, and a stored 'paused' now wins on a hooked slot. PTY bytes
 // no longer bump lastEventTs (screen repaints must not reset the STUCK clock).
+// 0452 added 'isRepo' after 'branch' on purpose (null = unchecked, false = not a repo).
 //
 // The clock is mocked so boundary cases (WORKING_FRESH_MS, the 5-minute stuck
 // threshold, BG_SUB_ACTIVE_MS, BG_ABANDON_MS) are exact rather than racy.
@@ -91,7 +92,7 @@ function pick(j) {
 test('toJSON key set and order is pinned', (t) => {
   const { agent } = boot(t);
   assert.deepEqual(Object.keys(agent.toJSON()), [
-    'id', 'slot', 'name', 'model', 'resolvedModel', 'branch', 'dirty', 'ahead',
+    'id', 'slot', 'name', 'model', 'resolvedModel', 'branch', 'isRepo', 'dirty', 'ahead',
     'behind', 'status', 'activeSubagents', 'context', 'tokensIn',
     'tokensCacheRead', 'tokensOut', 'costSession', 'costWeek', 'spark',
     'procCpu', 'procMemKb', 'lastTokRate', 'activity', 'cwd', 'sessionId',

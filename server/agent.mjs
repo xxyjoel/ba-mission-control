@@ -140,9 +140,12 @@ export class Agent extends EventEmitter {
     // costWeek is owned by tui/lib/costStore.js (per-run ISO-week bucket
     // persisted to disk). The TUI overlays the persisted value onto each
     // snapshot, so we don't track it here.
-    this.dirty = 0;
-    this.ahead = 0;
-    this.behind = 0;
+    // 0452: git state is unknown (null) until refreshGit reads it; isRepo
+    // null = not checked yet, false = cwd is not a repo (no git chips).
+    this.isRepo = null;
+    this.dirty = null;
+    this.ahead = null;
+    this.behind = null;
     this.spark = Array(SPARK_LEN).fill(0); // 0385: blank cold-start — fill(1) rendered a FULL bar at 0 tok/min
     this.activity = 'Awaiting first instruction';
     this.tail = [];
@@ -356,9 +359,17 @@ export class Agent extends EventEmitter {
     this.emit('change');
   }
 
-  async refreshGit() {
-    const st = await fullStatus(this.cwd);
-    if (!st.isRepo) return;
+  // 0452: every turn end starts a refresh without waiting for the last one.
+  // Only the newest call may write, so a slow older read can't overwrite a
+  // newer one. `read` is a test seam; the app always uses fullStatus.
+  #gitSeq = 0;
+  async refreshGit(read = fullStatus) {
+    const seq = ++this.#gitSeq;
+    const st = await read(this.cwd);
+    if (seq !== this.#gitSeq) return;
+    // 0452: assign the non-repo result too — isRepo false and null counts are
+    // what tell the Card/Zoom to draw no clean dot. Null is unknown, never 0.
+    this.isRepo = st.isRepo;
     if (st.branch) this.branch = st.branch;
     this.dirty = st.dirty;
     this.ahead = st.ahead;
@@ -897,6 +908,7 @@ export class Agent extends EventEmitter {
       // immediately visible. null until first init event.
       resolvedModel: this.resolvedModel,
       branch: this.branch,
+      isRepo: this.isRepo,
       dirty: this.dirty,
       ahead: this.ahead,
       behind: this.behind,

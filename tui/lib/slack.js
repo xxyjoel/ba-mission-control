@@ -18,8 +18,11 @@ function contextLines({ auth, agents, usage }) {
     const live = agents.filter(a => a.status !== 'empty');
     lines.push(`*fleet:* ${live.length} live session${live.length === 1 ? '' : 's'}`);
     for (const a of live.slice(0, 5)) {
-      const branchClean = (a.dirty || 0) === 0;
-      lines.push(`  • slot ${a.slot} \`${a.name || '—'}\` · ${a.model || '?'} · \`${a.branch || '?'}\`${branchClean ? '' : ` +${a.dirty}`} · status:${a.status}`);
+      // 0452: a non-repo shows nothing; a failed read (null) is ` +?`, not clean.
+      const dirtyBit = a.isRepo === false ? ''
+        : a.dirty === null ? ' +?'
+        : (a.dirty || 0) === 0 ? '' : ` +${a.dirty}`;
+      lines.push(`  • slot ${a.slot} \`${a.name || '—'}\` · ${a.model || '?'} · \`${a.branch || '?'}\`${dirtyBit} · status:${a.status}`);
     }
   }
   if (usage) {
