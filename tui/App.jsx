@@ -1849,13 +1849,52 @@ export default function App({
     // resume handlers below.
     const visList = agents.filter(a => a.status !== 'empty');
     if (visList.length > 0) {
-      const cols = Math.max(1, Math.min(settings.gridCols, visList.length));
       const curIdx = Math.max(0, visList.findIndex(a => a.slot === focusedSlot));
+      // 0457: step by the columns the grid DRAWS, not settings.gridCols. On a
+      // narrow terminal computeGridLayout drops columns, so a gridCols stride
+      // skipped cards (50 cols: Down went 1 → 4). Same call as the [ / ]
+      // handler below and the render path, so all three agree.
+      const nl = computeGridLayout({
+        termCols: termSize.cols,
+        termRows: termSize.rows,
+        gridCols: settings.gridCols,
+        count: visList.length,
+        fleetLogLines: settings.fleetLogLines,
+        showFleetLog: settings.showFleetLog,
+        windowsPerPane: settings.windowsPerPane,
+        focusedIndex: curIdx,
+      });
+      const cols = nl.effectiveCols;
+      // Rows are chunked per pane from pageStart (chunkRows in the render
+      // path), so the column is relative to the pane, and a pane's last row
+      // can be short when perPage is not a multiple of cols.
+      const col = (curIdx - nl.pageStart) % cols;
+      const lastIdx = visList.length - 1;
       let nextIdx = curIdx;
       if (key.leftArrow  || (settings.vimKeys && input === 'h')) nextIdx = (curIdx - 1 + visList.length) % visList.length;
       if (key.rightArrow || (settings.vimKeys && input === 'l')) nextIdx = (curIdx + 1) % visList.length;
-      if (key.upArrow    || (settings.vimKeys && input === 'k')) nextIdx = Math.max(0, curIdx - cols);
-      if (key.downArrow  || (settings.vimKeys && input === 'j')) nextIdx = Math.min(visList.length - 1, curIdx + cols);
+      if (key.upArrow    || (settings.vimKeys && input === 'k')) {
+        if (curIdx - cols >= nl.pageStart) nextIdx = curIdx - cols;
+        else if (nl.pageIndex > 0) {
+          // Top row of a pane → same column on the previous pane's last row.
+          const prevStart = nl.pageStart - nl.perPage;
+          const prevLastRow = prevStart + Math.floor((nl.perPage - 1) / cols) * cols;
+          nextIdx = Math.min(prevLastRow + col, nl.pageStart - 1);
+        } else nextIdx = 0;  // top row of the first pane: as before, go to card 1
+      }
+      if (key.downArrow  || (settings.vimKeys && input === 'j')) {
+        // 0457: start of the pane's last (possibly short) row.
+        const lastRowStart = nl.pageStart + Math.floor((nl.pageEnd - 1 - nl.pageStart) / cols) * cols;
+        if (curIdx + cols < nl.pageEnd) nextIdx = curIdx + cols;
+        else if (curIdx - col < lastRowStart) {
+          // A row below exists in this pane but is short and lacks this
+          // column → its last card, not a jump past it to the next pane.
+          nextIdx = nl.pageEnd - 1;
+        } else if (nl.pageEnd <= lastIdx) {
+          // Bottom row of a pane → same column on the next pane's first row.
+          nextIdx = Math.min(lastIdx, nl.pageEnd + col);
+        } else nextIdx = lastIdx;  // last pane: as before, go to the last card
+      }
       if (nextIdx !== curIdx) {
         setFocusedSlot(visList[nextIdx].slot);
         return;
