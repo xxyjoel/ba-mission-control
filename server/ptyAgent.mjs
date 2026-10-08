@@ -181,8 +181,11 @@ export class PtyAgent extends PtyCore {
     // bin still goes to spawn() as argv[0], never through a shell.
     bin,
     env,
+    // 0442: injectable process-tree signaller (see PtyCore). Undefined →
+    // signalProcessTree for the real node-pty spawn, pty.kill for a fake one.
+    signalGroup,
   } = {}) {
-    super({ spawn, cols, rows });
+    super({ spawn, cols, rows, ...(signalGroup !== undefined ? { signalGroup } : {}) });
     this._bin = bin || null;
     this._envOverlay = env && typeof env === 'object' ? { ...env } : null;
     this.slot = slot;

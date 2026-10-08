@@ -57,6 +57,7 @@
 // stateSince / workingStartTs anchors the provider initializes).
 
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { spawn as ptySpawn } from 'node-pty';
 import xterm from '@xterm/headless';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
@@ -80,6 +81,77 @@ const DEFAULT_ROWS = 24;
 const RESTART_MAX = 3;
 
 const DEFAULT_READY_POLL_MS = 250;
+
+// 0442: signal every process claude started, not claude alone. pty.kill()
+// signals the leader only — measured: claude in Ts+ while its child sleeps
+// stayed in S+, so a "paused" card kept running work. node-pty forks claude as
+// a session leader (pid == pgid), and some children stay in that group (MCP
+// servers, caffeinate), so process.kill(-pid) reaches those. claude's Bash
+// tool does NOT stay: each Bash-tool shell calls setsid and leads its own
+// session and group (measured on a live claude: zsh ppid=claude, pgid=own pid,
+// stat Ss). Builds, tests and sleeps run under those shells, so the group
+// signal alone misses exactly the work a pause is meant to stop. Hence the
+// descendant walk below.
+//
+// treeSignalTargets — pure: given `ps` rows [{pid, ppid, pgid}], the extra
+// kill() targets beyond the leader's own group (-rootPid). A descendant group
+// is signalled as -pgid ONLY when that group's leader is itself a descendant
+// (a setsid'd Bash-tool shell); any other stray descendant gets its own pid.
+// So no target can be mc's own group, pgid 0/1, or any group this tree does
+// not lead. Cycles / self-parented rows end the walk.
+export function treeSignalTargets(rootPid, rows) {
+  const kids = new Map();
+  for (const r of rows || []) {
+    if (!Number.isInteger(r?.pid) || !Number.isInteger(r?.ppid) || r.pid === r.ppid) continue;
+    if (!kids.has(r.ppid)) kids.set(r.ppid, []);
+    kids.get(r.ppid).push(r);
+  }
+  const desc = new Map(); // pid → row
+  const queue = [rootPid];
+  while (queue.length) {
+    for (const r of kids.get(queue.shift()) || []) {
+      if (r.pid === rootPid || desc.has(r.pid)) continue;
+      desc.set(r.pid, r);
+      queue.push(r.pid);
+    }
+  }
+  const targets = new Set();
+  for (const r of desc.values()) {
+    if (r.pid <= 1 || r.pgid === rootPid) continue; // covered by -rootPid
+    if (Number.isInteger(r.pgid) && r.pgid > 1 && desc.has(r.pgid)) targets.add(-r.pgid);
+    else targets.add(r.pid);
+  }
+  return [...targets];
+}
+
+// One `ps` snapshot, argv form. [] on any failure — a missing or failing ps
+// must never make pause / kill fail; the leader's group is still signalled.
+function psTable() {
+  try {
+    const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid='], { encoding: 'utf8', timeout: 2000 });
+    return out.split('\n').map((l) => {
+      const [pid, ppid, pgid] = l.trim().split(/\s+/).map(Number);
+      return { pid, ppid, pgid };
+    }).filter((r) => Number.isInteger(r.pid));
+  } catch { return []; }
+}
+
+// (pid, sig): the leader's group, then every extra target from the walk. The
+// snapshot is taken BEFORE the group signal: once a SIGTERM/SIGKILL lands,
+// claude can die and its children reparent to pid 1, and the walk would find
+// nothing. For SIGSTOP a second walk after the group stop catches a shell
+// claude spawned between the snapshot and the stop. Errors from the group
+// signal propagate (PtyCore#signal falls back on ESRCH/EPERM); each extra
+// target's error is swallowed so one ESRCH does not cut off the rest.
+export function signalProcessTree(pid, sig, list = psTable) {
+  const before = treeSignalTargets(pid, list());
+  process.kill(-pid, sig);
+  const extra = new Set(before);
+  if (sig === 'SIGSTOP') for (const t of treeSignalTargets(pid, list())) extra.add(t);
+  for (const t of extra) {
+    try { process.kill(t, sig); } catch {}
+  }
+}
 
 // pasteForSubmit — build the content chunk a programmatic send (broadcast /
 // approve) writes to the PTY BEFORE the submit CR. Mirrors PtyPane's proven
@@ -161,9 +233,18 @@ export class PtyCore extends EventEmitter {
     // no viewport is known (tests, non-TTY).
     cols,
     rows,
+    // 0442: (pid, sig) → signals the process group led by pid and every
+    // descendant that left it (signalProcessTree). The default only for the
+    // real node-pty spawn. An injected
+    // (fake) spawn hands out made-up pids, and a group signal to one of them
+    // could stop or kill an unrelated real process group on this machine — so
+    // with a fake spawn the default is null and signals go to pty.kill, unless
+    // the test injects its own recorder here.
+    signalGroup = spawn === ptySpawn ? signalProcessTree : null,
   } = {}) {
     super();
     this._spawn = spawn;
+    this._signalGroup = signalGroup;
 
     this.pty = null;
     // Persistent xterm-headless emulator. Created in start(),
@@ -192,6 +273,8 @@ export class PtyCore extends EventEmitter {
     // stopped process never handles a queued SIGTERM, so it must be SIGCONTed
     // first or it survives the slot as an orphaned T-state process (P6/0408).
     this.paused = false;
+    // 0442: the stored status at the moment of pause(); resume() restores it.
+    this._statusBeforePause = null;
     this.killed = false;
     this.lastEventTs = Date.now();
     // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
@@ -296,6 +379,7 @@ export class PtyCore extends EventEmitter {
 
     // R1: queue any send()s that arrive during the banner-draw window.
     this.paused = false; // fresh process is not stopped (P6/0408)
+    this._statusBeforePause = null; // 0442
     this.#armReadiness();
 
     this.afterStart();
@@ -596,10 +680,33 @@ export class PtyCore extends EventEmitter {
     }
   }
 
+  // 0442: send `sig` to `pty`'s process tree (its group plus setsid'd
+  // descendants, see signalProcessTree). Falls back to pty.kill
+  // (the leader only) when there is no group signaller (fake spawn), no usable
+  // pid, or the group signal fails with ESRCH (group already gone / not yet
+  // formed) or EPERM. Any other error is thrown to the caller's catch.
+  #signal(pty, sig) {
+    const pid = pty?.pid;
+    // pid must be > 1: process.kill(-0) would signal mc's OWN group and -1
+    // every process this user may signal.
+    if (this._signalGroup && Number.isInteger(pid) && pid > 1) {
+      try {
+        this._signalGroup(pid, sig);
+        return;
+      } catch (e) {
+        if (e?.code !== 'ESRCH' && e?.code !== 'EPERM') throw e;
+      }
+    }
+    pty.kill(sig);
+  }
+
   pause() {
     if (!this.pty) return false;
     try {
-      this.pty.kill('SIGSTOP');
+      this.#signal(this.pty, 'SIGSTOP');
+      // 0442: snapshot only on the first pause — a second pause() must not
+      // save 'paused' and have resume() bring back 'paused'.
+      if (!this.paused) this._statusBeforePause = this.status;
       this.paused = true;
       this.status = 'paused';
       this.appendTail({ kind: 'sys', text: 'SIGSTOP — process frozen' });
@@ -614,9 +721,20 @@ export class PtyCore extends EventEmitter {
   resume() {
     if (!this.pty) return false;
     try {
-      this.pty.kill('SIGCONT');
+      this.#signal(this.pty, 'SIGCONT');
       this.paused = false;
-      this.status = 'working';
+      // 0442: restore the status held before the pause instead of forcing
+      // 'working'. SIGSTOP froze the process, so whatever was true then is
+      // still true now: an idle session stays idle, a waiting prompt stays
+      // waiting, a mid-turn session resumes working. Forcing 'working' made an
+      // idle card read busy until the next transcript event. Only restore when
+      // nothing overwrote 'paused' meanwhile (an exit path writing 'error').
+      // 0442: TODO(hooked-pause): deriveStatus's hooked branch never reads the
+      // stored 'paused' while hookStatus is working/waiting, so a HOOKED paused
+      // card can still show WORKING. Pre-existing; restore-prior here keeps the
+      // unhooked and hook-idle-connector-fresher branches truthful.
+      if (this.status === 'paused') this.status = this._statusBeforePause || 'idle';
+      this._statusBeforePause = null;
       this.appendTail({ kind: 'sys', text: 'SIGCONT — process resumed' });
       this.emit('change');
       return true;
@@ -654,11 +772,13 @@ export class PtyCore extends EventEmitter {
       // P6 (0408): a SIGSTOPped process never handles the SIGTERM — it stays
       // frozen in T state with the signal pending, unreachable once the Fleet
       // drops the agent from agents[]. Wake it first so the SIGTERM lands.
+      // 0442: both go to the whole process tree, so stopped children wake
+      // and terminate with claude instead of staying frozen in T state.
       if (this.paused) {
-        try { this.pty.kill('SIGCONT'); } catch {}
+        try { this.#signal(this.pty, 'SIGCONT'); } catch {}
         this.paused = false;
       }
-      try { this.pty.kill('SIGTERM'); } catch {}
+      try { this.#signal(this.pty, 'SIGTERM'); } catch {}
     }
   }
 
@@ -669,7 +789,11 @@ export class PtyCore extends EventEmitter {
   // (2026-08-12 incident, gtm-gov-miner). kill() must have run first.
   hardKill() {
     if (this.pty) {
-      try { this.pty.kill('SIGKILL'); } catch {}
+      // 0442: the whole tree — a wedged claude's children must not outlive it.
+      // 0442: TODO(tree-after-exit): if the SIGTERM already ended claude, its
+      // setsid'd children have reparented to pid 1 and this walk finds none, so
+      // one that ignored SIGTERM survives. Reuse kill()'s snapshot to close it.
+      try { this.#signal(this.pty, 'SIGKILL'); } catch {}
     }
   }
 
@@ -706,11 +830,12 @@ export class PtyCore extends EventEmitter {
       this.killed = true;
       // P6 (0408): a paused (SIGSTOPped) process must be woken or the SIGTERM
       // stays pending forever — same orphan shape kill() guards against.
+      // 0442: signal the old process tree, same as kill().
       if (this.paused) {
-        try { oldPty.kill('SIGCONT'); } catch {}
+        try { this.#signal(oldPty, 'SIGCONT'); } catch {}
         this.paused = false;
       }
-      try { oldPty.kill('SIGTERM'); } catch {}
+      try { this.#signal(oldPty, 'SIGTERM'); } catch {}
       this.killed = wasKilled;
     }
   }

@@ -146,43 +146,69 @@ test('P2: start() refuses to spawn a sibling next to a live PTY', () => {
 
 // ─── P6: kill on a paused slot ─────────────────────────────────────
 
+// 0442: deliberately re-pinned. pause / kill / the restart teardown now signal
+// claude's whole process group (process.kill(-pid, sig)), so each P6 pin
+// injects a group recorder and asserts on it; pty.kill must stay unused.
+function groupRecorder() {
+  const calls = [];
+  const fn = (pid, sig) => { calls.push(`${pid}:${sig}`); };
+  fn.calls = calls;
+  return fn;
+}
+
 test('P6: kill() on a PAUSED agent sends SIGCONT before SIGTERM', () => {
   const fake = makeFakeSpawn();
-  const p = makeAgent(fake);
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
   p.start();
   p.pause();
   assert.equal(p.paused, true);
   p.kill();
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM'],
-    'a stopped process must be woken or the SIGTERM stays pending forever');
+  assert.deepEqual(signalGroup.calls, ['4321:SIGSTOP', '4321:SIGCONT', '4321:SIGTERM'],
+    'a stopped group must be woken or the SIGTERM stays pending forever');
+  assert.deepEqual(fake.spawned[0]._kills, []);
 });
 
 test('P6: kill() on a running (never paused) agent sends no SIGCONT', () => {
   const fake = makeFakeSpawn();
-  const p = makeAgent(fake);
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
   p.start();
   p.kill();
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGTERM']);
+  assert.deepEqual(signalGroup.calls, ['4321:SIGTERM']);
 });
 
 test('P6: pause then resume then kill — no spurious SIGCONT at kill time', () => {
   const fake = makeFakeSpawn();
-  const p = makeAgent(fake);
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
   p.start();
   p.pause();
   p.resume();
   p.kill();
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM']);
+  assert.deepEqual(signalGroup.calls, ['4321:SIGSTOP', '4321:SIGCONT', '4321:SIGTERM']);
 });
 
-test('P6: changeModel on a PAUSED agent wakes the old process before SIGTERM', () => {
+test('P6: changeModel on a PAUSED agent wakes the old process group before SIGTERM', () => {
+  const fake = makeFakeSpawn();
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
+  p.start();
+  p.pause();
+  p.changeModel('opus-4.7');
+  // 0442: the teardown signals the OLD group (4321), not the successor's.
+  assert.deepEqual(signalGroup.calls.slice(0, 3), ['4321:SIGSTOP', '4321:SIGCONT', '4321:SIGTERM']);
+  assert.deepEqual(fake.spawned[0]._kills, []);
+  p.kill();
+});
+
+test('P6: with no group signaller (fake spawn), the signals fall back to pty.kill', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
   p.pause();
-  p.changeModel('opus-4.7');
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM']);
   p.kill();
+  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM']);
 });
 
 // ─── P7: restart budget resets after a stable run ──────────────────

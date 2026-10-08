@@ -249,7 +249,9 @@ test('PtyAgent.pause / resume use SIGSTOP / SIGCONT', () => {
   assert.equal(p.status, 'paused');
   assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP']);
   p.resume();
-  assert.equal(p.status, 'working');
+  // 0442: deliberately re-pinned — un-pause restores the pre-pause status
+  // (idle: nothing was sent) instead of forcing 'working'.
+  assert.equal(p.status, 'idle');
   assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT']);
   p.kill();
 });

@@ -312,9 +312,102 @@ test('pause / resume: signals, status, tail; no pty → false', (t) => {
   assert.equal(agent.status, 'paused');
   assert.equal(agent.resume(), true);
   assert.equal(agent.paused, false);
-  assert.equal(agent.status, 'working');
+  // 0442: deliberately re-pinned. Un-pause used to force 'working'; it now
+  // restores the status held before the pause (idle here — nothing was sent).
+  assert.equal(agent.status, 'idle');
+  // A fake spawn has no real process group, so the signals fall back to
+  // pty.kill (no group signaller is injected here).
   assert.deepEqual(spawn.spawned[0]._kills, ['SIGSTOP', 'SIGCONT']);
   assert.deepEqual(tailTexts(agent).slice(-2), ['sys:SIGSTOP — process frozen', 'sys:SIGCONT — process resumed']);
+});
+
+// 0442: pause / resume / kill / hardKill signal claude's whole process group.
+const groupRecorder = () => {
+  const calls = [];
+  const fn = (pid, sig) => { calls.push(`${pid}:${sig}`); };
+  fn.calls = calls;
+  return fn;
+};
+
+test('0442: the group signaller is on for the real node-pty spawn, off for a fake one', (t) => {
+  // Production (Fleet) constructs PtyAgent with no spawn → node-pty → group on.
+  assert.equal(typeof new PtyAgent({ slot: 1 })._signalGroup, 'function');
+  // A fake spawn's made-up pids must never be group-signalled for real.
+  const { agent } = makeAgent(t);
+  assert.equal(agent._signalGroup, null);
+});
+
+test('0442: pause / resume signal the process group, not pty.kill', (t) => {
+  const signalGroup = groupRecorder();
+  const { agent, spawn } = makeAgent(t, { signalGroup });
+  agent.start();
+  agent.pause();
+  agent.resume();
+  assert.deepEqual(signalGroup.calls, ['6200:SIGSTOP', '6200:SIGCONT']);
+  assert.deepEqual(spawn.spawned[0]._kills, []);
+});
+
+test('0442: kill on a paused slot wakes then terminates the group; hardKill SIGKILLs it', (t) => {
+  const signalGroup = groupRecorder();
+  const { agent, spawn } = makeAgent(t, { signalGroup });
+  agent.start();
+  agent.pause();
+  agent.kill();
+  agent.hardKill();
+  assert.deepEqual(signalGroup.calls, ['6200:SIGSTOP', '6200:SIGCONT', '6200:SIGTERM', '6200:SIGKILL']);
+  assert.deepEqual(spawn.spawned[0]._kills, []);
+});
+
+for (const code of ['ESRCH', 'EPERM']) {
+  test(`0442: a group signal that throws ${code} falls back to pty.kill`, (t) => {
+    const signalGroup = () => { throw Object.assign(new Error(code), { code }); };
+    const { agent, spawn } = makeAgent(t, { signalGroup });
+    agent.start();
+    assert.equal(agent.pause(), true);
+    assert.equal(agent.resume(), true);
+    assert.deepEqual(spawn.spawned[0]._kills, ['SIGSTOP', 'SIGCONT']);
+  });
+}
+
+test('0442: any other group-signal error reports "pause failed"', (t) => {
+  const signalGroup = () => { throw Object.assign(new Error('boom'), { code: 'EINVAL' }); };
+  const { agent, spawn } = makeAgent(t, { signalGroup });
+  agent.start();
+  assert.equal(agent.pause(), false);
+  assert.equal(tailTexts(agent).at(-1), 'err:pause failed: boom');
+  assert.deepEqual(spawn.spawned[0]._kills, []);
+});
+
+test('0442: un-pause restores the status held before the pause', (t) => {
+  const { agent } = makeAgent(t);
+  agent.start();
+  for (const before of ['idle', 'waiting', 'working']) {
+    agent.status = before;
+    agent.pause();
+    assert.equal(agent.status, 'paused');
+    agent.resume();
+    assert.equal(agent.status, before, `resume after pausing from ${before}`);
+  }
+});
+
+test('0442: a second pause does not overwrite the saved status', (t) => {
+  const { agent } = makeAgent(t);
+  agent.start();
+  agent.status = 'waiting';
+  agent.pause();
+  agent.pause();
+  agent.resume();
+  assert.equal(agent.status, 'waiting');
+});
+
+test('0442: a status written while paused is kept on resume', (t) => {
+  const { agent } = makeAgent(t);
+  agent.start();
+  agent.status = 'working';
+  agent.pause();
+  agent.status = 'error'; // e.g. an exit path wrote it while stopped
+  agent.resume();
+  assert.equal(agent.status, 'error');
 });
 
 test('pause / resume: a throwing kill reports and returns false', (t) => {
