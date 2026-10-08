@@ -146,8 +146,8 @@ if (!lock.ok) {
   );
 }
 try {
-  const { dropped, deduped } = pruneSessions({ maxSlots: bootSettings.maxSlots });
-  if (dropped || deduped) dlog('store', 'prune', { dropped, deduped });
+  const { dropped, deduped, closed } = pruneSessions({ maxSlots: bootSettings.maxSlots });
+  if (dropped || deduped || closed) dlog('store', 'prune', { dropped, deduped, closed });
 } catch { /* hygiene must never block boot */ }
 
 // 0404: fix every agent's PTY geometry to the zoom body size BEFORE the first

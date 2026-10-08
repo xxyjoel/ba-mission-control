@@ -10,6 +10,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Zoom no longer hides a line of your own typing when it reads like claude's
   "update available" notice. Rows inside claude's composer are never treated
   as the notice.
+- The model catalogue keeps each model's real output cap. The CLI probe's
+  per-run limit used to overwrite it, halving Opus's figure on every probe.
+  The run limit is now kept separately.
+- `:sessions` lists the same set `:resume-all` restores. Sessions you closed
+  are pruned from the saved map at boot (history keeps them).
+- `:resume` and `:forget` accept slots up to the configured fleet size, not
+  just 1–10.
 
 ### Changed
 - New-model discovery no longer polls `claude --version` every 60 s. mc checks
