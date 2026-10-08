@@ -112,10 +112,12 @@ test('integration: files present BEFORE start are primed at EOF (resume-safe)', 
 // sub-agent's usage vanished. The settled state now means stat-only (no
 // open/read) until growth, then the file un-settles and resumes from its kept
 // offset. Full resume contract: tests/subagentUsageTailer.resume.test.mjs.
-test('settle: an idle, fully-read file goes stat-only, but a late append still folds (resume)', async () => {
+test('settle: an idle, fully-read file leaves the per-scan stat, but a late append still folds (resume)', async () => {
   const { agent, cwd, subDir } = setup();
-  // settleIdleMs tiny so the file settles within the test window.
-  const tailer = startSubagentUsageTailer({ agent, statPollMs: 20, settleIdleMs: 60 });
+  // settleIdleMs tiny so the file settles within the test window. 0350:
+  // settledRecheckMs tiny too — an append does not move the dir mtime, so the
+  // fallback sweep is what picks the resumed append up (default 60 s).
+  const tailer = startSubagentUsageTailer({ agent, statPollMs: 20, settleIdleMs: 60, settledRecheckMs: 30 });
   try {
     await sleep(40);
     mkdirSync(subDir, { recursive: true });

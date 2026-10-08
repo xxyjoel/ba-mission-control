@@ -5,14 +5,15 @@
 // skipped the file forever — every resumed sub-agent's tokens and cost simply
 // vanished (repro: tokensIn stayed 100 where 5100 was spent).
 //
-// Contract pinned here: a settled file costs one cheap stat per scan; on
-// growth it un-settles and resumes from its KEPT offset — nothing re-read,
-// nothing double-counted.
+// Contract pinned here: a settled file is re-stat'd only when the 0350 gate
+// sweeps (dir mtime moved, a file still active, or the settledRecheckMs
+// fallback is due); on growth it un-settles and resumes from its KEPT offset —
+// nothing re-read, nothing double-counted.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
+import { promises as fsp, mkdirSync, mkdtempSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,7 +38,10 @@ function setup() {
 
 test('a resumed sub-agent\'s appends are folded after its file settled (no double count)', async () => {
   const { agent, cwd, subDir } = setup();
-  const tailer = startSubagentUsageTailer({ agent, autoStart: false, settleIdleMs: 50 });
+  // 0350: settledRecheckMs 0 → every scan sweeps settled files, so the resume
+  // is seen on the very next scan. The gated (60 s) path is pinned in
+  // tests/subagentUsageTailer.statGate.test.mjs.
+  const tailer = startSubagentUsageTailer({ agent, autoStart: false, settleIdleMs: 50, settledRecheckMs: 0 });
   try {
     await tailer.scan(); // prime: dir exists, empty
     const f = join(subDir, 'agent-abc.jsonl');
@@ -48,7 +52,7 @@ test('a resumed sub-agent\'s appends are folded after its file settled (no doubl
 
     await sleep(120); await tailer.scan(); // idle past settleIdleMs → settles
     assert.equal(tailer.settledCount(), 1, 'file settled');
-    await tailer.scan(); // settled scans are stat-only and change nothing
+    await tailer.scan(); // settled scans change nothing
     assert.equal(agent.tokensIn, 100);
 
     // The parent resumes the agent; new turns land in the same file.
@@ -71,16 +75,25 @@ test('a resumed sub-agent\'s appends are folded after its file settled (no doubl
   }
 });
 
-test('an untouched settled file stays settled — stat-only, totals frozen', async () => {
+// 0350: deliberately updated pin. This used to say "stat-only" — one stat per
+// settled file per scan. With the dir-mtime gate a quiet dir costs one stat of
+// the DIR per scan and none per settled file, until the fallback sweep is due.
+test('an untouched settled file stays settled — gated (no per-file stat), totals frozen', async () => {
   const { agent, cwd, subDir } = setup();
-  const tailer = startSubagentUsageTailer({ agent, autoStart: false, settleIdleMs: 40 });
+  const tailer = startSubagentUsageTailer({ agent, autoStart: false, settleIdleMs: 40, settledRecheckMs: 3600_000 });
   try {
     await tailer.scan();
     writeFileSync(join(subDir, 'agent-quiet.jsonl'), usageLine(7, 3));
     await tailer.scan();
     await sleep(100); await tailer.scan();
     assert.equal(tailer.settledCount(), 1);
-    for (let i = 0; i < 5; i++) await tailer.scan();
+    const orig = fsp.stat;
+    let stats = 0;
+    fsp.stat = function (...a) { stats++; return orig.apply(this, a); };
+    try {
+      for (let i = 0; i < 5; i++) await tailer.scan();
+    } finally { fsp.stat = orig; }
+    assert.equal(stats, 5, 'one dir stat per scan, no stat of the settled file');
     assert.equal(agent.tokensIn, 7, 'no growth → no reads, no changes');
     assert.equal(tailer.settledCount(), 1, 'stays settled');
   } finally {
