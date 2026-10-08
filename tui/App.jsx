@@ -1609,8 +1609,12 @@ export default function App({
         }
         const n = parseInt(first, 10);
         const usd = parseFloat(restArgs[0]);
-        if (!(n >= 1 && n <= 10) || isNaN(usd) || usd < 0) {
-          pushToast(`usage: :cap <slot 1-10> <usd>  or  :cap default <usd>`, 'warn');
+        // 0448: was hard-coded 1-10. Use the fleet's live slot count, which never
+        // drops below the highest occupied slot (setSlots clamps), so a live
+        // session above a lowered maxSlots can still be raised with :cap <slot>.
+        const maxSlot = snapshot.slots || settings.maxSlots || 10;
+        if (!(n >= 1 && n <= maxSlot) || isNaN(usd) || usd < 0) {
+          pushToast(`usage: :cap <slot 1-${maxSlot}> <usd>  or  :cap default <usd>`, 'warn');
           return null;
         }
         const ok = fleet.setSlotCostCap(n, usd);

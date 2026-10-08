@@ -66,6 +66,8 @@ export class Fleet extends EventEmitter {
   #tailerTimer = null;
   #sessionTimer = null;
   #sessionPollEnabled = false;
+  // 0448: agents with a per-slot cap (setSlotCostCap) that setCostCap skips.
+  #capOverrides = new WeakSet();
 
   constructor({ slots = DEFAULT_SLOTS, viewport = null, agentFactories = {} } = {}) {
     super();
@@ -392,10 +394,12 @@ export class Fleet extends EventEmitter {
   // Propagate a new default per-slot cost cap to every live agent and
   // to the fleet's stored default (used when new sessions launch).
   // Emits 'change' so any UI showing the cap state refreshes.
+  // 0448: an agent given its own cap via setSlotCostCap keeps it; only the
+  // slots still on the default follow the new value.
   setCostCap(usd) {
     this.defaultCostCapUSD = Number(usd) || 0;
     for (const a of this.agents) {
-      if (a) a.costCapUSD = this.defaultCostCapUSD;
+      if (a && !this.#capOverrides.has(a)) a.costCapUSD = this.defaultCostCapUSD;
     }
     this.emit('change');
   }
@@ -407,6 +411,9 @@ export class Fleet extends EventEmitter {
     const a = this.agents[slot - 1];
     if (!a) return false;
     a.costCapUSD = Number(usd) || 0;
+    this.#capOverrides.add(a); // 0448: keyed by agent, so a relaunch starts on the default
+    // TODO(0448): no verb puts a slot back on the default (e.g. `:cap <slot> default`);
+    // today only a relaunch clears the override. `:cap <slot> 0` also counts as one.
     this.emit('change');
     return true;
   }
