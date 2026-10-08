@@ -55,7 +55,8 @@ import { readUsage, fmtReset } from './lib/usage.js';
 import { dlog } from './lib/debugLog.js';
 import { postSlack } from './lib/slack.js';
 import { listRecentRepos } from '../server/repos.mjs';
-import { transcriptPathFor, TRANSCRIPT_BASE_DIR } from '../server/agent.mjs';
+import { claudeSessionPath } from '../server/sessionFileTailer.mjs';
+import { findTranscriptPath as findCursorTranscriptPath } from '../server/providers/cursor/transcriptTailer.mjs';
 import { getConfigDir, isSandboxed } from './lib/configDir.js';
 import { isDebugKeysActive, setDebugKeysActive, clearDebugKeysLog, DEBUG_KEYS_PATH } from './lib/debugKeys.js';
 import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPathFor } from './lib/projectMemory.js';
@@ -79,6 +80,35 @@ const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', '
 // existed carry no field and are Claude.
 function providerOf(agentOrRecord) {
   return agentOrRecord?.provider || 'claude';
+}
+
+// 0462: the session's REAL transcript — the file the CLI writes and the tailer
+// follows — for `:transcript` / `:where`. These verbs used to print mc's legacy
+// stream-json log (~/.local/state/claude-mc/sessions/<sid>.jsonl, which a PTY
+// slot never writes) or `null` for a non-UUID sid. Claude: the tailer re-points
+// agent.sessionId when claude rotates its file (/clear), so cwd + sessionId at
+// command time name the live file. Cursor: whatever findTranscriptPath finds.
+// Returns null when there is no file to name.
+const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
+function transcriptPathOf(agent) {
+  if (providerOf(agent) === 'cursor') {
+    try { return findCursorTranscriptPath(agent.sessionId) || null; } catch { return null; }
+  }
+  if (providerOf(agent) !== 'claude') return null;
+  // claudeSessionPath throws on a non-UUID sid (path-traversal guard). It only
+  // builds the path, so check the disk too: a fresh --session-id launch has no
+  // file until claude writes its first line.
+  try {
+    const p = claudeSessionPath({ cwd: agent.cwd, sessionId: agent.sessionId });
+    return existsSync(p) ? p : null;
+  } catch { return null; }
+}
+// 0462: a path toast must stay copyable, so it skips humanize() (which turns
+// HOME into `~`, cuts any path over 60 chars to `…/leaf` and UUIDs to 8 chars)
+// but keeps its terminal-safety half: no C0/C1 control bytes, no line breaks.
+// A Cursor path carries readdir-derived names, so this is not optional.
+function pathSafe(p) {
+  return String(p ?? '').replace(/[\r\n\t]+/g, ' ').replace(/[\x00-\x1f\x7f-\x9f]/g, '');
 }
 
 // Launch defaults for a non-Claude provider: its own settings when they name a
@@ -506,13 +536,15 @@ export default function App({
     return () => clearTimeout(t);
   }, [toasts]);
 
-  const pushToast = (text, kind = 'info') => {
+  const pushToast = (text, kind = 'info', { path } = {}) => {
     const id = toastIdRef.current++;
     const expiresAt = Date.now() + (settings.toastDurationMs || 4000);
     // 0408/S3+R5: toast text can carry session-derived content (agent names,
     // error causes, api strings) — sanitize at push time so escape sequences
     // never reach the terminal and the strip's one-row-per-toast budget holds.
-    text = humanize(String(text ?? ''));
+    // 0462: `path` is appended verbatim (control bytes stripped) so the user
+    // can copy it; humanize would abbreviate it past use.
+    text = humanize(String(text ?? '')) + (path != null ? pathSafe(path) : '');
     // Keep at most MAX_TOAST_ROWS alive — that number IS the height the grid
     // layout reserves for the strip (gridLayout.FEEDBACK_H). Letting more
     // through would render rows nothing budgeted for, which pushes the frame
@@ -1452,14 +1484,12 @@ export default function App({
       case 'log': {
         const focused = focusedAgent;
         if (!focused || focused.status === 'empty') {
-          pushToast(`transcripts dir · ${TRANSCRIPT_BASE_DIR}`, 'info');
+          pushToast('transcripts dir · ', 'info', { path: CLAUDE_PROJECTS_DIR });
           return null;
         }
-        // TODO(cursor-transcript-path): transcriptPathFor is claude's layout;
-        // Cursor's lives under ~/.cursor/projects/*/agent-transcripts/<chatId>/.
-        if (refusedFor(focused)) return null;
-        const p = transcriptPathFor(focused.sessionId);
-        pushToast(`transcript · ${p}`, 'info');
+        const p = transcriptPathOf(focused);
+        if (p) pushToast('transcript · ', 'info', { path: p });
+        else pushToast('transcript · none on disk yet for this session', 'info');
         return null;
       }
       // GitHub Issues for the focused session's repo. First step toward
@@ -1534,12 +1564,12 @@ export default function App({
         // One-stop "where does mc keep things?" report.
         const focused = focusedAgent;
         pushToast(`config · ${getConfigDir()}`, 'info');
-        if (focused && focused.status !== 'empty' && providerOf(focused) !== 'claude') {
-          refusedFor(focused);
-        } else if (focused && focused.status !== 'empty') {
-          pushToast(`transcript · ${transcriptPathFor(focused.sessionId)}`, 'info');
+        if (focused && focused.status !== 'empty') {
+          const p = transcriptPathOf(focused);
+          if (p) pushToast('transcript · ', 'info', { path: p });
+          else pushToast('transcript · none on disk yet for this session', 'info');
         } else {
-          pushToast(`transcripts · ${TRANSCRIPT_BASE_DIR}`, 'info');
+          pushToast('transcripts · ', 'info', { path: CLAUDE_PROJECTS_DIR });
         }
         return null;
       }
