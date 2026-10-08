@@ -750,18 +750,12 @@ export default function App({
 
   const focusedAgent = agents.find(a => a.slot === focusedSlot) || agents[0];
   // For zoom we MUST pass the live Agent / PtyAgent instance, not the
-  // toJSON snapshot in `agents`. PtyPane's attachZoomView path
-  // (single-pipeline rewrite) duck-types on agent.attachZoomView ===
-  // 'function'; on a plain snapshot object that method is missing so
-  // PtyPane falls back to startZoomSession which spawns a SECOND
-  // claude against the same session file. The two compete, then the
-  // legacy dispose kills the original on exit — the exact "claude
-  // stopped thinking and no output exists" symptom users hit on the
-  // first re-zoom.
-  //
-  // The legacy stream-json Agent path (FLEET_USE_PTY=0) is ALSO
-  // happier with the live instance because startZoomSession reads
-  // agent.proc / mutates agent.sessionId — both no-ops on a snapshot.
+  // toJSON snapshot in `agents`. PtyPane duck-types on
+  // agent.attachZoomView === 'function'; a plain snapshot object has no
+  // such method, so the zoom would show "zoom is not supported" instead.
+  // (0444: before, PtyPane fell back to startZoomSession and spawned a
+  // SECOND claude against the same session file. That fallback and
+  // server/zoomSession.mjs are gone.)
   // 0417: the zoom view and the card must not read status from different
   // places. `fleet.agentById()` hands back the LIVE PtyAgent, and on that
   // object `.status` is only the connector's opinion — ptyAgent.mjs:1161

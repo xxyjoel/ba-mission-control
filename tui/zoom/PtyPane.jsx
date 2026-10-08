@@ -9,8 +9,9 @@
 // Claude Code experience inside our fleet chrome.
 //
 // What this component does:
-//   1. Spawns `claude --resume <sid>` via node-pty (server/zoomSession)
-//   2. Feeds the PTY's stdout into an xterm-headless emulator
+//   1. Binds to the agent's running session via agent.attachZoomView()
+//      (0444: it never spawns a claude of its own)
+//   2. Reads the agent-owned xterm-headless emulator fed by that session
 //   3. Renders the emulator's visible viewport as Ink <Text> rows
 //   4. Captures every keystroke and forwards the corresponding raw
 //      byte sequence to the PTY (with a few intercepts that the parent
@@ -19,8 +20,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { clampPtyDims } from '../lib/zoomGeometry.js';
 import { Box, Text, useInput } from 'ink';
-import xterm from '@xterm/headless';
-import { startZoomSession } from '../../server/zoomSession.mjs';
 import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
 import { rowToRuns } from './ptyCells.js';
@@ -45,12 +44,6 @@ function traceKey(where, input, key, extra) {
     ...extra,
   });
 }
-
-// Terminal constructor still imported for the legacy startZoomSession
-// (stream-json Agent) fallback path — PtyAgent owns its own persistent
-// term. When the agent comes from PtyAgent.attachZoomView, session.term
-// is non-null and we use it directly.
-const { Terminal } = xterm.default || xterm;
 
 // Upper-bound frame cap on PTY blits. Render is driven by xterm's
 // onWriteParsed/onScroll/onCursorMove events (event-driven, not
@@ -104,14 +97,8 @@ export default function PtyPane({
   // Timestamp of the last committed paint — drives leading-edge scheduling so a
   // keystroke's echo isn't delayed the full frame interval (see scheduleRender).
   const renderLastRef = useRef(0);
-  // True when the term is owned by PtyAgent (persistent across zoom
-  // enter/exit). False when we built a local Terminal for the legacy
-  // startZoomSession path. Controls whether unmount disposes the term.
-  const termOwnedByAgentRef = useRef(false);
   // onData / onExit disposables. node-pty returns IDisposable from
-  // each subscription — for the legacy startZoomSession path the PTY
-  // is killed on unmount so leaks are harmless, but in the PtyAgent
-  // attachZoomView path the PTY outlives the zoom view and we MUST
+  // each subscription. The agent's PTY outlives the zoom view, so we MUST
   // unsubscribe or every re-zoom adds another stale listener.
   const dataDisposeRef = useRef(null);
   const exitDisposeRef = useRef(null);
@@ -191,39 +178,30 @@ export default function PtyPane({
   const viewRows = Math.max(1, rows - footerRows);
 
   // ── PTY lifecycle ─────────────────────────────────────────────
-  // Spawn on mount; tear down on unmount. We do NOT re-spawn on
-  // size changes — just resize the existing PTY.
+  // Attach to the agent's zoom view on mount; detach on unmount. Nothing is
+  // spawned here (0444), and size changes come from Fleet.setViewport.
   useEffect(() => {
     let cancelled = false;
     try {
-      // PtyAgent (single-pipeline) exposes attachZoomView: bind the
-      // viewer to the agent's already-running claude PTY AND its
-      // persistent xterm-headless emulator. The agent owns the term
-      // — its buffer survives zoom enter/exit so re-zoom shows the
-      // full conversation. Legacy Agent doesn't have attachZoomView
-      // — fall back to the spawn-a-sibling path and build a local
-      // ephemeral Terminal for that case.
-      const session = typeof agent?.attachZoomView === 'function'
-        ? agent.attachZoomView({ cols, rows })
-        : startZoomSession(agent, { cols, rows });
-      let term, cell;
-      if (session.term && session.cell) {
-        // Persistent term from PtyAgent. Do NOT dispose on unmount.
-        term = session.term;
-        cell = session.cell;
-        termOwnedByAgentRef.current = true;
-      } else {
-        // Legacy path — build a local Terminal that lives for this
-        // zoom session only. Dispose on unmount (and pipe pty data
-        // through it ourselves since the agent doesn't).
-        term = new Terminal({
-          cols, rows,
-          allowProposedApi: true,
-          scrollback: 5000,
-        });
-        cell = term.buffer.active.getNullCell();
-        termOwnedByAgentRef.current = false;
+      // PtyAgent and MockAgent expose attachZoomView: bind the viewer to
+      // the agent's session AND its persistent xterm-headless emulator. The
+      // agent owns the term — its buffer survives zoom enter/exit so re-zoom
+      // shows the full conversation.
+      // 0444: there is no fallback. The old one called startZoomSession,
+      // which spawned a second real claude (with acceptEdits) for any agent
+      // without attachZoomView — MockAgent included, so mock mode ran a real
+      // claude. An agent without a zoom view (legacy stream-json Agent,
+      // FLEET_USE_PTY=0) now gets the "PTY failed" message instead.
+      if (typeof agent?.attachZoomView !== 'function') {
+        throw new Error('zoom is not supported for this session (no attachZoomView)');
       }
+      const session = agent.attachZoomView({ cols, rows });
+      if (!session?.term || !session?.cell) {
+        throw new Error('zoom view has no terminal');
+      }
+      // Persistent term from the agent. Do NOT dispose on unmount.
+      const term = session.term;
+      const cell = session.cell;
       termRef.current = term;
       cellRef.current = cell;
       ptyRef.current = session.pty;
@@ -250,15 +228,9 @@ export default function PtyPane({
         }, scheduleIn);
       };
 
-      // PTY data pump: only own this on the LEGACY path. With
-      // PtyAgent the agent already pipes pty.onData into its
-      // persistent term — subscribing again here would double-write
-      // every byte (visible as garbled rendering).
-      if (!termOwnedByAgentRef.current) {
-        dataDisposeRef.current = session.pty.onData((chunk) => {
-          try { term.write(chunk); } catch {}
-        });
-      }
+      // No PTY data pump here: the agent already pipes its output into its
+      // persistent term — subscribing again would double-write every byte
+      // (visible as garbled rendering).
       // 0337: attachZoomView now revives a null-pty agent instead of
       // throwing, but guard anyway — a null/absent session.pty (failed
       // revive, or a future caller shape) must fall through to the
@@ -315,30 +287,10 @@ export default function PtyPane({
       try { cursorSubRef.current = term.onCursorMove(()  => scheduleRender()); } catch {}
 
       // OSC 52 (clipboard) + bell forwarding live on the agent's
-      // term for the PtyAgent path (registered in PtyAgent.start).
-      // For the legacy path, register them here on the local term so
-      // behavior matches.
-      if (!termOwnedByAgentRef.current) {
-        try {
-          term.parser.registerOscHandler(52, (data) => {
-            try { process.stdout.write(`\x1b]52;${data}\x07`); } catch {}
-            return false;
-          });
-        } catch {}
-        try {
-          term.onBell(() => {
-            try { process.stdout.write('\x07'); } catch {}
-          });
-        } catch {}
-      }
+      // term (registered in PtyAgent.start).
 
       // Initial paint as soon as claude prints its banner.
       scheduleRender();
-
-      // Session-file tailing is owned by server/zoomSession.mjs now
-      // (it has to outlive PtyPane so the quiet-wait at zoom exit
-      // can still forward in-flight events into agent.tail). Nothing
-      // to start here.
     } catch (e) {
       setError(e.message || String(e));
     }
@@ -359,9 +311,8 @@ export default function PtyPane({
       dataDisposeRef.current = null;
       exitDisposeRef.current = null;
       // Render-trigger subscriptions are PER-MOUNT — always dispose.
-      // (For PtyAgent's persistent term, the next zoom mount will
-      // re-subscribe; for the legacy path, term itself is disposed
-      // below, which makes these moot.)
+      // The agent's persistent term outlives us; the next zoom mount
+      // re-subscribes.
       try { writeSubRef.current?.dispose?.(); } catch {}
       try { scrollSubRef.current?.dispose?.(); } catch {}
       try { cursorSubRef.current?.dispose?.(); } catch {}
@@ -369,26 +320,17 @@ export default function PtyPane({
       scrollSubRef.current = null;
       cursorSubRef.current = null;
       try { disposeRef.current?.(); } catch {}
-      // Only dispose the term on the LEGACY path. The PtyAgent path
-      // keeps the term alive for the agent's lifetime — that's what
-      // gives the user the full scrollback on re-zoom.
-      if (!termOwnedByAgentRef.current) {
-        try { termRef.current?.dispose?.(); } catch {}
-      }
+      // Never dispose the term: the agent keeps it alive for its lifetime —
+      // that's what gives the user the full scrollback on re-zoom.
       termRef.current = null;
       cellRef.current = null;
       ptyRef.current = null;
       disposeRef.current = null;
-      termOwnedByAgentRef.current = false;
     };
     // We intentionally only run this once per mount — size changes are
     // handled by the resize effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent?.id]);
-
-  // Tailer reattach on sid rotation is now handled inside
-  // server/zoomSession.mjs (it owns the tailer's lifecycle so it can
-  // outlive PtyPane during the quiet-wait at zoom exit).
 
   // ── Resize ──────────────────────────────────────────────────────
   // 0404: an AGENT-OWNED emulator's geometry belongs to the fleet viewport
@@ -400,9 +342,6 @@ export default function PtyPane({
   // time a toast lands or the stats/todos panel opens, which used to forward
   // straight into pty.resize. It no longer does; the view memo renders the
   // bottom slice of a taller emulator instead.
-  //
-  // The LEGACY (startZoomSession / MockAgent) path still owns its own local
-  // Terminal for the life of the zoom, so it resizes here as before.
   //
   // scrollToBottom is a defensive nudge for a reader who is NOT scrolling: on a
   // mid-stream size change the viewport can drift above the live cursor row,
@@ -419,10 +358,6 @@ export default function PtyPane({
   useEffect(() => {
     const pty = ptyRef.current, term = termRef.current;
     if (!pty || !term) return;
-    if (!termOwnedByAgentRef.current) {
-      try { term.resize(cols, rows); } catch {}
-      try { pty.resize(cols, rows); } catch {}
-    }
     if (!scrollMode) {
       try { term.scrollToBottom(); } catch {}
       skipBackRef.current = 0;
@@ -454,8 +389,8 @@ export default function PtyPane({
     // cached ptyRef is the pty from MOUNT time; after a changeModel /
     // changePermissionMode respawn it is dead, and writing to it also skipped
     // the cost cap. agent.writeInput writes to the current pty and refuses
-    // submit/paste once capped. The raw pty.write fallback is only for a
-    // session without it (legacy startZoomSession; 0444 removes that path).
+    // submit/paste once capped. The raw pty.write fallback is only for an
+    // agent without it (0444: every runtime agent with a zoom view has it).
     const write = (bytes, opts = {}) => {
       if (typeof agent?.writeInput === 'function') {
         const ok = agent.writeInput(bytes, opts) !== false;

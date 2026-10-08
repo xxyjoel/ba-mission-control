@@ -42,10 +42,27 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pushTail } from './jsonlConnector.mjs';
 import { TAIL_SHIP } from '../tui/lib/settings.js';
+import xtermPkg from '@xterm/headless';
+
+const { Terminal } = xtermPkg.default || xtermPkg;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, 'fixtures');
 const SPARK_LEN = 15;
+// 0444: the mock's zoom emulator. Same bound as the legacy zoom Terminal.
+const ZOOM_SCROLLBACK = 5000;
+
+// 0444: one tail entry as the lines a zoom view shows. Plain text with a
+// claude-like prefix; \n becomes \r\n so the emulator starts each line at col 0.
+function tailToTerm(ln) {
+  const text = String(ln.text || '');
+  const prefix = {
+    user: '\u276f ', asst: '\u25cf ', think: '\u2234 ', note: '# ', err: '! ', sys: '  ',
+    'tool-result': '  \u23bf ',
+  }[ln.kind] ?? '  ';
+  const head = ln.kind === 'tool' ? `\u23fa ${ln.tool || 'tool'}: ` : prefix;
+  return `${head}${text}\r\n`.replace(/\r?\n(?!$)/g, '\r\n  ');
+}
 
 function loadFixture(name) {
   const path = name.endsWith('.jsonl') ? name : join(FIXTURES_DIR, `${name}.jsonl`);
@@ -95,6 +112,18 @@ export class MockAgent extends EventEmitter {
     this._changeTimer = null;
     // Track elapsed-time anchor for spinner parity with real Agent.
     this.workingStartTs = null;
+
+    // 0444: zoom view state. The emulator is built on first attach and kept
+    // for the agent's life (like PtyAgent), so re-zoom shows the whole replay.
+    this._zoomTerm = null;
+    this._zoomCell = null;
+    this._zoomPty = null;
+    this._zoomInput = '';
+    // 0444: what the emulator currently shows of _zoomInput (see #redrawInput),
+    // whether a bracketed paste is open, and the last resize from the fleet.
+    this._zoomEcho = '';
+    this._zoomPaste = false;
+    this._zoomDims = null;
   }
 
   #scheduleChange() {
@@ -253,7 +282,143 @@ export class MockAgent extends EventEmitter {
 
   appendTail(ln) {
     pushTail(this, ln);   // shared ring: count cap + char cap + entry text cap
+    // 0444: mirror the replay into the zoom emulator once one exists. Half-typed
+    // input is lifted off first and put back under the new line, so replay
+    // output never lands in the middle of what the user is typing.
+    const term = this._zoomTerm;
+    if (term) {
+      const echo = this._zoomEcho;
+      this.#eraseInput();
+      try { term.write(tailToTerm(ln)); } catch {}
+      if (echo) this.#redrawInput();
+    }
   }
+
+  // 0444: rows the echoed input fills at the emulator's current width. Counts
+  // code points, so a wide character is under-counted; fine for a mock.
+  #echoRows(text) {
+    const cols = Math.max(1, this._zoomTerm?.cols || 80);
+    let rows = 0;
+    for (const seg of text.split('\n')) rows += Math.max(1, Math.ceil(Array.from(seg).length / cols));
+    return rows;
+  }
+
+  // 0444: remove the echoed input. The cursor sits at its end, so go up to its
+  // first row and erase to the end of the screen.
+  #eraseInput() {
+    const term = this._zoomTerm;
+    if (!term || !this._zoomEcho) { this._zoomEcho = ''; return; }
+    const up = Math.min(this.#echoRows(this._zoomEcho), term.rows || 1) - 1;
+    try { term.write((up > 0 ? `\x1b[${up}A` : '') + '\r\x1b[J'); } catch {}
+    this._zoomEcho = '';
+  }
+
+  #redrawInput() {
+    const term = this._zoomTerm;
+    if (!term) return;
+    this.#eraseInput();
+    if (!this._zoomInput) return;
+    try { term.write(this._zoomInput.replace(/\n/g, '\r\n')); } catch {}
+    this._zoomEcho = this._zoomInput;
+  }
+
+  // 0444: attachZoomView — PtyPane's zoom contract, without a process. Before
+  // this, PtyPane fell back to startZoomSession, which spawned the real
+  // CLAUDE_BIN with acceptEdits in mock mode. Returns the same shape as
+  // PtyCore.attachZoomView: a stub pty plus an agent-owned xterm-headless
+  // Terminal fed with the mock's replayed output (tests/lib/zoom-stub.js).
+  attachZoomView({ cols = 80, rows = 24 } = {}) {
+    if (!this._zoomTerm) {
+      // A fleet resize that came first wins, as PtyAgent's emulator already
+      // runs at the fleet viewport.
+      ({ cols, rows } = this._zoomDims || { cols, rows });
+      const term = new Terminal({
+        cols: Math.max(1, cols | 0), rows: Math.max(1, rows | 0),
+        allowProposedApi: true, scrollback: ZOOM_SCROLLBACK,
+      });
+      // Bracketed paste on, as claude sets it: PtyPane then wraps a paste in
+      // ESC[200~ / ESC[201~ and writeInput keeps its newlines as content.
+      term.write('\x1b[?2004h');
+      for (const ln of this.tail) term.write(tailToTerm(ln));
+      this._zoomTerm = term;
+      this._zoomCell = term.buffer.active.getNullCell();
+    }
+    if (!this._zoomPty) {
+      const handlers = { data: new Set(), exit: new Set() };
+      const sub = (set, fn) => { set.add(fn); return { dispose: () => set.delete(fn) }; };
+      this._zoomPty = {
+        pid: undefined,   // no process; 0 would mean "my process group" to kill()
+        write: (bytes) => { this.writeInput(bytes); },
+        onData: (fn) => sub(handlers.data, fn),
+        onExit: (fn) => sub(handlers.exit, fn),
+        resize: (c, r) => { try { this._zoomTerm?.resize(c, r); } catch {} },
+        kill: () => {},
+        _fireExit: () => {
+          for (const fn of [...handlers.exit]) { try { fn({ exitCode: 0, signal: null }); } catch {} }
+        },
+      };
+    }
+    return {
+      pty: this._zoomPty,
+      term: this._zoomTerm,
+      cell: this._zoomCell,
+      sessionId: this.sessionId,
+      dispose: () => {},   // the emulator outlives the view, as on PtyAgent
+    };
+  }
+
+  // 0444/0446: writeInput — zoom keystrokes land here, keyed like claude's
+  // prompt: \r submits; a bare \n (PtyPane's NEWLINE key) and any newline
+  // inside a bracketed paste add a line without submitting. The line is echoed
+  // into the emulator; on submit it goes to send(), which releases a wait-user
+  // directive. Other escape sequences (arrows, function keys) are dropped.
+  // No cost cap on a mock.
+  writeInput(bytes, _opts = {}) {
+    if (this.killed) return false;
+    const text = String(bytes ?? '');
+    let lastCR = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '\x1b') {
+        if (text.startsWith('\x1b[200~', i)) { this._zoomPaste = true; i += 5; continue; }
+        if (text.startsWith('\x1b[201~', i)) { this._zoomPaste = false; i += 5; continue; }
+        // ESC, an optional [ or O, parameters, then the final letter or ~.
+        const m = /^\x1b(?:[[O][0-9;?]*)?[A-Za-z~]?/.exec(text.slice(i));
+        i += m[0].length - 1;
+        continue;
+      }
+      const cr = ch === '\r';
+      if (ch === '\n' && lastCR && this._zoomPaste) { lastCR = false; continue; }   // \r\n in a paste is one newline
+      lastCR = cr;
+      if (cr && !this._zoomPaste) {
+        const line = this._zoomInput.trim();
+        this._zoomInput = '';
+        this.#eraseInput();   // send() writes it back as the user line
+        if (line) this.send(line);
+      } else if (cr || ch === '\n') {
+        this._zoomInput += '\n';
+      } else if (ch === '\x7f' || ch === '\b') {
+        this._zoomInput = Array.from(this._zoomInput).slice(0, -1).join('');
+      } else if (ch >= ' ') {
+        this._zoomInput += ch;
+      }
+    }
+    this.#redrawInput();
+    return true;
+  }
+
+  // 0444: Fleet.setViewport calls this when the real terminal changes size,
+  // as it does for PtyAgent. Resizes the zoom emulator; true when it changed.
+  resize(cols, rows) {
+    const c = Math.max(1, cols | 0), r = Math.max(1, rows | 0);
+    this._zoomDims = { cols: c, rows: r };
+    const term = this._zoomTerm;
+    if (!term || (term.cols === c && term.rows === r)) return false;
+    try { term.resize(c, r); } catch {}
+    return true;
+  }
+
+  capMessage() { return null; }
 
   // .send() — mirrors Agent.send. Records the user message in the tail
   // and, if a wait-user directive is pending, releases replay so the
@@ -301,6 +466,8 @@ export class MockAgent extends EventEmitter {
     this.killed = true;
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     if (this._changeTimer) { clearTimeout(this._changeTimer); this._changeTimer = null; }
+    // 0444: an open zoom closes the way it does when claude exits.
+    try { this._zoomPty?._fireExit(); } catch {}
   }
 
   changePermissionMode(mode) {

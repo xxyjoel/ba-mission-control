@@ -254,7 +254,9 @@ a session is working, idle, or blocked on a prompt.
 A legacy path still exists behind `FLEET_USE_PTY=0`. It drives
 `claude --print --input-format stream-json --output-format stream-json` over
 stdin and stdout and maps those events onto the same UI state. It is kept as a
-rollback and is not what you get by default. The table below describes that path:
+rollback and is not what you get by default. Zoom does not work on that path: it
+shows "zoom is not supported for this session" instead. The table below
+describes that path:
 
 | stream-json event (legacy path only) | UI effect |
 | --- | --- |
