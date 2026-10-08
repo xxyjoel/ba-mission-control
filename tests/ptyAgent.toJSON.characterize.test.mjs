@@ -3,10 +3,12 @@
 // (0285/0286) and before the PTY plumbing moves to server/ptyCore.mjs.
 //
 // Characterization, not specification: every expectation here is what the
-// code did at b7f8a3b, including the quirks (a hooked AskUserQuestion wait
-// still accrues stuckMin; a hooked slot ignores a stored 'paused'). The
-// extraction must keep this file green with ZERO edits. A behavior change is
-// a separate task with its own reason, not a side effect of a refactor.
+// code did at b7f8a3b, including its quirks. The extraction must keep this
+// file green with ZERO edits. A behavior change is a separate task with its
+// own reason, not a side effect of a refactor.
+// 0450 changed two quirks on purpose: a hooked AskUserQuestion wait no longer
+// accrues stuckMin, and a stored 'paused' now wins on a hooked slot. PTY bytes
+// no longer bump lastEventTs (screen repaints must not reset the STUCK clock).
 //
 // The clock is mocked so boundary cases (WORKING_FRESH_MS, the 5-minute stuck
 // threshold, BG_SUB_ACTIVE_MS, BG_ABANDON_MS) are exact rather than racy.
@@ -29,6 +31,7 @@ function makeFakeSpawn() {
       onData(fn) { h.data.push(fn); return { dispose() {} }; },
       onExit(fn) { h.exit.push(fn); return { dispose() {} }; },
       fireData(s) { for (const fn of h.data) fn(s); },
+      fireExit(e) { for (const fn of h.exit) fn(e); }, // 0450
     };
     spawned.push(pty);
     return pty;
@@ -118,7 +121,7 @@ test('hooked waiting wins over connector working and never accrues stuck', (t) =
 
 // ── hooked: working + tool-sourced awaitingPrompt ─────────────────────────────
 
-test('hooked working + awaitingPrompt.tool reads waiting — and STILL accrues stuck (quirk)', (t) => {
+test('hooked working + awaitingPrompt.tool reads waiting and does not accrue stuck (0450)', (t) => {
   const { agent } = boot(t);
   agent._statusValue = 'waiting';
   agent.hookStatus = 'working';
@@ -126,9 +129,8 @@ test('hooked working + awaitingPrompt.tool reads waiting — and STILL accrues s
   agent.awaitingPrompt = { kind: 'single-select', tool: 'AskUserQuestion' };
   agent.awaitingPromptTs = T0 - 10 * MIN;
   agent.lastEventTs = T0 - 10 * MIN;
-  // stuckEligible keys off hookStatus==='working' && !approvalWaiting; the ask
-  // override does not set approvalWaiting, so a 10-minute wait shows stuck 10.
-  assert.deepEqual(pick(agent.toJSON()), { status: 'waiting', stuckMin: 10, bgCount: 0, bgStatus: null });
+  // 0450: was stuck 10 (quirk). A card parked on the user is not wedged.
+  assert.deepEqual(pick(agent.toJSON()), { status: 'waiting', stuckMin: 0, bgCount: 0, bgStatus: null });
 });
 
 test('hooked working + text-guess awaitingPrompt (no .tool) stays working', (t) => {
@@ -194,7 +196,9 @@ test('hooked working with term gone: scan fails closed → working', (t) => {
 test('hooked working stuck threshold: 4m59s → 0, 5m → 5, 12m30s → 12', (t) => {
   const { agent } = boot(t);
   agent.hookStatus = 'working';
-  agent.hookStatusTs = T0 - 1000;
+  // 0450: a fresh hook event resets the stuck clock too, so age it past every
+  // lastEventTs below to pin the transcript-clock threshold.
+  agent.hookStatusTs = T0 - 30 * MIN;
   agent.lastEventTs = T0 - (5 * MIN - 1000);
   assert.equal(agent.toJSON().stuckMin, 0);
   agent.lastEventTs = T0 - 5 * MIN;
@@ -256,12 +260,88 @@ test('hooked idle ignores a fresh spinner on screen', async (t) => {
   assert.equal(agent.toJSON().status, 'idle');
 });
 
-test('hooked working ignores a stored paused (quirk: paused only surfaces un-hooked)', (t) => {
+test('hooked working: a stored paused wins (0450, was a quirk)', (t) => {
   const { agent } = boot(t);
   agent._statusValue = 'paused';
   agent.hookStatus = 'working';
   agent.hookStatusTs = T0 - 1000;
-  assert.equal(agent.toJSON().status, 'working');
+  agent.lastEventTs = T0 - 30 * MIN;
+  assert.deepEqual(pick(agent.toJSON()), { status: 'paused', stuckMin: 0, bgCount: 0, bgStatus: null });
+});
+
+test('pause() on a hooked working slot reads paused; resume() restores and restarts the stuck clock (0450)', (t) => {
+  const { agent, clock } = boot(t);
+  agent._statusValue = 'working';
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = T0 - 1000;
+  agent.pause();
+  // A transcript line read after SIGSTOP may overwrite the stored status; the
+  // pause flag still wins.
+  agent._statusValue = 'working';
+  clock.now = T0 + 20 * MIN;
+  assert.equal(agent.toJSON().status, 'paused');
+  agent.resume();
+  // Time spent frozen is not silence.
+  assert.deepEqual(pick(agent.toJSON()), { status: 'working', stuckMin: 0, bgCount: 0, bgStatus: null });
+});
+
+test('a paused process that dies does not keep reading paused (0450)', (t) => {
+  const { agent, pty } = boot(t);
+  agent._statusValue = 'working';
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = T0 - 1000;
+  agent.pause();
+  assert.equal(agent.toJSON().status, 'paused');
+  pty.fireExit({ exitCode: 1, signal: 9 });
+  // This pins ptyCore #onExit clearing the flag. The status check alone would
+  // pass without it: the derived paused signal also requires a live pty.
+  assert.equal(agent.paused, false);
+  assert.notEqual(agent.toJSON().status, 'paused');
+});
+
+test('a paused process that ends cleanly reads error, not paused (0450)', (t) => {
+  const { agent, pty } = boot(t);
+  agent._statusValue = 'working';
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = T0 - 1000;
+  agent.pause();
+  pty.fireExit({ exitCode: 0, signal: null }); // non-transient: no auto-restart
+  assert.equal(agent.paused, false);
+  assert.equal(agent.toJSON().status, 'error');
+});
+
+// ── 0450: PTY bytes are not events ───────────────────────────────────────────
+
+test('PTY bytes do not bump lastEventTs, so a repainting spinner still goes STUCK', async (t) => {
+  const { agent, pty, clock } = boot(t);
+  agent._statusValue = 'working';
+  agent.hookStatus = 'working';
+  agent.hookStatusTs = T0 - 30 * MIN;
+  agent.lastEventTs = T0 - 30 * MIN;
+  clock.now = T0;
+  await paint(agent, pty, SPINNER);
+  assert.equal(agent.lastPtyTs, T0, 'the PTY-only clock still advances');
+  assert.equal(agent.lastEventTs, T0 - 30 * MIN, 'the event clock does not');
+  assert.equal(agent.toJSON().stuckMin, 30);
+});
+
+test('send() and start() are real events and reset the stuck clock', (t) => {
+  const { agent, clock } = boot(t);
+  agent.lastEventTs = T0 - 30 * MIN;
+  clock.now = T0 + 1000;
+  agent.ready = true;
+  agent.send('hello');
+  assert.equal(agent.lastEventTs, T0 + 1000);
+  agent.kill();
+  const fresh = new PtyAgent({
+    slot: 5, id: 's5-char', cwd: '/tmp/fake-char-0420', model: 'sonnet-4.6',
+    sessionId: '0420c0de-0000-4000-8000-000000000001', spawn: makeFakeSpawn(),
+  });
+  fresh.lastEventTs = T0 - 30 * MIN;
+  clock.now = T0 + 2000;
+  fresh.start();
+  t.after(() => { try { fresh.kill(); } catch {} });
+  assert.equal(fresh.lastEventTs, T0 + 2000);
 });
 
 // ── un-hooked: working overlay needs BOTH scan and fresh PTY ─────────────────
@@ -326,13 +406,14 @@ test('un-hooked idle + approval, settled → idle (approval overlay needs a work
 
 // ── un-hooked: stuckMin ───────────────────────────────────────────────────────
 
-test('un-hooked stored working accrues stuck; stored waiting does too', (t) => {
+test('un-hooked stored working accrues stuck; stored waiting does not (0450)', (t) => {
   const { agent } = boot(t);
   agent._statusValue = 'working';
   agent.lastEventTs = T0 - 7 * MIN;
   assert.deepEqual(pick(agent.toJSON()), { status: 'working', stuckMin: 7, bgCount: 0, bgStatus: null });
   agent._statusValue = 'waiting';
-  assert.deepEqual(pick(agent.toJSON()), { status: 'waiting', stuckMin: 7, bgCount: 0, bgStatus: null });
+  // 0450: was stuck 7. 0295 inv.5 — a card parked on the user is not wedged.
+  assert.deepEqual(pick(agent.toJSON()), { status: 'waiting', stuckMin: 0, bgCount: 0, bgStatus: null });
 });
 
 test('un-hooked idle / paused / error never accrue stuck', (t) => {
@@ -364,7 +445,9 @@ test('error with no pty, hooked working: status error but stuck still accrues of
   agent._statusValue = 'error';
   agent.pty = null;
   agent.hookStatus = 'working';
-  agent.hookStatusTs = T0 - 1000;
+  // 0450: the stuck clock now also reads the hook event time, so the hook is
+  // aged with the transcript to keep pinning this (still unchanged) quirk.
+  agent.hookStatusTs = T0 - 8 * MIN;
   agent.lastEventTs = T0 - 8 * MIN;
   assert.deepEqual(pick(agent.toJSON()), { status: 'error', stuckMin: 8, bgCount: 0, bgStatus: null });
 });

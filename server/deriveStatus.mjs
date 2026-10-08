@@ -21,7 +21,11 @@
 //   connectorStatus   the stored transcript-derived status (_statusValue || 'idle')
 //   lastConnectorTs   ms of the last transcript event (JSONL-only clock)
 //   lastPtyTs         ms of the last PTY byte (PTY-only clock)
-//   lastEventTs       ms of any activity (PTY + transcript) — the stuck clock
+//   lastEventTs       ms of the last real event (transcript, send, spawn,
+//                     resume, auto-restart, markUserSubmitted) — the stuck
+//                     clock. 0450: on claude slots PTY bytes no longer bump
+//                     it; screen repaints are not events. (Cursor slots still
+//                     count PTY bytes: no hooks, no tool_result line.)
 //   lastSubHookTs     ms of the last SUB-tagged hook event (0398)
 //   awaitingPrompt    connector's blocking-prompt object or null
 //   awaitingPromptTs  ms it was set (collected; not read by the rules yet)
@@ -73,6 +77,7 @@ export function deriveStatus(signals, now) {
     awaitingPrompt = null,
     pendingSubagents = new Map(),
     hasPty = false,
+    paused = false,
     errored = false,
     scanApproval,
     scanWorking,
@@ -239,30 +244,36 @@ export function deriveStatus(signals, now) {
   // counted err 0. An errored slot that looks idle is worse than a visibly
   // broken one — the user has no reason to press K and recover it.
   if (!hasPty && errored) { status = 'error'; reason = 'error-no-pty'; }
+  // 0450: a SIGSTOPped slot is paused, whatever the hook channel last said.
+  // The hooked branches above never read the stored 'paused', so a paused
+  // card kept showing WORKING. A frozen PTY also reads as settled, which let
+  // the approval scrape flip it to INPUT? — clear that too.
+  else if (paused) { status = 'paused'; reason = 'paused'; approvalWaiting = false; }
   // 0468: a live process parked on its folder-trust dialog is waiting on the
   // user. No hook fires and no transcript exists yet, so nothing above sees it.
   else if (hasPty && tryBool(scanTrust)) { status = 'waiting'; reason = 'trust-dialog'; }
-  // STUCK is a wedge signal: claude alive but silent ≥5 min (lastEventTs — the
-  // any-activity clock, PTY+JSONL — goes stale). Never on a card parked on the
-  // user (waiting) or done (idle). Hooked: only a stuck outstanding tool
-  // (hookStatus==='working') can wedge. Un-hooked: original semantics — key off
-  // the connector _statusValue so an overlay-bridged 'working' (real status
-  // idle) never accrues stuck.
+  // STUCK is a wedge signal: claude alive but no real event for ≥5 min.
+  // 0450: the clock is real events only — the transcript (lastEventTs) and,
+  // when hooked, the last status-bearing hook (hookStatusTs). PTY bytes are
+  // not read here: claude repaints its spinner while wedged, and those
+  // repaints used to keep resetting the clock. Never on a card parked on the
+  // user (waiting, any branch — 0295 inv.5), paused, or done (idle). Hooked:
+  // only a stuck outstanding tool (hookStatus==='working') can wedge.
+  // Un-hooked: key off the connector _statusValue so an overlay-bridged
+  // 'working' (real status idle) never accrues stuck.
   // Active sub-agents run on sidechains the tailer never reads, so the
   // main-thread lastEventTs goes stale while they work — that must NOT read as
   // wedged. Suppress STUCK whenever fan-out is outstanding.
-  // TODO(stuck-waiting): the hooked 0384 tool-prompt branch reads 'waiting'
-  // but still accrues stuck (approvalWaiting stays false there), and so does
-  // an un-hooked stored 'waiting'. Pinned as-is by the 0420 characterization
-  // tests; 0295 invariant 5 wants stuck never beside waiting — change it on
-  // purpose with a card-level test, not as a refactor side effect.
   const subagentsActive = pendingSubagents.size > 0;
   let stuckMin = 0;
-  const stuckEligible = !subagentsActive && (hookStatus != null
-    ? (hookStatus === 'working' && !approvalWaiting)
-    : ((connectorStatus === 'working' || connectorStatus === 'waiting') && !approvalWaiting));
+  const stuckEligible = !subagentsActive && status !== 'waiting' && status !== 'paused'
+    && (hookStatus != null ? hookStatus === 'working' : connectorStatus === 'working');
   if (stuckEligible) {
-    const m = Math.floor((now - lastEventTs) / 60000);
+    // An absent clock stays absent (NaN → not stuck); a 0 hookStatusTs is
+    // "never", not the epoch.
+    const lastReal = hookStatus != null && hookStatusTs > 0 && !(hookStatusTs <= lastEventTs)
+      ? hookStatusTs : lastEventTs;
+    const m = Math.floor((now - lastReal) / 60000);
     if (m >= STUCK_MIN_THRESHOLD) stuckMin = m;
   }
   // Snapshot in-flight fan-out for the card / Zoom. Elapsed derived at read.

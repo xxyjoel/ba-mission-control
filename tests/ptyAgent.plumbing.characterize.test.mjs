@@ -127,12 +127,12 @@ test('start: emits change, builds the emulator with 5000 rows of scrollback', (t
   assert.ok(agent.readyTimer);
 });
 
-test('onData: stamps both activity clocks', (t) => {
+test('onData: stamps the PTY clock only, not the stuck clock (0450)', (t) => {
   const { agent, spawn } = makeAgent(t);
   agent.start();
   t.mock.timers.tick(1234);
   spawn.spawned[0].fireData('hello from claude\r\n');
-  assert.equal(agent.lastEventTs, T0 + 1234);
+  assert.equal(agent.lastEventTs, T0, 'stamped by the spawn, not by the bytes');
   assert.equal(agent.lastPtyTs, T0 + 1234);
 });
 

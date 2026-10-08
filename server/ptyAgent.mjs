@@ -221,6 +221,10 @@ export class PtyAgent extends PtyCore {
     signalGroup,
   } = {}) {
     super({ spawn, cols, rows, ...(signalGroup !== undefined ? { signalGroup } : {}) });
+    // 0450: claude repaints its spinner while wedged; its screen bytes must
+    // not reset the STUCK clock (lastEventTs). Hooks + transcript are the
+    // real-event clocks here.
+    this._ptyBytesAreEvents = false;
     this._bin = bin || null;
     this._envOverlay = env && typeof env === 'object' ? { ...env } : null;
     this.slot = slot;
@@ -277,8 +281,9 @@ export class PtyAgent extends PtyCore {
     this.usageTailer = null;
     // JSONL-only activity clock (bumped solely by jsonlConnector.parseEvent),
     // used by toJSON()'s hook-vs-connector freshness merge. Distinct from
-    // lastEventTs (which onData also bumps on every PTY byte) so cosmetic
-    // terminal repaints can't defeat a real Stop-hook idle transition.
+    // lastEventTs (also bumped by send/spawn/resume; 0450: no longer by PTY
+    // bytes) so only transcript lines can defeat a real Stop-hook idle
+    // transition.
     this.lastConnectorTs = 0;
     // 0398: last SUB-tagged hook event (background/subagent tool activity).
     // Fresh values keep an idle main thread reading 'working' in toJSON.
@@ -605,7 +610,9 @@ export class PtyAgent extends PtyCore {
       lastSubHookTs:   this.lastSubHookTs,
       pendingSubagents: this.pendingSubagents,
       hasPty:          !!this.pty,
-      paused:          this.status === 'paused',
+      // 0450: the SIGSTOP flag too — a transcript line read after the stop
+      // can overwrite the stored 'paused'.
+      paused:          (!!this.paused && !!this.pty) || this.status === 'paused',
       errored:         this.status === 'error',
       scanApproval:    () => this.#scanApprovalPrompt(),
       scanWorking:     () => this.#scanWorking(),

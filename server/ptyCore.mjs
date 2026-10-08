@@ -339,10 +339,16 @@ export class PtyCore extends EventEmitter {
     // repeated pastes log one line, not one per key. Reset on an accepted
     // submit/paste.
     this._zoomCapNoted = null;
+    // The stuck clock: real events (transcript lines, send, spawn, resume,
+    // auto-restart). 0450: for claude (PtyAgent sets _ptyBytesAreEvents=false)
+    // PTY bytes do NOT bump it — claude repaints its spinner while wedged, and
+    // those repaints kept resetting STUCK. Subclasses keep the old any-byte
+    // clock by default: Cursor has no hooks and writes no tool_result line, so
+    // its screen output is the only liveness it has during a long tool.
     this.lastEventTs = Date.now();
-    // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
-    // bumps on every parsed JSONL line), this advances ONLY when claude writes
-    // bytes to the terminal. The idle→working overlay needs it: a genuinely
+    this._ptyBytesAreEvents = true;
+    // PTY-only activity clock. Unlike lastEventTs, this advances ONLY when
+    // claude writes bytes to the terminal. The idle→working overlay needs it: a genuinely
     // idle session emits no bytes, so its last working frame (with the
     // "esc to interrupt" hint) lingers in the buffer forever — the scan alone
     // would pin it to 'working'. Requiring fresh PTY output disambiguates a
@@ -429,13 +435,18 @@ export class PtyCore extends EventEmitter {
     // PTY stdout drives two listeners:
     //   1) the persistent terminal (so its buffer always has the
     //      latest claude output — read by zoom on mount/re-mount)
-    //   2) liveness for stuck-detection in toJSON()
+    //   2) lastPtyTs, the freshness clock for the working overlay and the
+    //      approval-scrape gate. 0450: NOT lastEventTs when
+    //      _ptyBytesAreEvents is false (claude) — a repaint is not an event,
+    //      so it must not reset the STUCK clock. The spawn itself is one
+    //      (stamped here, since the first byte no longer does it).
+    this.lastEventTs = Date.now(); // 0450
     try {
       this._spawnProbeBuf = ''; // first output after (re)spawn — read on early exit
       this._spawnTs = Date.now(); // per-(re)spawn clock for the early-refusal window (0396)
       this._termDataSub = this.pty.onData((chunk) => {
-        this.lastEventTs = Date.now();
         this.lastPtyTs = Date.now(); // PTY-only clock for the idle→working overlay
+        if (this._ptyBytesAreEvents) this.lastEventTs = this.lastPtyTs; // 0450: non-claude subclasses only
         if (this._spawnProbeBuf.length < 4096) this._spawnProbeBuf += chunk;
         if (this.term) {
           try { this.term.write(chunk); } catch {}
@@ -584,6 +595,7 @@ export class PtyCore extends EventEmitter {
     if (exitedPty && exitedPty !== this.pty) return;
     dlog('pty', 'exit', { slot: this.slot, code, signal, killed: !!this.killed, restarts: this.restartCount || 0 });
     this.pty = null;
+    this.paused = false; // 0450: a dead process is not stopped; deriveStatus reads this flag
     this._exitSub = null;
     if (this._termDataSub) {
       // PTY is gone; the subscription's underlying handle is gone
@@ -629,6 +641,7 @@ export class PtyCore extends EventEmitter {
         text: `auto-restart ${this.restartCount}/${RESTART_MAX} in ${(backoffMs / 1000).toFixed(0)}s`,
       });
       this.status = 'working';
+      this.lastEventTs = Date.now(); // 0450: the crash/restart is an event
       this.emit('change');
       this.restartTimer = setTimeout(() => {
         this.restartTimer = null;
@@ -795,6 +808,7 @@ export class PtyCore extends EventEmitter {
         submittedNow = true;
       }
       this.status = 'working';
+      this.lastEventTs = Date.now(); // 0450: a send is an event (claude's echo no longer bumps it)
       this.activity = `▸ sending: ${text.slice(0, 120)}`;
       this.appendTail({ kind: 'user', text });
       this.emit('change');
@@ -906,11 +920,11 @@ export class PtyCore extends EventEmitter {
       // waiting, a mid-turn session resumes working. Forcing 'working' made an
       // idle card read busy until the next transcript event. Only restore when
       // nothing overwrote 'paused' meanwhile (an exit path writing 'error').
-      // 0442: TODO(hooked-pause): deriveStatus's hooked branch never reads the
-      // stored 'paused' while hookStatus is working/waiting, so a HOOKED paused
-      // card can still show WORKING. Pre-existing; restore-prior here keeps the
-      // unhooked and hook-idle-connector-fresher branches truthful.
+      // 0450: deriveStatus reads `paused` first, so a hooked card shows PAUSED
+      // while stopped and its hook verdict again once resumed.
       if (this.status === 'paused') this.status = this._statusBeforePause || 'idle';
+      // 0450: time spent frozen is not silence; restart the stuck clock.
+      this.lastEventTs = Date.now();
       this._statusBeforePause = null;
       this.appendTail({ kind: 'sys', text: 'SIGCONT — process resumed' });
       this.emit('change');

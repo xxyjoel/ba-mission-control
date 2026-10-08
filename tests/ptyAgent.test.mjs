@@ -319,14 +319,17 @@ test('PtyAgent.resize: enforces minimum cols/rows', () => {
 
 // ─── liveness signal from PTY data ────────────────────────────────
 
-test('PtyAgent: any PTY stdout updates lastEventTs', async () => {
+// 0450: PTY bytes are not events — a spinner repaint must not reset STUCK.
+test('PtyAgent: PTY stdout updates lastPtyTs but not lastEventTs', async () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
   const before = p.lastEventTs;
+  const ptyBefore = p.lastPtyTs;
   await tick(10);
   fake.spawned[0].fireData('some stdout');
-  assert.ok(p.lastEventTs > before);
+  assert.equal(p.lastEventTs, before);
+  assert.ok(p.lastPtyTs > ptyBefore);
   p.kill();
 });
 

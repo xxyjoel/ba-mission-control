@@ -59,7 +59,8 @@ test('activeSubagents: empty map → empty array', () => {
 test('STUCK suppressed while a sub-agent is in flight (stale main-thread clock)', () => {
   const agent = bootAgent();
   agent.hookStatus = 'working';
-  agent.hookStatusTs = Date.now();
+  // 0450: a hook event also resets the stuck clock, so both are 6 min stale.
+  agent.hookStatusTs = Date.now() - 6 * 60000;
   agent.lastEventTs = Date.now() - 6 * 60000; // 6 min stale → would be STUCK
   // Without fan-out: STUCK accrues.
   assert.ok(agent.toJSON().stuckMin >= 5, 'baseline: stale working session reads STUCK');
