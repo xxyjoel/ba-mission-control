@@ -27,13 +27,6 @@ export const MIN_CARD_W = 34;
 // a row wrapping. Used only when the terminal itself is narrower than
 // MIN_CARD_W + 2.
 const MIN_CARD_W_ABS = 20;
-// TODO(0459): App.jsx's up/down handler (`const cols = Math.max(1,
-// Math.min(settings.gridCols, visList.length))`) steps by settings.gridCols,
-// not the columns the grid draws. With MIN_CARD_W 34 the default 5-col
-// setting draws 3 columns on a 120-col terminal, so down from card 0 lands on
-// card 4 instead of card 3. It should step by computeGridLayout(...)
-// .effectiveCols. App.jsx is another lane's file; follow-up recorded in the
-// 0459 Result.
 const HEADER_H = 1;
 const AGG_H = 1;
 // Most toasts App.jsx will keep alive at once — pushToast drops all but the
