@@ -341,6 +341,13 @@ export function mapEventToStatus(ev) {
 
   if (event === 'Notification') {
     if (notification_type === 'permission_prompt') return 'waiting';
+    // TODO(0363): agent_needs_input is deliberately unmapped (0451). Real hook
+    // logs show it after Stop + idle_prompt (5b7a6c0d:20-22, 93c118d4:12523-31),
+    // paired same-ms with agent_completed (df4c967a:655, add052b8:11610), and
+    // just before a main-thread PreToolUse (add052b8:12495). Mapping it to
+    // 'waiting' left idle cards WAITING with no expiry, and bgStatusFromEvents
+    // shares this mapper. Unresolved, possibly real blocks: aae20e51:8094-8098,
+    // fcefd2e4:3746-3749. Settle its meaning in 0363 before mapping it.
     if (notification_type === 'idle_prompt') return 'idle';
     return null;
   }
