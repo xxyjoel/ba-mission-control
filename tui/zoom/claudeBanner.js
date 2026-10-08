@@ -70,3 +70,19 @@ export function composerSpan(rowTexts, cursorRow) {
   if (top < 0 || bottom >= rowTexts.length) return [cursorRow, cursorRow];
   return [top + 1, bottom - 1];
 }
+
+// footerStart — the first row of claude's footer: the row after the
+// composer's bottom rule, or null when no bottom rule is on screen. The footer
+// holds the mode line ("⏵⏵ accept edits on (shift+tab to cycle)") and, after
+// a background update, "✓ Update installed · /restart to apply" on the SAME
+// row — so a footer row is never blanked as a banner (0438).
+export function footerStart(rowTexts, cursorRow) {
+  if (!Array.isArray(rowTexts) || !Number.isInteger(cursorRow)) return null;
+  if (cursorRow < 0 || cursorRow >= rowTexts.length) return null;
+  // Search down from the cursor on its own, not via composerSpan: a composer
+  // taller than the pane hides its top rule, and composerSpan then gives up.
+  for (let y = cursorRow + 1; y < rowTexts.length; y++) {
+    if (RULE_RE.test(String(rowTexts[y] ?? '').trim())) return y + 1 < rowTexts.length ? y + 1 : null;
+  }
+  return null;
+}

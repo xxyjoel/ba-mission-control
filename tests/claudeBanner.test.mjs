@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { matchUpdateBanner, composerSpan } from '../tui/zoom/claudeBanner.js';
+import { matchUpdateBanner, composerSpan, footerStart } from '../tui/zoom/claudeBanner.js';
 
 test('matches the common update-available wordings', () => {
   for (const s of [
@@ -105,4 +105,24 @@ test('composerSpan: without both rules only the cursor row is protected', () => 
   assert.deepEqual(composerSpan(['─'.repeat(40), 'b', 'c'], 2), [2, 2]);
   assert.equal(composerSpan(['a'], -1), null);
   assert.equal(composerSpan(['a'], 5), null);
+});
+
+test('footerStart: the row after the composer bottom rule (0438)', () => {
+  const R = '─'.repeat(40);
+  const rows = ['header', '', R, '❯ hi', R, '  ⏵⏵ accept edits on (shift+tab to cycle)   ✓ Update installed · /restart to apply'];
+  assert.equal(footerStart(rows, 3), 5);
+  assert.equal(footerStart(['╭' + '─'.repeat(30) + '╮', '│ > x │', '╰' + '─'.repeat(30) + '╯', 'f'], 1), 3);
+});
+
+test('footerStart: null without a bottom rule', () => {
+  assert.equal(footerStart(['a', 'b', 'c'], 1), null);
+  assert.equal(footerStart(['─'.repeat(40), 'b', 'c'], 2), null);
+  assert.equal(footerStart(['a'], 5), null);
+});
+
+test('footerStart: found when the composer top rule is off screen (0438)', () => {
+  // A long paste fills the pane: no top rule, cursor high in the composer.
+  const R = '─'.repeat(40);
+  const rows = ['line 1 of paste', 'line 2 of paste', 'line 3', R, '  ⏸ plan mode on (shift+tab to cycle)  ✓ Update installed · /restart to apply'];
+  assert.equal(footerStart(rows, 0), 4);
 });

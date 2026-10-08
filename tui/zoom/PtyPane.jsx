@@ -25,7 +25,7 @@ import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
 import { rowToRuns } from './ptyCells.js';
 import { throttleDecision } from '../lib/leadingThrottle.js';
-import { matchUpdateBanner, composerSpan } from './claudeBanner.js';
+import { matchUpdateBanner, composerSpan, footerStart } from './claudeBanner.js';
 import { dlog } from '../lib/debugLog.js';
 
 // traceKey — MC_DEBUG-gated stdin trace for the zoom exit investigation.
@@ -641,11 +641,16 @@ export default function PtyPane({
     // 0429: rows of claude's composer are never banner candidates — the
     // user's own prose can match the banner wording. Located from the live
     // cursor even when mc does not paint its own (Cursor sessions).
+    // 0438: rows of claude's footer (below the composer's bottom rule) are
+    // matched but never blanked — the update notice shares a row with the
+    // mode line, so blanking it hid "shift+tab to cycle".
     let composer = null;
+    let footer = null;
     if (hideUpdateBanner && offset === 0) {
       const texts = [];
       for (let y = 0; y < viewRows; y++) texts.push(buf.getLine(startY + y)?.translateToString(true) ?? '');
       composer = composerSpan(texts, cursorRow);
+      footer = footerStart(texts, cursorRow);
     }
     const out = [];
     let banner = null;
@@ -660,7 +665,10 @@ export default function PtyPane({
       const inComposer = composer && y >= composer[0] && y <= composer[1];
       if (hideUpdateBanner && cxForRow < 0 && !inComposer) {
         const hit = matchUpdateBanner(runs.map(r => r.text).join(''));
-        if (hit) { banner = hit; out.push([]); continue; }
+        if (hit) {
+          banner = hit;
+          if (footer == null || y < footer) { out.push([]); continue; }
+        }
       }
       out.push(runs);
     }
