@@ -35,7 +35,10 @@ export const PLUGINS = [
     key: 'plugin_projectMemory',
     label: '.mc/MEMORY.md auto-inject',
     layer: 2,
-    default: true,
+    // 0461: opt-in, as the help text says. A saved explicit true in
+    // settings.json still wins (isPluginEnabled / applyPluginDefaults only
+    // fill a missing key).
+    default: false,
     desc: 'On launch, prepend the focused repo\'s .mc/MEMORY.md to the first message',
     help: 'mc looks for .mc/MEMORY.md in the launched cwd. If present, its contents are prepended to whatever prompt you send first (with a "── project memory ──" separator). Append to it with :remember "X". This is like CLAUDE.md but mc-owned and per-repo, so it ships only when you opt-in.',
   },
