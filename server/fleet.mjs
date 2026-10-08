@@ -83,6 +83,11 @@ export class Fleet extends EventEmitter {
     this.slots = Math.max(1, Math.min(64, slots | 0 || DEFAULT_SLOTS));
     // agents[slot-1] is either an Agent instance or null (empty slot)
     this.agents = new Array(this.slots).fill(null);
+    // 0441: agents killed out of agents[] whose process has not ended yet.
+    // kill() frees the slot at once (`:clear` relaunches into it 50 ms later),
+    // so without this set hardKillAll could not reach a claude that ignored
+    // the SIGTERM. Each agent leaves the set on its 'stopped' event.
+    this.stopping = new Set();
     // After agents[] exists — setViewport walks it.
     if (viewport) this.setViewport(viewport);
     this.sessionStart = Date.now();
@@ -301,6 +306,10 @@ export class Fleet extends EventEmitter {
   // the transcript from disk.
   resume({ slot, sessionId, cwd, branch, model, name, permissionMode, provider = 'claude', autoTrust = false }) {
     if (!sessionId) throw new Error(`no sessionId — nothing to resume`);
+    // TODO(resume-overlap): 0441: an agent in this.stopping may still run
+    // claude on this same sessionId for up to STOP_GRACE_MS after a kill, so
+    // resuming inside that window briefly runs two claudes on one transcript.
+    // Wait for that agent's 'stopped' before launching.
     return this.launch({
       slot, cwd, branch, model, name,
       permissionMode: permissionMode || (provider === 'claude' ? 'acceptEdits' : 'default'),
@@ -317,6 +326,12 @@ export class Fleet extends EventEmitter {
     if (idx < 0) return false;
     const agent = this.agents[idx];
     agent.kill();
+    // 0441: PtyCore agents SIGKILL themselves at STOP_GRACE_MS; until the
+    // process ends, keep the agent reachable for hardKillAll.
+    if (agent.stopping) {
+      this.stopping.add(agent);
+      agent.once('stopped', () => this.stopping.delete(agent));
+    }
     this.agents[idx] = null;
     this.emit('change');
     return true;
@@ -370,6 +385,8 @@ export class Fleet extends EventEmitter {
   // daemon as a background agent, which then blocks resuming that session.
   hardKillAll() {
     for (const a of this.agents) if (a) a.hardKill?.();
+    // 0441: and every killed agent whose process is still stopping.
+    for (const a of [...this.stopping]) { try { a.hardKill?.(); } catch {} }
   }
 
   // Propagate a new default per-slot cost cap to every live agent and

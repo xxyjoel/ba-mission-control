@@ -435,11 +435,18 @@ test('kill: clears timers, stops tailers, disposes subs + term, SIGTERMs', (t) =
   assert.equal(agent.term, null);
   assert.equal(agent.cell, null);
   assert.equal(p._handlers.data.size, 0);
-  assert.equal(p._handlers.exit.size, 0);
+  // 0441: deliberately re-pinned. One exit listener remains: the stop
+  // tracker that clears the SIGKILL timer (it never reaches #onExit).
+  assert.equal(p._handlers.exit.size, 1);
   assert.deepEqual(p._kills, ['SIGTERM']);
+  assert.equal(agent.stopping, true, '0441: stopping until exit or SIGKILL');
   assert.equal(agent.pty, p, 'kill() leaves pty set; the exit callback would null it');
   agent.hardKill();
   assert.deepEqual(p._kills, ['SIGTERM', 'SIGKILL']);
+  assert.equal(agent.stopping, false);
+  assert.equal(p._handlers.exit.size, 0);
+  t.mock.timers.tick(1500);
+  assert.deepEqual(p._kills, ['SIGTERM', 'SIGKILL'], '0441: hardKill cleared the escalation timer');
 });
 
 test('hardKill with no pty is a no-op', (t) => {
@@ -586,6 +593,9 @@ test('changePermissionMode: same mode no-op; else tail, SIGTERM old, respawn, se
   assert.equal(agent.changePermissionMode(''), false);
   const term = agent.term;
   assert.equal(agent.changePermissionMode('plan'), true);
+  // 0441: deliberately re-pinned — the respawn waits for the old exit.
+  assert.equal(spawn.spawned.length, 1, 'no respawn while the old claude runs');
+  spawn.spawned[0].fireExit({ exitCode: 0, signal: 15 });
   assert.equal(spawn.spawned.length, 2);
   assert.deepEqual(spawn.spawned[0]._kills, ['SIGTERM']);
   assert.equal(agent.killed, false);
@@ -607,14 +617,19 @@ test('changeModel: tail names old → new, nulls resolvedModel', (t) => {
   assert.equal(agent.changeModel('haiku-4.5'), true);
   assert.equal(agent.resolvedModel, null);
   assert.ok(tailTexts(agent).includes('sys:model: sonnet-4.6 → haiku-4.5'));
+  // 0441: deliberately re-pinned — the respawn waits for the old exit.
+  assert.equal(spawn.spawned.length, 1);
+  spawn.spawned[0].fireExit({ exitCode: 0, signal: 15 });
   assert.equal(spawn.spawned.length, 2);
 });
 
 test('teardown clears the ready timer of the old process and re-arms for the new', (t) => {
-  const { agent } = makeAgent(t);
+  const { agent, spawn } = makeAgent(t);
   agent.start();
   const oldTimer = agent.readyTimer;
   agent.changePermissionMode('plan');
+  assert.equal(agent.readyTimer, null, '0441: no timer while the respawn waits');
+  spawn.spawned[0].fireExit({ exitCode: 0, signal: 15 }); // 0441: old claude ends
   assert.notEqual(agent.readyTimer, oldTimer);
   assert.equal(agent.ready, false);
   t.mock.timers.tick(3000);

@@ -141,6 +141,9 @@ test('CursorAgent.changeModel: teardown + restart with new model', () => {
   a.ready = true;
   const ok = a.changeModel('cursor:auto');
   assert.equal(ok, true);
+  // 0441: the respawn waits for the old process to exit.
+  assert.equal(fake.spawned.length, 1);
+  fake.spawned[0].fireExit({ exitCode: 0, signal: 15 });
   assert.equal(a.model, 'cursor:auto');
   assert.equal(fake.spawned.length, 2);
   const args = fake.spawned[1]._args;
@@ -155,6 +158,7 @@ test('CursorAgent.changePermissionMode: restarts with force argv', () => {
   a.ready = true;
   assert.equal(a.changePermissionMode('force'), true);
   assert.equal(a.permissionMode, 'force');
+  fake.spawned[0].fireExit({ exitCode: 0, signal: 15 }); // 0441: respawn waits for the old exit
   assert.ok(fake.spawned[1]._args.includes('--force'));
   a.kill();
 });

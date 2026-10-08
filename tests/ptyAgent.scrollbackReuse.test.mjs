@@ -27,7 +27,9 @@ function makeFakeSpawn() {
       _args: args,
       _opts: opts,
       write() {},
-      kill() {},
+      // 0441: a well-behaved claude exits on SIGTERM, and a restart now waits
+      // for that exit before it respawns. Report it the way node-pty does.
+      kill(sig) { if (sig === 'SIGTERM') for (const fn of [...handlers.exit]) fn({ exitCode: 0, signal: 15 }); },
       resize() {},
       onData(fn) { handlers.data.add(fn); return { dispose() { handlers.data.delete(fn); } }; },
       onExit(fn) { handlers.exit.add(fn); return { dispose() { handlers.exit.delete(fn); } }; },

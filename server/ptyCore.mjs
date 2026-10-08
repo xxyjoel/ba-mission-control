@@ -80,6 +80,12 @@ const DEFAULT_ROWS = 24;
 
 const RESTART_MAX = 3;
 
+// 0441: how long a stopping claude gets to honour SIGTERM before SIGKILL. Same
+// grace as the shutdown reaper in tui/main.jsx. A claude wedged on a
+// permission prompt (or entangled with claude's daemon) ignores SIGTERM; once
+// the slot forgets it, nothing else would ever end it.
+export const STOP_GRACE_MS = 1500;
+
 const DEFAULT_READY_POLL_MS = 250;
 
 // 0442: signal every process claude started, not claude alone. pty.kill()
@@ -276,6 +282,13 @@ export class PtyCore extends EventEmitter {
     // 0442: the stored status at the moment of pause(); resume() restores it.
     this._statusBeforePause = null;
     this.killed = false;
+    // 0441: ptys sent SIGTERM by kill() or a restart teardown that have not
+    // exited yet → their SIGKILL timer. hardKill walks it too, and start()
+    // waits until it is empty, so a respawn never runs next to the old claude.
+    this._stopping = new Map();
+    // 0441: start() was called while an old pty was still stopping; spawn
+    // when the last one ends (exit or SIGKILL).
+    this._startDeferred = false;
     this.lastEventTs = Date.now();
     // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
     // bumps on every parsed JSONL line), this advances ONLY when claude writes
@@ -333,6 +346,20 @@ export class PtyCore extends EventEmitter {
       this.appendTail({ kind: 'sys', text: 'start ignored — PTY already running' });
       return;
     }
+    // 0441: wait for the old claude to end (exit, or the SIGKILL at
+    // STOP_GRACE_MS). A respawn next to it let two claudes share one session,
+    // and the old one's late hook / transcript lines could rewrite state the
+    // new one owns (0439's stale permission mode). Sends meanwhile stay in
+    // pendingSends: send() queues whenever this.pty is null.
+    if (this._stopping.size > 0) {
+      if (!this._startDeferred) {
+        this._startDeferred = true;
+        this.appendTail({ kind: 'sys', text: 'waiting for the old process to exit' });
+        this.emit('change');
+      }
+      return;
+    }
+    this._startDeferred = false;
     const spec = this.buildSpawn();
 
     this.pty = this._spawn(spec.bin, spec.args, {
@@ -768,18 +795,69 @@ export class PtyCore extends EventEmitter {
       this.term = null;
       this.cell = null;
     }
+    // 0441: a respawn waiting on an old pty is cancelled — a killed slot is
+    // never revived.
+    this._startDeferred = false;
     if (this.pty) {
       // P6 (0408): a SIGSTOPped process never handles the SIGTERM — it stays
       // frozen in T state with the signal pending, unreachable once the Fleet
       // drops the agent from agents[]. Wake it first so the SIGTERM lands.
       // 0442: both go to the whole process tree, so stopped children wake
       // and terminate with claude instead of staying frozen in T state.
-      if (this.paused) {
-        try { this.#signal(this.pty, 'SIGCONT'); } catch {}
-        this.paused = false;
-      }
-      try { this.#signal(this.pty, 'SIGTERM'); } catch {}
+      // 0441: then SIGKILL at STOP_GRACE_MS unless it exits first.
+      this.#stopPty(this.pty);
     }
+  }
+
+  // 0441: true while any pty this agent signalled has not ended yet. Fleet
+  // keeps a killed agent in its stopping set until this goes false.
+  get stopping() { return this._stopping.size > 0; }
+
+  // 0441: SIGCONT (if paused) + SIGTERM `pty`'s tree, then SIGKILL it at
+  // STOP_GRACE_MS unless it exits first. The exit listener is a NEW
+  // subscription: it must never reach #onExit, whose state now belongs to
+  // the successor (P1/0408).
+  #stopPty(pty) {
+    if (this._stopping.has(pty)) return;
+    if (this.paused) {
+      try { this.#signal(pty, 'SIGCONT'); } catch {}
+      this.paused = false;
+    }
+    const entry = { timer: null, exitSub: null };
+    this._stopping.set(pty, entry);
+    try { entry.exitSub = pty.onExit(() => this.#stopped(pty)); } catch {}
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      this.appendTail({ kind: 'sys', text: `SIGKILL — process ignored SIGTERM for ${STOP_GRACE_MS / 1000}s` });
+      try { this.#signal(pty, 'SIGKILL'); } catch {}
+      // Proceed on the SIGKILL, not only on the exit report: a SIGKILL that
+      // failed (EPERM) or a pty that never reports exit must not hold a
+      // respawn forever.
+      this.#stopped(pty);
+    }, STOP_GRACE_MS);
+    entry.timer.unref?.();
+    // After the bookkeeping: a pty whose exit fires synchronously on SIGTERM
+    // must find its entry.
+    try { this.#signal(pty, 'SIGTERM'); } catch {}
+  }
+
+  // 0441: `pty` exited or was SIGKILLed. Forget it; when it was the last one,
+  // run a respawn that start() deferred, and tell Fleet the agent is stopped.
+  #stopped(pty) {
+    const entry = this._stopping.get(pty);
+    if (!entry) return;
+    this._stopping.delete(pty);
+    if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    try { entry.exitSub?.dispose?.(); } catch {}
+    if (this._stopping.size > 0) return;
+    if (this._startDeferred && !this.killed) {
+      try { this.start(); } catch (e) {
+        this._startDeferred = false;
+        this.appendTail({ kind: 'err', text: `respawn failed: ${e.message}` });
+        this.emit('change');
+      }
+    }
+    this.emit('stopped');
   }
 
   // hardKill — SIGKILL escalation for shutdown. A claude child wedged on a
@@ -788,12 +866,27 @@ export class PtyCore extends EventEmitter {
   // quit-stall → force-close → orphan-adopted-as-background-agent chain
   // (2026-08-12 incident, gtm-gov-miner). kill() must have run first.
   hardKill() {
-    if (this.pty) {
+    // 0441: shutdown never respawns. Without this, #stopped below would run a
+    // deferred start() on an agent kill() never reached, and the SIGKILL that
+    // follows would land on that brand-new claude.
+    this._startDeferred = false;
+    // 0441: also every pty still stopping after kill() or a restart teardown —
+    // the old claude a changeModel replaced is no longer this.pty.
+    for (const pty of [...this._stopping.keys()]) {
+      if (pty === this.pty) continue; // signalled below, once
+      try { this.#signal(pty, 'SIGKILL'); } catch {}
+      this.#stopped(pty);
+    }
+    // 0441: after kill(), this.pty is kept but its exit sub is gone; once
+    // #stopped recorded its exit, the pid may already belong to another
+    // process — signal it only while it is still stopping.
+    if (this.pty && (!this.killed || this._stopping.has(this.pty))) {
       // 0442: the whole tree — a wedged claude's children must not outlive it.
       // 0442: TODO(tree-after-exit): if the SIGTERM already ended claude, its
       // setsid'd children have reparented to pid 1 and this walk finds none, so
       // one that ignored SIGTERM survives. Reuse kill()'s snapshot to close it.
       try { this.#signal(this.pty, 'SIGKILL'); } catch {}
+      this.#stopped(this.pty); // 0441: no-op unless kill() put it in _stopping
     }
   }
 
@@ -831,11 +924,9 @@ export class PtyCore extends EventEmitter {
       // P6 (0408): a paused (SIGSTOPped) process must be woken or the SIGTERM
       // stays pending forever — same orphan shape kill() guards against.
       // 0442: signal the old process tree, same as kill().
-      if (this.paused) {
-        try { this.#signal(oldPty, 'SIGCONT'); } catch {}
-        this.paused = false;
-      }
-      try { this.#signal(oldPty, 'SIGTERM'); } catch {}
+      // 0441: and keep it in _stopping: SIGKILL at STOP_GRACE_MS, hardKill
+      // still reaches it, and the caller's start() waits for it to end.
+      this.#stopPty(oldPty);
       this.killed = wasKilled;
     }
   }
@@ -887,6 +978,13 @@ export class PtyCore extends EventEmitter {
       if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
       this.resuming = true;
       this.start();
+      // 0441: start() defers while the old claude is still stopping (at most
+      // STOP_GRACE_MS). A pane bound to a null pty would drop every key and
+      // never see the successor, so say so instead; reopening works once the
+      // respawn lands.
+      if (!this.pty && this._startDeferred) {
+        throw new Error('session is restarting — reopen zoom in a moment');
+      }
     }
     // 0404: NO resize here. The agent's PTY already runs at the fleet
     // viewport's geometry (Fleet.setViewport ← tui/lib/zoomGeometry.js), which
