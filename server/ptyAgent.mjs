@@ -271,6 +271,10 @@ export class PtyAgent extends PtyCore {
     }
     if (modelArg) args.push('--model', modelArg);
     if (this.permissionMode) args.push('--permission-mode', this.permissionMode);
+    // 0439: the instant this claude's mode was fixed by argv. Hook and
+    // transcript records older than this are the previous process's history
+    // and must not override it (statusHookTailer, primeStatusFromDisk).
+    this.permissionModeArgvTs = Date.now();
     if (this.cwd) args.push('--add-dir', this.cwd);
 
     // Inject the MC hooks settings block so every spawned claude emits status

@@ -13,6 +13,7 @@
 
 import { execFile } from 'node:child_process';
 import { probeAuth as probeClaudeAuth } from '../../tui/lib/auth.js';
+import { CLAUDE_PERMISSION_MODES } from '../permissionModes.mjs';
 
 const PROBE_TIMEOUT_MS = 5000;
 
@@ -133,7 +134,7 @@ const claude = {
   },
   loginArgv: ['auth', 'login'],
   logoutArgv: ['auth', 'logout'],
-  permissionModes: ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'],
+  permissionModes: [...CLAUDE_PERMISSION_MODES], // 0439: one list, shared with the mode validators
   defaultModelSetting: 'defaultModel',
   defaultModeSetting: 'defaultPermission',
   zoomTarget: 'claude',

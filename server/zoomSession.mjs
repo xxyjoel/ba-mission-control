@@ -126,6 +126,7 @@ export function startZoomSession(agent, { cols, rows } = {}) {
     : ['--session-id', sessionId];
   if (modelArg) args.push('--model', modelArg);
   if (agent.permissionMode) args.push('--permission-mode', agent.permissionMode);
+  agent.permissionModeArgvTs = Date.now(); // 0439: older mode reports are history (see ptyAgent)
   if (agent.cwd) args.push('--add-dir', agent.cwd);
 
   // Snapshot the project dir BEFORE spawn so the post-spawn diff can

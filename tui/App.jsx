@@ -72,6 +72,7 @@ import { wireCursorUsageSync } from './lib/cursorUsage.js';
 //   plan                 — read-only planning; no edits issued
 //   dontAsk              — never prompt; for safe/observed sessions
 //   bypassPermissions    — no guardrails. Scratch dirs only.
+// TODO(0439): import CLAUDE_PERMISSION_MODES from server/permissionModes.mjs — this copy can drift from the list the hook/transcript validators accept.
 const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'];
 
 // 0420: which CLI runs a slot. Snapshots and records from before providers

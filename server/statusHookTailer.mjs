@@ -11,6 +11,7 @@
 import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { statusFilePath } from './statusFile.mjs';
 import { creationPollDelay } from './sessionFileTailer.mjs';
+import { knownClaudeMode } from './permissionModes.mjs';
 
 // Mirror sessionFileTailer.mjs intervals (0179 pattern).
 const STAT_POLL_MS = 1500;     // backstop for cloud-synced paths where fs.watch never fires
@@ -31,6 +32,13 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
   let filePath = statusFilePath({ sessionId: agent.sessionId });
   let core = createReadCore(filePath);
   let lastSid = agent.sessionId;
+
+  // 0439: a rebuilt tailer replays the hook file from offset 0. A mode in a
+  // record OLDER than the argv mc last spawned claude with is history — after
+  // changePermissionMode restarts claude with `--permission-mode NEW`, the old
+  // records must not put the old mode back. ptyAgent stamps the spawn; an
+  // unstamped agent falls back to this tailer's start.
+  const modeFloorFallback = Date.now();
 
   let stopped = false;
   let watcher = null;
@@ -82,6 +90,12 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
           agent.lastSubHookTs = Date.now();
           continue;
         }
+        // 0439: claude reports its permission mode on the hook payload, so a
+        // Shift+Tab inside claude (zoom) moves mc's record — the zoom chip, the
+        // saved session and the mode a resume restarts in. Read here, before
+        // the 0390 / P3 branches (P3 `continue`s). Subagent records are skipped
+        // above: a subagent's mode says nothing about the main thread's.
+        applyHookPermissionMode(agent, ev, modeFloorFallback);
         // 0390: PostToolUse for a human-blocking tool = the ask was ANSWERED —
         // protocol truth from claude itself, the only channel that reports it
         // explicitly. Clear the pending prompt so a resolved ask can never pin
@@ -187,6 +201,22 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
   };
 }
 
+// applyHookPermissionMode — 0439. Set agent.permissionMode from a hook record's
+// `permission_mode` when it is a known claude mode (the file is untrusted) and
+// the record is not older than the argv claude was last spawned with, and the
+// record is not a subagent's. Emits
+// 'change' only when the value moves.
+function applyHookPermissionMode(agent, ev, floorFallback) {
+  if (ev?.sub) return false; // a subagent's mode says nothing about the main thread's
+  const mode = knownClaudeMode(ev?.permission_mode);
+  if (!mode || mode === agent.permissionMode) return false;
+  const floor = Number.isFinite(agent.permissionModeArgvTs) ? agent.permissionModeArgvTs : floorFallback;
+  if (!(Number(ev.ts) >= floor)) return false;
+  agent.permissionMode = mode;
+  agent.emit?.('change');
+  return true;
+}
+
 /**
  * createReadCore(filePath) — factory for a stateful NDJSON byte tailer.
  *
@@ -259,7 +289,8 @@ export function createReadCore(filePath) {
  *
  * Maps one parsed NDJSON hook record to a status string or null.
  * Record shape (from server/hooks/emit-status.mjs):
- *   { ts: number, session_id: string, event: string, notification_type?: string }
+ *   { ts: number, session_id: string, event: string, notification_type?: string,
+ *     tool_name?: string, sub?: true, permission_mode?: string }
  *
  * @param {unknown} ev — the parsed record (or any garbage)
  * @returns {'working'|'waiting'|'idle'|null}

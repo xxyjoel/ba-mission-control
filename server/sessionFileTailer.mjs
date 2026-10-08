@@ -26,7 +26,7 @@ import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
-import { parseEvent, pushTail } from './jsonlConnector.mjs';
+import { parseEvent, pushTail, reportedPermissionMode } from './jsonlConnector.mjs';
 // 0408-F1/M6: the rotation hunt classifies every candidate transcript so a
 // BACKGROUND FORK (sessionKind:'bg') is never adopted as the slot's session.
 // This import closes the module cycle bgSessions.mjs documents (sessionFileTailer
@@ -360,7 +360,8 @@ export function startSessionTailer({
   //
   // parseEvent ACCUMULATES tokens/cost/spark/tail, so we replay into a SCRATCH
   // object and copy back only the last-writer-wins "current state" fields
-  // (status/awaitingPrompt/activity/todos/context/resolvedModel). That keeps the
+  // (status/awaitingPrompt/activity/todos/context/resolvedModel, and
+  // permissionMode — 0439). That keeps the
   // real agent's additive counters untouched. Returns the EOF offset it read to
   // (so the forward tailer continues from exactly there), or null on failure.
   async function primeStatusFromDisk() {
@@ -385,12 +386,28 @@ export function startSessionTailer({
       status: agent.status, awaitingPrompt: agent.awaitingPrompt ?? null,
       activity: agent.activity, todos: agent.todos, context: agent.context,
       resolvedModel: agent.resolvedModel,
+      permissionMode: agent.permissionMode, // 0439: tail notes only real mode changes
       tail: [], tokensIn: 0, tokensCacheRead: 0, tokensOut: 0, costSession: 0, // absorb the additive side-effects
     };
     let any = false;
+    // 0439: the mode claude last reported in the window, copied back below.
+    // Only records written by the CURRENT claude count: a spawn passes
+    // `--permission-mode <agent.permissionMode>`, so older records are the
+    // previous process's history (changePermissionMode restarts claude over
+    // the same transcript). permission-mode records carry no timestamp — they
+    // take the last one seen. An unstamped agent takes the last report.
+    const modeFloor = Number.isFinite(agent.permissionModeArgvTs) ? agent.permissionModeArgvTs : null;
+    let lastTs = null;
+    let replayedMode = null;
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
-      try { if (parseEvent(JSON.parse(line), scratch)) any = true; } catch { /* skip junk */ }
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; /* skip junk */ }
+      const ts = Date.parse(ev?.timestamp ?? '');
+      if (Number.isFinite(ts)) lastTs = ts;
+      try { if (parseEvent(ev, scratch)) any = true; } catch { /* skip junk */ }
+      const mode = reportedPermissionMode(ev);
+      if (mode && (modeFloor == null || (lastTs != null && lastTs >= modeFloor))) replayedMode = mode;
     }
     // Did this primed region contain a /clear? On /clear claude rotates to a NEW
     // transcript, so the reset almost always lands at the TOP of the file we're
@@ -421,7 +438,15 @@ export function startSessionTailer({
         agent.context = scratch.context;
       }
       if (scratch.resolvedModel) agent.resolvedModel = scratch.resolvedModel;
-      mergeReplayedTail(scratch.tail);
+      // 0439: replayed "permission mode →" notes describe the PREVIOUS claude's
+      // history, not a change this agent made — drop them, and note the one
+      // real change (if any) instead.
+      const replayTail = scratch.tail.filter(e => !(e?.kind === 'sys' && /^permission mode → /.test(e.text || '')));
+      if (replayedMode && replayedMode !== agent.permissionMode) {
+        agent.permissionMode = replayedMode; // validated in reportedPermissionMode
+        replayTail.push({ kind: 'sys', text: `permission mode → ${replayedMode}` });
+      }
+      mergeReplayedTail(replayTail);
       try { agent.emit('change'); } catch {}
     }
     return stats.size;
