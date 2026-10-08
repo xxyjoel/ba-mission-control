@@ -238,13 +238,25 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // drawn three-quarters along a bar whose scale nobody knows. It is omitted
   // now (barCells skips the marker when threshFrac isn't a number), and the
   // whole bar is suppressed when there's no denominator to plot against.
-  const ctxBarW = 14;
+  //
+  // 0459: EVERY row is budgeted against innerW, not just the name and branch.
+  // At cardWidth 23 the ctx and tok/min rows wrapped onto two lines each and
+  // the fixed 11-row box clipped the rows below them — the model/branch tail
+  // and the vitals row vanished. Each row now measures its fixed parts and
+  // shrinks or drops its lowest-priority part, so it always fits one line.
+  // innerW strips the border (2) + paddingX (2) from the slot column width.
+  const innerW = Math.max(16, (cardWidth || 56) - 4);
+  const ctxStatText = ctxMeasured ? ` ${fmtK(agent.context || 0)} ${ctxPctText}` : ` ${UNMEASURED}`;
+  const ctxRoom = innerW - 'ctx '.length - ctxStatText.length;
+  // 0459: the bar shrinks to the room left (max 14 cells) and drops below 4,
+  // where it is too short to read; the token count and % always stay.
+  const ctxBarW = Math.min(14, ctxRoom);
   const threshFrac = ctxKnown ? (threshold / model.maxCtx) : undefined;
-  const ctxCells = ctxKnown && ctxMeasured ? barCells({ value: ctxPct, width: ctxBarW, threshFrac }) : null;
+  const ctxBarWanted = ctxKnown && ctxMeasured;
+  const ctxCells = ctxBarWanted && ctxBarW >= 4 ? barCells({ value: ctxPct, width: ctxBarW, threshFrac }) : null;
+  const ctxLimitText = `limit ${ctxKnown ? fmtK(model.maxCtx) : UNKNOWN}`;
+  const showCtxLimit = !ctxBarWanted && ctxLimitText.length <= ctxRoom;
   const ctxStatColor = overT ? theme.red : nearT ? theme.yellow : theme.fg;
-
-  // Sparkline
-  const sparkStr = sparkLine(agent.spark || [], 14);
   // tok/min NUMBER = the true last-sample rate (agent.lastTokRate), shown only
   // while actively working — 0 otherwise. The old `spark[last] * 8000` read the
   // glyph array, which carries a 0.5 floor (→ phantom 4000 tok/min on idle cards)
@@ -256,6 +268,16 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   const lastTpm = agent.status === 'working' ? Math.round(agent.lastTokRate || 0) : 0;
   // 0420/D1: no token feed → no throughput to report, working or not.
   const tpmText = agent.lastTokRate === null || agent.tokensOut === null ? UNMEASURED : fmtK(lastTpm);
+  // 0459: tok/min row budget. Label + rate always; the proc readout (real
+  // data) next if it fits with a 1-cell gap; the sparkline (decoration) takes
+  // what is left, up to 14 cells, and drops below 3.
+  const procText = (agent.procMemKb || 0) > 0
+    ? `${Math.round(agent.procCpu || 0)}% ${fmtMem(agent.procMemKb)}` : '';
+  const tpmUsed = 'tok/min '.length + tpmText.length;
+  const showProc = procText !== '' && tpmUsed + 1 + procText.length <= innerW;
+  const sparkRoom = innerW - tpmUsed - 2 - (showProc ? 1 + procText.length : 0);
+  const sparkStr = sparkRoom >= 3 ? sparkLine(agent.spark || [], Math.min(14, sparkRoom)) : '';
+  const tpmGap = innerW - tpmUsed - (showProc ? 1 + procText.length : 0) >= 2 ? '  ' : '';
 
   // Todos — the session's live TodoWrite checklist (agent.todos, normalized
   // to { content, status, activeForm } server-side). This is the closest
@@ -350,17 +372,103 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // approach. cardWidth = the slot column width from App.jsx; innerW strips the
   // border (2) + paddingX (2). Fixed-width siblings are measured exactly so the
   // label gets precisely the leftover room.
-  const innerW = Math.max(16, (cardWidth || 56) - 4);
-  const slotTagW = `[${agent.slot}] `.length;
-  const statusTagW = `${statusGlyph} ${statusWord}`.length
-    + (nearT ? ` · ${(ctxPct * 100).toFixed(0)}%`.length : 0)
-    + (agent.stuckMin > 0 ? ` · STUCK ${agent.stuckMin}m`.length : 0);
-  const nameStr = trunc(agent.name || '—', Math.max(3, innerW - slotTagW - statusTagW - 1));
-  const gitChipsW = gitNone ? 0
-    : (!dirtyKnown ? UNKNOWN.length : branchClean ? 1 : `+${agent.dirty}`.length)
-    + (agent.ahead  > 0 ? ` ↑${agent.ahead}`.length : 0)
-    + (agent.behind > 0 ? ` ↓${agent.behind}`.length : 0);
-  const branchStr = trunc(humanize(agent.branch || '—'), Math.max(3, innerW - `${modelLabel}${sidTag}${othersTag}  ⎇ `.length - gitChipsW - 1));
+  //
+  // 0459: the old floor `Math.max(3, …)` handed the label 3 cells even when
+  // the fixed parts had already used the row, so the row wrapped. Now the
+  // optional chips are added in priority order only while the label keeps at
+  // least LABEL_MIN cells; once nothing optional fits the label takes what is
+  // left (possibly nothing) and the row still fits. The 1-cell gap between
+  // the label and a right-hand part is budgeted wherever a right-hand part is
+  // drawn (the title's status word, the meta row's git chips), so a label at
+  // its floor never runs into it. labelRoom keeps the pre-0459 rule (gap only
+  // when there is room) for a meta row with no right-hand chip, where nothing
+  // follows the branch. Wide cards render as before (card-golden-0420.json;
+  // its narrow 30-col case was updated in 0459, see the test header).
+  const LABEL_MIN = 3;
+  const fitsWithLabel = (used, w) => innerW - used - w >= LABEL_MIN;
+  const labelRoom = (used) => Math.min(innerW - used, Math.max(LABEL_MIN, innerW - used - 1));
+
+  // Title: [slot] + status word are required; STUCK beats the ctx% chip,
+  // which the ctx row already shows.
+  // The trailing 1 is the gap before the status word: a name cut to its
+  // floor must not run into the status glyph (`gt…● WORKING`).
+  let titleUsed = `[${agent.slot}] `.length + `${statusGlyph} ${statusWord}`.length + 1;
+  // A narrow card keeps the alert as ` · STUCK` rather than losing it. The
+  // separator stays so it can't read as part of a neighbouring chip.
+  const stuckFull = agent.stuckMin > 0 ? ` · STUCK ${agent.stuckMin}m` : '';
+  const stuckShort = ' · STUCK';
+  const stuckChip = stuckFull === '' ? ''
+    : fitsWithLabel(titleUsed, stuckFull.length) ? stuckFull
+    : fitsWithLabel(titleUsed, stuckShort.length) ? stuckShort : '';
+  const showStuck = stuckChip !== '';
+  if (showStuck) titleUsed += stuckChip.length;
+  // The ctx% chip repeats the ctx row, so it never keeps its place while the
+  // STUCK minutes are being cut: no chip unless STUCK is absent or whole.
+  const ctxChip = nearT ? ` · ${ctxPctText}` : '';
+  const showCtxChip = ctxChip !== '' && stuckChip === stuckFull
+    && fitsWithLabel(titleUsed, ctxChip.length);
+  if (showCtxChip) titleUsed += ctxChip.length;
+  const nameRoom = Math.max(0, innerW - titleUsed);
+  const nameStr = nameRoom > 0 ? trunc(agent.name || '—', nameRoom) : '';
+
+  // Meta: model + `  ⎇ ` + branch are required (model capped so the branch
+  // keeps LABEL_MIN). Then git dirty chip, other-sessions warning, ahead,
+  // behind, and last the 9-cell session-id tag, the longest chip. It shows
+  // from cardWidth 39 for a full git row; the grid minimum (34) may drop it.
+  const branchSep = '  ⎇ ';
+  const modelStr = trunc(modelLabel, Math.max(1, innerW - branchSep.length - LABEL_MIN - 1));
+  let metaUsed = modelStr.length + branchSep.length;
+  const dirtyChip = gitNone ? '' : !dirtyKnown ? UNKNOWN : branchClean ? '●' : `+${agent.dirty}`;
+  // 0459: the git chips sit right of the branch with no leading space of
+  // their own, so once any right-hand chip is kept the row also reserves the
+  // 1-cell gap after the branch — a branch cut to the LABEL_MIN floor must
+  // not run into them (`fe…+12345`, `ma…●`).
+  let metaGap = 0;
+  const metaPart = (s, right) => {
+    const gap = right || metaGap ? 1 : 0;
+    if (s === '' || !fitsWithLabel(metaUsed + gap, s.length)) return '';
+    metaUsed += s.length;
+    if (right) metaGap = 1;
+    return s;
+  };
+  const dirtyStr  = metaPart(dirtyChip, true);
+  const othersStr = metaPart(othersTag, false);
+  const aheadStr  = !gitNone && agent.ahead  > 0 ? metaPart(` ↑${agent.ahead}`, true)  : '';
+  const behindStr = !gitNone && agent.behind > 0 ? metaPart(` ↓${agent.behind}`, true) : '';
+  const sidStr    = metaPart(sidTag, false);
+  const branchStr = trunc(humanize(agent.branch || '—'), Math.max(1, labelRoom(metaUsed)));
+
+  // Triage: the action verb beats the burndown bar. The bar takes what the
+  // verb (up to 12 cells) leaves, max 8, and drops below 3.
+  const burnCount = showBurndown ? `${todoDone}/${todoTotal} ` : '';
+  const triageUsed = (showBurndown || action !== '' ? 2 : 0) + burnCount.length;
+  const burnRoom = innerW - triageUsed - 1 - Math.min(action.length, 12);
+  const burnBarW = showBurndown && burnRoom >= 3 ? Math.min(8, burnRoom) : 0;
+  const actionStr = trunc(action, Math.max(0, innerW - triageUsed - (burnBarW ? burnBarW + 1 : 0)));
+
+  // Current-item row: `↳ ` + the text, cut to the row.
+  const itemRoom = Math.max(1, innerW - 2);
+
+  // Vitals: turns + state age are required; then health, msgs (innerW >= 30),
+  // uptime (innerW >= 40), each only if it still fits the row.
+  const stateText = `${statusGlyph}${stateAge}`;
+  let vitalsUsed = `⟳${agent.turnCount || 0}`.length + 1 + stateText.length;
+  const vitalsPart = (on, s) => {
+    if (!on || vitalsUsed + s.length > innerW) return '';
+    vitalsUsed += s.length;
+    return s;
+  };
+  const healthStr = health ? vitalsPart(true, `●${healthScoreText(health)}${health.arrow}  `) : '';
+  const msgsStr   = vitalsPart(innerW >= 30, `  ${agent.messageCount || 0}✉`);
+  const uptimeStr = vitalsPart(innerW >= 40, `  ⧗${uptime}`);
+
+  // Foot: cost + `ses` are required; then tokens in, then tokens out.
+  const costText = `${model && model.estimatedPricing ? '~' : ''}${fmtMoneyMeasured(agent.costSession)} `;
+  const footUsed = costText.length + 'ses'.length + 1;
+  const tokInText = `${fmtKMeasured(agent.tokensIn)}↓`;
+  const tokOutText = ` ${fmtKMeasured(agent.tokensOut)}↑`;
+  const showTokIn = footUsed + tokInText.length <= innerW;
+  const showTokOut = showTokIn && footUsed + tokInText.length + tokOutText.length <= innerW;
 
   return (
     <Box
@@ -386,34 +494,33 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={focused ? theme.accent : theme.fg}>{nameStr}</Text>
         <Box flexGrow={1} />
         <Text color={sCol}>{statusGlyph} {statusWord}</Text>
-        {nearT && (
+        {showCtxChip && (
           <Text color={overT ? theme.red : theme.yellow}> · {ctxPctText}</Text>
         )}
-        {agent.stuckMin > 0 && (
+        {showStuck && (
           // Wired by stuck-detection (#25); only renders when the server
           // has flagged the slot as silent past the threshold.
-          <Text color={theme.red}> · STUCK {agent.stuckMin}m</Text>
+          <Text color={theme.red}>{stuckChip}</Text>
         )}
       </Box>
 
       {/* Meta row: model + branch + git */}
       <Box>
-        <Text color={mCol}>{modelLabel}</Text>
-        {sidTag && <Text color={theme.dim}>{sidTag}</Text>}
-        {othersTag && <Text color={theme.yellow}>{othersTag}</Text>}
+        <Text color={mCol}>{modelStr}</Text>
+        {sidStr && <Text color={theme.dim}>{sidStr}</Text>}
+        {othersStr && <Text color={theme.yellow}>{othersStr}</Text>}
         <Text color={theme.dim}>  ⎇ </Text>
         {/* branchStr pre-truncated to fit (above) — one-line plain Text; spacer
             right-aligns the git chips. e.g. ops/db-recovery-incident-20 → … */}
         <Text color={theme.fg}>{branchStr}</Text>
         <Box flexGrow={1} />
         {/* 0452: no chips for a non-repo; '?' when the dirty count is unknown. */}
-        {gitNone ? null
-          : !dirtyKnown ? <Text color={theme.dim}>{UNKNOWN}</Text>
-          : branchClean
-            ? <Text color={theme.green}>●</Text>
-            : <Text color={theme.yellow}>+{agent.dirty}</Text>}
-        {!gitNone && agent.ahead  > 0 && <Text color={theme.accent}> ↑{agent.ahead}</Text>}
-        {!gitNone && agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
+        {/* 0459: each chip renders only if the row budget kept it. */}
+        {dirtyStr && (
+          <Text color={!dirtyKnown ? theme.dim : branchClean ? theme.green : theme.yellow}>{dirtyStr}</Text>
+        )}
+        {aheadStr  && <Text color={theme.accent}>{aheadStr}</Text>}
+        {behindStr && <Text color={theme.yellow}>{behindStr}</Text>}
       </Box>
 
       {/* CTX bar. 0409: with no known maxCtx the bar is SUPPRESSED rather than
@@ -430,10 +537,12 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
                 c.kind === 'partial' ? theme.brBlue : theme.faint
               }>{c.char}</Text>
             ))
-          : <Text color={theme.faint}>limit {ctxKnown ? fmtK(model.maxCtx) : UNKNOWN}</Text>}
-        {ctxMeasured
-          ? <Text color={ctxStatColor}> {fmtK(agent.context || 0)} {ctxPctText}</Text>
-          : <Text color={theme.dim}> {UNMEASURED}</Text>}
+          : showCtxLimit ? <Text color={theme.faint}>{ctxLimitText}</Text> : null}
+        {/* 0459: with nothing between the label and the stat, drop the stat's
+            leading space so the row does not read `ctx  150.8k`. */}
+        <Text color={ctxMeasured ? ctxStatColor : theme.dim}>
+          {ctxCells || showCtxLimit ? ctxStatText : ctxStatText.slice(1)}
+        </Text>
       </Box>
 
       {/* Tok/min + sparkline · right side: subprocess CPU/RSS (0387).
@@ -441,12 +550,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           Hidden until the first fleet sample lands (both 0). */}
       <Box>
         <Text color={theme.dim}>tok/min </Text>
-        <Text color={theme.fg}>{tpmText}  </Text>
+        <Text color={theme.fg}>{tpmText}{tpmGap}</Text>
         <Text color={theme.accent}>{sparkStr}</Text>
         <Box flexGrow={1} />
-        {(agent.procMemKb || 0) > 0 && (
-          <Text color={theme.dim}>{Math.round(agent.procCpu || 0)}% {fmtMem(agent.procMemKb)}</Text>
-        )}
+        {showProc && <Text color={theme.dim}>{procText}</Text>}
       </Box>
 
       {/* Flex spacer — absorbs the one leftover line so the card stays a
@@ -465,15 +572,19 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         {(showBurndown || action !== '') && <Text color={theme.accent}>▸ </Text>}
         {showBurndown && (
           <>
-            <Text color={allDone ? theme.green : theme.fg}>{todoDone}/{todoTotal} </Text>
-            {barCells({ value: todoDone / todoTotal, width: 8 }).map((c, i) => (
-              <Text key={i} color={c.kind === 'full' || c.kind === 'partial' ? (allDone ? theme.green : theme.accent) : theme.faint}>{c.char}</Text>
-            ))}
-            <Text> </Text>
+            <Text color={allDone ? theme.green : theme.fg}>{burnCount}</Text>
+            {burnBarW > 0 && (
+              <>
+                {barCells({ value: todoDone / todoTotal, width: burnBarW }).map((c, i) => (
+                  <Text key={i} color={c.kind === 'full' || c.kind === 'partial' ? (allDone ? theme.green : theme.accent) : theme.faint}>{c.char}</Text>
+                ))}
+                <Text> </Text>
+              </>
+            )}
           </>
         )}
         <Box flexGrow={1} flexShrink={1} overflow="hidden">
-          <Text color={actionColor} wrap="truncate">{action}</Text>
+          <Text color={actionColor} wrap="truncate">{actionStr}</Text>
         </Box>
       </Box>
 
@@ -485,7 +596,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
         <Text color={theme.faint}>↳ </Text>
         <Box flexGrow={1} flexShrink={1} overflow="hidden">
           {subCount > 0
-            ? <Text color={theme.accent} wrap="truncate">{subLabel}</Text>
+            ? <Text color={theme.accent} wrap="truncate">{trunc(subLabel, itemRoom)}</Text>
             : bgLive
               /* 0418: background work the server can see but cannot count —
                  the hook-clock path sets bgStatus live with an empty
@@ -493,8 +604,8 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
                  row existed that case showed only in the header chip; with the
                  chip gone it would have shown nowhere at all. No invented
                  number: say that it is running, not how many. */
-              ? <Text color={theme.accent} wrap="truncate">⋔ background agents running</Text>
-              : <Text color={todoCurrent ? theme.dim : theme.faint} wrap="truncate">{todoCurrent || '—'}</Text>}
+              ? <Text color={theme.accent} wrap="truncate">{trunc('⋔ background agents running', itemRoom)}</Text>
+              : <Text color={todoCurrent ? theme.dim : theme.faint} wrap="truncate">{trunc(todoCurrent || '—', itemRoom)}</Text>}
         </Box>
       </Box>
 
@@ -502,7 +613,7 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           cards drop msgs then uptime so the row can't wrap; turns and the
           state age (colored by status) always stay. */}
       <Box>
-        {health && (
+        {healthStr && (
           // Health demoted to a small ●score↑ dot (0256) — matches Zoom's
           // glyph. Numeric score + fixed-set arrow only; the untrusted verdict
           // STRING is no longer rendered anywhere on the card, so its escape
@@ -511,13 +622,13 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
           // unusable — `score.toFixed(0)` on the old `|| 0` rendered `●0`, the
           // worst possible health, for a score that was never measured. The
           // arrow is '' until there are two readings to take a delta between.
-          <Text color={healthColor(health, theme)}>●{healthScoreText(health)}{health.arrow}  </Text>
+          <Text color={healthColor(health, theme)}>{healthStr}</Text>
         )}
         <Text color={theme.fg}>⟳{agent.turnCount || 0}</Text>
-        {innerW >= 30 && <Text color={theme.dim}>  {agent.messageCount || 0}✉</Text>}
-        {innerW >= 40 && <Text color={theme.dim}>  ⧗{uptime}</Text>}
+        {msgsStr   && <Text color={theme.dim}>{msgsStr}</Text>}
+        {uptimeStr && <Text color={theme.dim}>{uptimeStr}</Text>}
         <Box flexGrow={1} />
-        <Text color={sCol}>{statusGlyph}{stateAge}</Text>
+        <Text color={sCol}>{stateText}</Text>
       </Box>
 
       {/* Foot: session cost + tokens. The weekly cost is a FLEET total (not
@@ -526,10 +637,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
       <Box>
         {/* 0408/M4: `~` marks a cost computed from an INHERITED pricing row
             (models.js estimatedPricing) — it must not pass for a billed figure. */}
-        <Text color={theme.dim}>{model && model.estimatedPricing ? '~' : ''}{fmtMoneyMeasured(agent.costSession)} </Text>
+        <Text color={theme.dim}>{costText}</Text>
         <Text color={theme.faint}>ses</Text>
         <Box flexGrow={1} />
-        <Text color={theme.green}>{fmtKMeasured(agent.tokensIn)}↓ {fmtKMeasured(agent.tokensOut)}↑</Text>
+        {showTokIn && <Text color={theme.green}>{tokInText}{showTokOut ? tokOutText : ''}</Text>}
       </Box>
     </Box>
   );

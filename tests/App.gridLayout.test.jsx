@@ -90,3 +90,30 @@ test('grid layout: cards render without truncation; overflow pages, never clips'
   );
   unmount();
 });
+
+// 0459: the real path — App computes cardW from the terminal width and hands
+// it to Card. ink-testing-library renders at a fixed 100 columns, where the
+// old MIN_CARD_W=20 packed the default 5-col grid into 4 × 24 and card rows
+// wrapped (the model/branch and vitals rows fell out of the 11-row box). Every
+// card on the pane must show each of its labelled rows exactly once, on one
+// line, and no card may be narrower than MIN_CARD_W.
+test('0459 grid layout: every visible card keeps each labelled row intact', async () => {
+  const { MIN_CARD_W } = await import('../tui/lib/gridLayout.js');
+  const fleet = new FakeFleet([1, 2, 3, 4, 5]);
+  const { lastFrame, unmount } = render(<App fleet={fleet} auth={{ ok: true, plan: 'mock', account: 'test', source: 'env' }} />);
+  await tick(); await tick(); await tick();
+  const frame = strip(lastFrame() || '');
+  const count = (re) => (frame.match(re) || []).length;
+  const cards = count(/\[\d+\] r-\d+ +○ IDLE/g);
+  assert.ok(cards >= 1, `at least one card on the pane:\n${frame}`);
+  assert.equal(count(/SONNET 4\.6 uuid-\d+ +⎇ main +●/g), cards, `model/branch row per card:\n${frame}`);
+  assert.equal(count(/ctx [│·]+ 1\.0k 0%/g), cards, `ctx row per card:\n${frame}`);
+  assert.equal(count(/tok\/min 0 /g), cards, `tok/min row per card:\n${frame}`);
+  assert.equal(count(/⟳0 [^│┃]*○\? [│┃]/g), cards, `vitals row per card:\n${frame}`);
+  assert.equal(count(/\$0\.01 ses +100↓ 50↑/g), cards, `foot row per card:\n${frame}`);
+  // Card width from the top border of the first card row.
+  const top = frame.split('\n').find((l) => /^[┏╭]/.test(l)) || '';
+  const firstW = top.search(/[┓╮]/) + 1;
+  assert.ok(firstW >= MIN_CARD_W, `card width ${firstW} < MIN_CARD_W ${MIN_CARD_W}`);
+  unmount();
+});

@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeGridLayout, chunkRows } from '../tui/lib/gridLayout.js';
+import { computeGridLayout, chunkRows, MIN_CARD_W } from '../tui/lib/gridLayout.js';
 
 // A roomy terminal that fits many rows: 200 rows ≈ 17 card rows of budget.
 const TALL = { termCols: 180, termRows: 200, gridCols: 5, fleetLogLines: 10 };
@@ -44,11 +44,31 @@ test('grid: short terminal caps perPage below windowsPerPane (never clips)', () 
 });
 
 test('grid: narrow terminal auto-reduces columns', () => {
-  const narrow = { termCols: 50, termRows: 200, gridCols: 5, fleetLogLines: 10 };
+  // 0459: MIN_CARD_W went 20 → 34, so the old 50-col case (2 × 24) is now a
+  // single column. 80 cols is the narrow case that still splits: (80-2)/34 = 2.
+  const narrow = { termCols: 80, termRows: 200, gridCols: 5, fleetLogLines: 10 };
   const l = computeGridLayout({ ...narrow, count: 10, windowsPerPane: 9, focusedIndex: 0 });
-  // (50-2)/20 = 2 cols fit.
   assert.equal(l.effectiveCols, 2);
-  assert.ok(l.cardW >= 20);
+  assert.ok(l.cardW >= MIN_CARD_W);
+  const tiny = computeGridLayout({ ...narrow, termCols: 50, count: 10, windowsPerPane: 9, focusedIndex: 0 });
+  assert.equal(tiny.effectiveCols, 1);
+  assert.ok(tiny.cardW >= MIN_CARD_W);
+});
+
+// 0459: at the default 5 columns no common terminal width may produce a card
+// narrower than MIN_CARD_W — that is where card rows used to wrap (120 cols
+// gave cardW 23). The grid drops a column instead.
+test('0459 grid: default 5-col grid never yields a card under MIN_CARD_W', () => {
+  assert.equal(MIN_CARD_W, 34);
+  for (let termCols = 36; termCols <= 260; termCols++) {
+    const l = computeGridLayout({ termCols, termRows: 200, gridCols: 5, count: 10, fleetLogLines: 10 });
+    assert.ok(l.cardW >= MIN_CARD_W, `termCols ${termCols}: cardW ${l.cardW} < ${MIN_CARD_W}`);
+    assert.ok(l.effectiveCols * l.cardW <= termCols - 2, `termCols ${termCols}: grid spills`);
+  }
+  const at = (termCols) => computeGridLayout({ termCols, termRows: 200, gridCols: 5, count: 10, fleetLogLines: 10 });
+  assert.deepEqual([at(120).effectiveCols, at(120).cardW], [3, 39]);
+  assert.deepEqual([at(80).effectiveCols, at(80).cardW], [2, 39]);
+  assert.deepEqual([at(180).effectiveCols, at(180).cardW], [5, 35]);
 });
 
 test('grid: zero cards → one empty pane, no divide-by-zero', () => {
@@ -100,4 +120,16 @@ test('0388: short terminal — fleet log clamps below the setting instead of ove
   const l = computeGridLayout({ termCols: 180, termRows: 30, gridCols: 5, count: 5, fleetLogLines: 40, windowsPerPane: 10, focusedIndex: 0 });
   assert.ok(l.dynamicFleetLogLines < 40, `clamped (got ${l.dynamicFleetLogLines})`);
   assert.ok(l.dynamicFleetLogLines >= 4, 'never below the settings-page minimum of 4');
+});
+
+// 0459 review: below MIN_CARD_W + 2 columns the single card used to keep the
+// 34-col floor and spill past the right edge. It now takes the terminal
+// width, down to the 20-col absolute floor (Card.jsx fits every row there).
+test('0459 grid: a terminal narrower than MIN_CARD_W never gets a wider card', () => {
+  for (let termCols = 22; termCols <= MIN_CARD_W + 2; termCols++) {
+    const l = computeGridLayout({ termCols, termRows: 200, gridCols: 5, count: 10, fleetLogLines: 10 });
+    assert.equal(l.effectiveCols, 1);
+    assert.equal(l.cardW, termCols - 2, `termCols ${termCols}: cardW ${l.cardW}`);
+  }
+  assert.equal(computeGridLayout({ termCols: 15, termRows: 200, gridCols: 5, count: 3, fleetLogLines: 10 }).cardW, 20);
 });

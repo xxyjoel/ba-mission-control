@@ -9,6 +9,12 @@
 // Claude agents never ship null, so their cards must stay byte-identical:
 // tests/fixtures/card-golden-0420.json was captured from the pre-0420 Card
 // with colour forced on, and every case is re-rendered and compared.
+//
+// 0459 deliberately changed one case, "zero-valued fresh session, focused,
+// narrow card" (cardWidth 30): its meta row read `HAIKU 4.5 aaaaaaaa  ⎇ ma…●`,
+// the branch cut to 3 cells and run into the clean-tree dot. The session-id
+// tag (lowest priority) now drops so the row reads `HAIKU 4.5  ⎇ main  …  ●`.
+// Every other case is unchanged.
 
 import './lib/force-color.js';
 import React from 'react';

@@ -13,7 +13,27 @@
 // instead of clipping the rows that don't fit, we page them.
 
 export const CARD_H = 11;         // must match Card.jsx height={11}
-export const MIN_CARD_W = 20;
+// 0459: was 20. At 20 the 5-col grid on a 120-col terminal gave cardW 23, and
+// at that width the ctx and tok/min rows wrapped and pushed the model/branch
+// tail and the vitals row out of the fixed 11-row card. Card.jsx now budgets
+// every row so nothing wraps at any width, but below 34 it has to drop real
+// data to do it (the STUCK minutes, the msgs count, the proc readout, tokens
+// out). 34 is the narrowest card (innerW 30) where every labelled row keeps
+// its figures: the full 14-cell ctx bar + `150.8k 15%`, tok/min + proc, the
+// ✉ count, both token totals. Below that the grid drops a column instead:
+// 120 cols → 3 × 39, 80 cols → 2 × 39, 180 cols → 5 × 35 (unchanged).
+export const MIN_CARD_W = 34;
+// 0459: the absolute floor — the narrowest card Card.jsx can lay out without
+// a row wrapping. Used only when the terminal itself is narrower than
+// MIN_CARD_W + 2.
+const MIN_CARD_W_ABS = 20;
+// TODO(0459): App.jsx's up/down handler (`const cols = Math.max(1,
+// Math.min(settings.gridCols, visList.length))`) steps by settings.gridCols,
+// not the columns the grid draws. With MIN_CARD_W 34 the default 5-col
+// setting draws 3 columns on a 120-col terminal, so down from card 0 lands on
+// card 4 instead of card 3. It should step by computeGridLayout(...)
+// .effectiveCols. App.jsx is another lane's file; follow-up recorded in the
+// 0459 Result.
 const HEADER_H = 1;
 const AGG_H = 1;
 // Most toasts App.jsx will keep alive at once — pushToast drops all but the
@@ -73,11 +93,16 @@ export function computeGridLayout({
   const trows = Number.isFinite(termRows) ? termRows : 50;
 
   // Column sizing — cap at gridCols, auto-reduce so cards never spill past the
-  // right edge at the 20-col minimum.
+  // right edge at the MIN_CARD_W minimum.
   const desiredCols = Math.max(1, Math.min(gridCols, n || 1));
   const colsThatFit = Math.max(1, Math.floor((cols - 2) / MIN_CARD_W));
   const effectiveCols = Math.min(desiredCols, colsThatFit);
-  const cardW = Math.max(MIN_CARD_W, Math.floor((cols - 2) / effectiveCols));
+  // 0459: the floor is MIN_CARD_W only while the terminal can hold it. On a
+  // terminal narrower than MIN_CARD_W + 2 the single card takes the terminal
+  // width instead (Card.jsx fits every row down to cardWidth 20), so it never
+  // spills past the right edge. 20 stays the absolute floor, as before 0459.
+  const floorW = clamp(cols - 2, MIN_CARD_W_ABS, MIN_CARD_W);
+  const cardW = Math.max(floorW, Math.floor((cols - 2) / effectiveCols));
 
   // Vertical budget — reserve the pager strip unconditionally so single-page
   // vs. multi-page don't reflow the fleet log when a pane boundary is crossed.
