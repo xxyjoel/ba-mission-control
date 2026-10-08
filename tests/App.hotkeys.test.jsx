@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { render } from 'ink-testing-library';
 import { EventEmitter } from 'node:events';
 import App from '../tui/App.jsx';
+import { setQuitMode, getQuitMode } from '../tui/lib/sessionStore.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 30));
 async function press(stdin, key) {
@@ -115,19 +116,39 @@ test('hotkey: q opens QuitConfirm (does NOT exit immediately)', async () => {
   unmount();
 });
 
-test('hotkey: q then q is quit-no-save (second q aliases [d])', async () => {
+// 0456: owner decision 2026-10-08 — q then q quits and SAVES (same as [s]).
+// Discard is [d] only. The store is pre-set to the opposite mode so a key the
+// modal ignored cannot pass by accident (setQuitMode defaults to 'save').
+test('hotkey: q then q is save & quit (second q aliases [s]) (0456)', async () => {
+  setQuitMode('clear');
   const { stdin, lastFrame, unmount } = mount();
-  await tick(); await tick();
-  await press(stdin, 'q');
-  assert.match(strip(lastFrame()), /Quit mc\?/);
-  await press(stdin, 'q');
-  await tick();
-  // Ink testing library does not fully tear down useApp().exit(); the modal
-  // must at least have accepted the key (frame no longer QuitConfirm, or exit
-  // was requested). Accept either: gone modal or empty after exit.
-  const frame = strip(lastFrame() || '');
-  assert.doesNotMatch(frame, /\[n\] cancel/);
-  unmount();
+  try {
+    await tick(); await tick();
+    await press(stdin, 'q');
+    assert.match(strip(lastFrame()), /Quit mc\?/);
+    await press(stdin, 'q');
+    await tick();
+    assert.equal(getQuitMode(), 'save', 'second q must quit in save mode');
+  } finally {
+    unmount();
+    setQuitMode('save'); // 0456: reset even when an assertion fails
+  }
+});
+
+test('hotkey: q then d is quit-no-save (discard is [d] only) (0456)', async () => {
+  setQuitMode('save');
+  const { stdin, lastFrame, unmount } = mount();
+  try {
+    await tick(); await tick();
+    await press(stdin, 'q');
+    assert.match(strip(lastFrame()), /Quit mc\?/);
+    await press(stdin, 'd');
+    await tick();
+    assert.equal(getQuitMode(), 'clear', '[d] must quit in clear (no-save) mode');
+  } finally {
+    unmount();
+    setQuitMode('save'); // 0456: reset even when an assertion fails
+  }
 });
 
 test('hotkey: n opens NewSession', async () => {
