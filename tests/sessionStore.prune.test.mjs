@@ -29,21 +29,36 @@ function seed(bySlot) {
     JSON.stringify({ version: 2, savedAt: 2000, bySlot, history: [] }));
 }
 
-test('prune: drops out-of-range slots and dedupes same-repo records', () => {
+test('prune: drops out-of-range slots, dedupes same-repo, and strips live=false', () => {
   seed({
-    2:  rec('/repo/forge', UU(1), { live: false, lastSeen: 500 }),   // stale forge dupe
+    2:  rec('/repo/forge', UU(1), { live: false, lastSeen: 500 }),   // closed — strip
     10: rec('/repo/forge', UU(2), { live: true, lastSeen: 900 }),    // live forge — wins
     13: rec('/repo/central', UU(3), { live: true }),                 // slot > fleet size
     4:  rec('/repo/caliper', UU(4), { live: true }),
+    5:  rec('/repo/old', UU(5), { live: false, lastSeen: 100 }),     // closed unrelated
   });
-  const { dropped, deduped } = pruneSessions({ maxSlots: 10 });
+  const { dropped, deduped, closed } = pruneSessions({ maxSlots: 10 });
   assert.equal(dropped, 1, 'slot 13 dropped (exceeds fleet size)');
   assert.equal(deduped, 1, 'one forge dupe removed');
+  assert.equal(closed, 1, 'slot 5 live=false stripped (slot 2 already gone via dedupe)');
   const store = loadSessions();
   assert.equal(store.bySlot[2], undefined, 'stale forge dupe gone');
   assert.ok(store.bySlot[10], 'live forge kept');
   assert.equal(store.bySlot[13], undefined);
-  assert.ok(store.bySlot[4], 'unrelated record untouched');
+  assert.ok(store.bySlot[4], 'unrelated live record untouched');
+  assert.equal(store.bySlot[5], undefined, 'closed record stripped from bySlot');
+});
+
+test('prune: strips live=false so bySlot matches the resume-all open set', () => {
+  seed({
+    1: rec('/repo/a', UU(9), { live: true }),
+    2: rec('/repo/b', UU(8), { live: false }),
+  });
+  const { closed } = pruneSessions({ maxSlots: 10 });
+  assert.equal(closed, 1);
+  const store = loadSessions();
+  assert.ok(store.bySlot[1]);
+  assert.equal(store.bySlot[2], undefined);
 });
 
 test('prune: two LIVE records on the same repo are a dual-session — both kept', () => {

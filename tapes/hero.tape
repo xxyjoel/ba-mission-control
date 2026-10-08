@@ -14,7 +14,7 @@ Set Framerate 24
 Set PlaybackSpeed 1.0
 
 # Launch against a mock fixture (see server/fixtures/).
-Type "MC_MOCK=quick-reply npm start"
+Type "MC_CONFIG_DIR=/tmp/mc-demo/config MC_MOCK=quick-reply npm start"
 Enter
 Sleep 4s
 
@@ -24,13 +24,13 @@ Sleep 4s
 # claude subprocess.
 Type "n"
 Sleep 800ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 500ms
 Enter
 Sleep 3s
 Type "n"
 Sleep 800ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 500ms
 Enter
 Sleep 3s

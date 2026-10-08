@@ -20,24 +20,24 @@ Enter
 Show
 
 # ── Phase 1: populate the fleet (3 mock sessions) ──
-Type "MC_MOCK=quick-reply npm start"
+Type "MC_CONFIG_DIR=/tmp/mc-demo/config MC_MOCK=quick-reply npm start"
 Enter
 Sleep 4s
 Type "n"
 Sleep 700ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 400ms
 Enter
 Sleep 2500ms
 Type "n"
 Sleep 700ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 400ms
 Enter
 Sleep 2500ms
 Type "n"
 Sleep 700ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 400ms
 Enter
 Sleep 3s
@@ -49,7 +49,7 @@ Type "s"
 Sleep 2s
 
 # ── Phase 2: relaunch — empty grid + "saved sessions · :resume-all" hint ──
-Type "MC_MOCK=quick-reply npm start"
+Type "MC_CONFIG_DIR=/tmp/mc-demo/config MC_MOCK=quick-reply npm start"
 Enter
 Sleep 4s
 

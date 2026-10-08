@@ -327,10 +327,15 @@ export function syncFromSnapshot(agents, { historyLimit = 20 } = {}) {
 //      loser is deleted from bySlot (history keeps the breadcrumb).
 //      EXCEPTION: two records BOTH live===true are a legitimate dual-session
 //      repo (both open at last close) — never dedupe those.
-// Returns { dropped, deduped } for the boot log/toast.
+//   3. Drop live===false records from bySlot. Those are deliberately closed
+//      (killed / forgotten mid-run); keeping them made `:sessions` and the
+//      on-disk map disagree with what `:resume-all` restores. History still
+//      holds the breadcrumb. Mid-run, a just-killed slot stays until the next
+//      boot so `:resume <slot>` can still recover a crash in the same session.
+// Returns { dropped, deduped, closed } for the boot log/toast.
 export function pruneSessions({ maxSlots = 10 } = {}) {
   const store = loadSessions();
-  let dropped = 0, deduped = 0;
+  let dropped = 0, deduped = 0, closed = 0;
   for (const slot of Object.keys(store.bySlot)) {
     const n = parseInt(slot, 10);
     if (!(n >= 1 && n <= maxSlots)) { delete store.bySlot[slot]; dropped++; }
@@ -350,8 +355,14 @@ export function pruneSessions({ maxSlots = 10 } = {}) {
     }
     deduped++;
   }
-  if (dropped || deduped) persist(store);
-  return { dropped, deduped };
+  for (const slot of Object.keys(store.bySlot)) {
+    if (store.bySlot[slot]?.live === false) {
+      delete store.bySlot[slot];
+      closed++;
+    }
+  }
+  if (dropped || deduped || closed) persist(store);
+  return { dropped, deduped, closed };
 }
 
 export function getResumeRecord(slot) {

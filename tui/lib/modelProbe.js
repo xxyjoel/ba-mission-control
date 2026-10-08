@@ -359,7 +359,13 @@ export function applyCacheToCatalog(models, cache) {
     if (knownId) {
       const m = models[knownId];
       if (contextWindow && m.maxCtx !== contextWindow) { m.maxCtx = contextWindow; }
-      if (maxOut) m.maxOut = maxOut;
+      // `maxOutputTokens` in the probe is what THIS claude run was configured
+      // to emit, not what the model can emit. Probing `opus` on CLI 2.1.273
+      // reports 64000 for claude-opus-5, whose cap is 128000 — so writing it
+      // over maxOut halved the catalog's figure every time the probe ran, and
+      // nothing said the number had changed. Keep the model cap; park the
+      // session limit beside it under its real name.
+      if (maxOut) m.sessionMaxOut = maxOut;
       if (!out.updated.includes(knownId)) out.updated.push(knownId);
       continue;
     }
@@ -374,7 +380,11 @@ export function applyCacheToCatalog(models, cache) {
       cliModel,
       kind,
       maxCtx: contextWindow || (sibling ? sibling.maxCtx : 200000),
-      maxOut: maxOut || (sibling ? sibling.maxOut : undefined),
+      // A model we have never seen has no published cap to fall back on, so
+      // the sibling's is the best available — and the probe's session limit
+      // is recorded separately rather than posing as the cap.
+      maxOut: sibling ? sibling.maxOut : undefined,
+      sessionMaxOut: maxOut || undefined,
       costPerMTokIn: sibling ? sibling.costPerMTokIn : 0,
       costPerMTokOut: sibling ? sibling.costPerMTokOut : 0,
       costPerMTokCacheCreation: sibling ? sibling.costPerMTokCacheCreation : 0,

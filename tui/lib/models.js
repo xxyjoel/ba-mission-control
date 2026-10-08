@@ -35,6 +35,21 @@
 // NEW MODELS ARE ideally discovered (Models API / alias probe). Hand-add when
 // the CLI login has no API credential AND the alias probe cannot see a family
 // (or when a release is public before the next claude-code cask ships it).
+//
+// ── Which of these numbers are typed, and which are read ──────────────────
+// Typed by hand, and nothing checks them:
+//   costPerMTokIn / Out / CacheCreation / CacheRead — Anthropic's
+//   `GET /v1/models` returns ids and display names, NO prices. There is no
+//   feed to read, so these are transcribed from published rates and go stale
+//   silently. PRICING_CHECKED below is the only signal of their age.
+//   maxOut — the model's output cap is not published in any feed either. The
+//   alias probe's `maxOutputTokens` is the CLI's per-run limit, a different
+//   number, and overwriting maxOut with it was halving the figure on every
+//   probe (see modelProbe.applyCacheToCatalog).
+// Read live, and corrected on every probe:
+//   maxCtx — the probe reports the model's real contextWindow.
+//   cliModel / label for a model this file has never seen — the probe and the
+//   Models API sync add the entry themselves.
 export const MODELS = {
   'opus-5.5':   { label: 'OPUS 5.5',   cliModel: 'claude-opus-5-5',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 4,  costPerMTokOut: 20, costPerMTokCacheCreation: 5,     costPerMTokCacheRead: 0.4 },
   'opus-5':     { label: 'OPUS 5',     cliModel: 'claude-opus-5',             kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
@@ -47,6 +62,21 @@ export const MODELS = {
   'sonnet-4.6': { label: 'SONNET 4.6', cliModel: 'claude-sonnet-4-6',         kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
   'haiku-4.5':  { label: 'HAIKU 4.5',  cliModel: 'claude-haiku-4-5-20251001', kind: 'haiku',  maxCtx: 200000,  maxOut: 64000,  costPerMTokIn: 1,  costPerMTokOut: 5,  costPerMTokCacheCreation: 1.25,  costPerMTokCacheRead: 0.1 },
 };
+// PRICING_CHECKED — the day a person last compared the rates above against
+// Anthropic's published prices. Bump it when you check them, not when you edit
+// an unrelated field. No feed can verify these, so the age of this date is the
+// only honest measure of how much to trust a cost figure.
+export const PRICING_CHECKED = '2026-09-24';
+
+// pricingAgeDays — how stale the hand-entered rates are, for a caller that
+// wants to say so. Returns null if the date is unparseable rather than
+// reporting a confident zero.
+export function pricingAgeDays(now = Date.now()) {
+  const t = Date.parse(`${PRICING_CHECKED}T00:00:00Z`);
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.floor((now - t) / 86_400_000));
+}
+
 // Sonnet 5 has an introductory rate ($2/$10 per MTok through 2026-08-31); we use
 // the standard $3/$15 so the cost display doesn't jump when intro pricing ends.
 // `:model refresh` re-runs the CLI probe per alias and overlays the live

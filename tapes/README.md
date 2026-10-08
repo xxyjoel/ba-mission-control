@@ -33,6 +33,26 @@ spawning a real `claude` subprocess, so recordings:
 - are **deterministic** (identical frames each run),
 - can run in CI.
 
+## The demo environment
+
+Every tape launches with `MC_CONFIG_DIR=/tmp/mc-demo/config` and opens
+`/tmp/mc-demo/acme-web`. Both matter:
+
+- **Config.** Without the override, mc reads the operator's real
+  `~/.config/claude-mc/` and the header publishes their actual weekly spend
+  and plan usage into a GIF that ships on npm. Measured 2026-09-25: a
+  recording made without it showed `cost-week $1539.37/$250`.
+- **Workspace.** The card is named after its directory. `~` names it after
+  your home folder, which reads as `Applications` on macOS.
+
+Create both before recording:
+
+```sh
+mkdir -p /tmp/mc-demo/config /tmp/mc-demo/acme-web
+git -C /tmp/mc-demo/acme-web init -b main && \
+  git -C /tmp/mc-demo/acme-web commit --allow-empty -m init
+```
+
 ## Calibration
 
 Timings (`Sleep`, `@800ms`) are a starting point. On first render, watch the

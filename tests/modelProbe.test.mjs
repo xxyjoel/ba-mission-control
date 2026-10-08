@@ -59,12 +59,19 @@ test('deriveFriendlyId: claude- prefix stripped, dashes → dots, date dropped',
 
 test('applyCacheToCatalog: updates maxCtx of a KNOWN model by cliModel', () => {
   const models = {
-    'opus-4.8': { label: 'OPUS 4.8', cliModel: 'claude-opus-4-8', kind: 'opus', maxCtx: 200000, costPerMTokIn: 15, costPerMTokOut: 75 },
+    'opus-4.8': { label: 'OPUS 4.8', cliModel: 'claude-opus-4-8', kind: 'opus', maxCtx: 200000, maxOut: 128000, costPerMTokIn: 15, costPerMTokOut: 75 },
   };
   const cache = { fetchedAt: 1, models: { opus: { cliModel: 'claude-opus-4-8', contextWindow: 1000000, maxOut: 64000 } } };
   const res = applyCacheToCatalog(models, cache);
   assert.equal(models['opus-4.8'].maxCtx, 1000000, 'maxCtx overlaid from probe');
-  assert.equal(models['opus-4.8'].maxOut, 64000);
+  // The probe's maxOutputTokens is what the CLI was configured to emit on that
+  // run, not the model's cap. This test used to demand it overwrite maxOut,
+  // which pinned a real bug: probing `opus` on CLI 2.1.273 reports 64000 for a
+  // model capped at 128000, so every probe halved the catalog's figure and
+  // nothing reported the change. The cap survives; the run limit is kept
+  // separately, under a name that says what it is.
+  assert.equal(models['opus-4.8'].maxOut, 128000, 'model cap is not clobbered by the run limit');
+  assert.equal(models['opus-4.8'].sessionMaxOut, 64000, 'run limit kept, named honestly');
   assert.deepEqual(res.updated, ['opus-4.8']);
   assert.deepEqual(res.added, []);
 });

@@ -44,7 +44,7 @@ import { computeGridLayout, chunkRows, MAX_TOAST_ROWS } from './lib/gridLayout.j
 import { zoomBodyDims, zoomModalWidth } from './lib/zoomGeometry.js';
 import { normalizeTypedText } from './lib/typedText.js';
 import { CostStore } from './lib/costStore.js';
-import { syncFromSnapshot, getResumeRecord, listResumeRecords, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
+import { syncFromSnapshot, getResumeRecord, listOpenResumeRecords, clearResumeRecord, listHistory, setQuitMode } from './lib/sessionStore.js';
 import { getTemplate, listTemplates, templateSessionProvider } from './lib/templateStore.js';
 import { probeAuth, authSummary } from './lib/auth.js';
 import { versionLine, VERSION } from './lib/version.js';
@@ -1266,7 +1266,7 @@ export default function App({
         const tokens = (arg || '')
           .split(/[\s,]+/)
           .map(s => parseInt(s, 10))
-          .filter(n => n >= 1 && n <= 10);
+          .filter(n => n >= 1 && n <= (settings.maxSlots || 10));
         if (tokens.length === 0) {
           // Bare verb: un-pause the focused live session…
           if (focusedAgent && focusedAgent.status !== 'empty') {
@@ -1340,19 +1340,22 @@ export default function App({
         return null;
       }
       case 'forget': {
+        const max = settings.maxSlots || 10;
         const n = parseInt(arg, 10);
-        if (!(n >= 1 && n <= 10)) { pushToast(`forget <slot 1-10>`, 'warn'); return null; }
+        if (!(n >= 1 && n <= max)) { pushToast(`forget <slot 1-${max}>`, 'warn'); return null; }
         clearResumeRecord(n);
         pushToast(`forgot saved session for slot ${n}`, 'ok');
         return null;
       }
       case 'sessions':
       case 'ls': {
-        const recs = listResumeRecords();
-        if (recs.length === 0) { pushToast(`no saved sessions`, 'info'); return null; }
-        for (const r of recs.slice(0, 4)) {
+        // Same set `:resume-all` restores — not every bySlot leftover.
+        const recs = listOpenResumeRecords();
+        if (recs.length === 0) { pushToast(`no saved sessions for resume-all`, 'info'); return null; }
+        for (const r of recs.slice(0, 6)) {
           pushToast(`[${r.slot}] ${r.name} · ${r.branch} · ${r.model}`, 'info');
         }
+        if (recs.length > 6) pushToast(`… +${recs.length - 6} more · :resume-all`, 'info');
         return null;
       }
       case 'help':

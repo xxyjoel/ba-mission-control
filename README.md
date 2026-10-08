@@ -432,8 +432,8 @@ running session still resumes the conversation.
 | `:resume-all` | Restart the slots that were **open when mc last closed**. After a *save* quit each is rehydrated via `claude --resume` (conversation + totals restored); after any non-save exit each reopens **fresh** in its repo. The toast reports `resuming N · M fresh`. Killed/closed slots are excluded. On boot, a toast surfaces this if records exist. |
 | `:resume <slot> [slot ...]` | Restore **specific** slots — e.g. `:resume 1 3 5` or `:resume 1,3,5`. Bare `:resume` resumes (SIGCONT) the focused **live** session — the pair to `:pause` — or, when the focused slot is empty, restores that slot's saved record. |
 | `:history [n]` | **View-only** browse of the last N sessions for historical reference. Never bulk-restores (by design). |
-| `:sessions` (alias `:ls`) | List saved sessions (`bySlot`) for the current resumable set. |
-| `:forget <slot>` | Drop one slot's saved state. |
+| `:sessions` (alias `:ls`) | List the sessions that were open at last close — the set `:resume-all` restores. |
+| `:forget <slot>` | Drop one slot from the `:resume-all` set. |
 
 Configurable in Settings → GENERAL:
 

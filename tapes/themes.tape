@@ -11,7 +11,7 @@ Set Height 760
 Set Padding 16
 Set Framerate 24
 
-Type "MC_MOCK=quick-reply npm start"
+Type "MC_CONFIG_DIR=/tmp/mc-demo/config MC_MOCK=quick-reply npm start"
 Enter
 Sleep 4s
 
@@ -19,13 +19,13 @@ Sleep 4s
 # "~" gives the NewSession modal a valid dir to launch (cwd cosmetic under MC_MOCK).
 Type "n"
 Sleep 800ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 500ms
 Enter
 Sleep 2s
 Type "n"
 Sleep 800ms
-Type "~"
+Type "/tmp/mc-demo/acme-web"
 Sleep 500ms
 Enter
 Sleep 2s
