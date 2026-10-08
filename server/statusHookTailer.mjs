@@ -43,6 +43,7 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
   let stopped = false;
   let watcher = null;
   let creationPollTimer = null;
+  let awaitingCreate = false; // 0465: drive:'external' — tick() runs the creation check
   let statPollTimer = null;
   let readingLock = false;
 
@@ -63,6 +64,10 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     filePath = nextPath;
     core = createReadCore(filePath);
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+    // TODO(0465): under drive:'self' a pending pollCreate is not cancelled here;
+    // if this attach succeeds, that timer's later attachWatcher() overwrites
+    // `watcher` and this one is never closed (pre-existing; external drive is
+    // safe — tick() attaches only while !watcher).
     attachWatcher(); // failure is fine — the stat-poll backstop covers creation
   }
 
@@ -167,17 +172,23 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     // Creation poll with backoff: the status NDJSON only appears on the first
     // hook event, so an unprompted slot would otherwise poll 2×/s forever.
     // Fast for ~10s, then 2s (creationPollDelay — shared with sessionFileTailer).
-    let creationAttempts = 0;
-    const pollCreate = () => {
-      if (stopped) return;
-      if (attachWatcher()) {
-        creationPollTimer = null;
-        doRead();
-        return;
-      }
-      creationPollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
-    };
-    creationPollTimer = setTimeout(pollCreate, creationPollDelay(0));
+    // 0465: under drive:'external' the Fleet tick runs the check instead — no
+    // per-slot timer (was 2 per never-prompted slot, 20 at 10).
+    if (drive === 'external') {
+      awaitingCreate = true;
+    } else {
+      let creationAttempts = 0;
+      const pollCreate = () => {
+        if (stopped) return;
+        if (attachWatcher()) {
+          creationPollTimer = null;
+          doRead();
+          return;
+        }
+        creationPollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
+      };
+      creationPollTimer = setTimeout(pollCreate, creationPollDelay(0));
+    }
   }
 
   // Stat-poll backstop: fs.watch silently never fires on many cloud-synced
@@ -194,11 +205,15 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     // 0381: one externally-driven backstop pass (drive: 'external').
     tick() {
       if (stopped) return;
+      // 0465: the creation check, folded into the shared tick. A failed attach
+      // still reads: doRead() returns [] on ENOENT and repoints a rotated sid.
+      if (awaitingCreate && !watcher && attachWatcher()) awaitingCreate = false;
       doRead();
     },
     stop() {
       if (stopped) return; // idempotent
       stopped = true;
+      awaitingCreate = false;
       if (watcher) {
         try { watcher.close(); } catch {}
         watcher = null;

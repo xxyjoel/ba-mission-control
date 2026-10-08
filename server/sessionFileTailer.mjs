@@ -232,6 +232,10 @@ export function startSessionTailer({
   let watcher = null;
   let pollTimer = null;
   let statPollTimer = null;       // 0179: cloud-path backstop
+  // 0465: drive:'external' — set once init() finds no file; tick() then runs
+  // the creation check instead of a per-slot setTimeout chain. Set only inside
+  // init's no-file branch so an early tick() can't attach before init does.
+  let awaitingCreate = false;
   let offset = 0;
   let buffer = '';
   let readingLock = false; // serialize concurrent reads on rapid appends
@@ -540,6 +544,11 @@ export function startSessionTailer({
     let nextPath;
     try { nextPath = claudeSessionPath({ cwd: agent.cwd, sessionId: sid }); } catch { return; }
     path = nextPath;
+    // 0465: the re-point attaches its own watcher (or the tick reads the new
+    // path); a pending creation check must not attach a second one later.
+    // TODO(0465): the self-driven pollCreate chain is not cancelled here, so a
+    // re-point before the pinned file appears can leak one watcher (pre-existing).
+    awaitingCreate = false;
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
     offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0; lastHuntDirMtime = 0;
     await primeSessionStartedAt();   // 0416/6: new transcript, new record 0
@@ -548,6 +557,17 @@ export function startSessionTailer({
     offset = primedTo != null ? primedTo : 0;
     attachWatcher();
     await readNew();
+  }
+
+  // The creation check shared by the self-driven poll and tick() (0465).
+  function tryAttachCreated() {
+    if (!attachWatcher()) return false;
+    awaitingCreate = false;
+    // The file did not exist at attach, so the head read returned null.
+    // It exists now — read record 0 or the slot stays ageless for life.
+    primeSessionStartedAt();
+    readNew();
+    return true;
   }
 
   async function init() {
@@ -582,20 +602,22 @@ export function startSessionTailer({
       // Fast (500ms) for the first ~10s, then 2s: claude doesn't write the
       // JSONL until the first user message commits, so an unprompted slot
       // would otherwise poll 2×/s for its whole life (creationPollDelay).
-      let creationAttempts = 0;
-      const pollCreate = () => {
-        if (stopped) return;
-        if (attachWatcher()) {
-          pollTimer = null;
-          // The file did not exist at attach, so the head read returned null.
-          // It exists now — read record 0 or the slot stays ageless for life.
-          primeSessionStartedAt();
-          readNew();
-          return;
-        }
-        pollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
-      };
-      pollTimer = setTimeout(pollCreate, creationPollDelay(0));
+      // 0465: under drive:'external' the Fleet tick runs tryAttachCreated()
+      // instead — no per-slot timer (was 2 per never-prompted slot, 20 at 10).
+      if (drive === 'external') {
+        awaitingCreate = true;
+      } else {
+        let creationAttempts = 0;
+        const pollCreate = () => {
+          if (stopped) return;
+          if (tryAttachCreated()) {
+            pollTimer = null;
+            return;
+          }
+          pollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
+        };
+        pollTimer = setTimeout(pollCreate, creationPollDelay(0));
+      }
     } else {
       // Watcher attached on an existing file — kick a first read in
       // case the PTY child appended between our stat and our watch.
@@ -624,6 +646,7 @@ export function startSessionTailer({
     path,
     stop() {
       stopped = true;
+      awaitingCreate = false;
       if (watcher) {
         try { watcher.close(); } catch {}
         watcher = null;
@@ -641,6 +664,10 @@ export function startSessionTailer({
     // as the self-owned interval; safe to call on a stopped tailer.
     tick() {
       if (stopped) return;
+      // 0465: the creation check, folded into the shared tick. It reads on
+      // attach; otherwise fall through so the rotation hunt still runs (claude
+      // may never write the pinned sid's file and mint its own instead).
+      if (awaitingCreate && tryAttachCreated()) return;
       readNew();
       maybeRepoint();
     },
