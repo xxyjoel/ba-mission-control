@@ -481,8 +481,9 @@ export default function App({
       const anyLive = snap.agents.some(a => a.status !== 'empty');
       if (anyLive) return;
       if (settings.autoResumeOnStart) {
-        const { scheduled, total } = resumeAllSessions(snap.agents);
-        pushToast(`auto-resuming ${scheduled}/${total} saved session${total === 1 ? '' : 's'}`, scheduled ? 'ok' : 'info');
+        const { scheduled, total, blocked } = resumeAllSessions(snap.agents);
+        // 0447: when blocked the budget toast already says why.
+        if (!blocked) pushToast(`auto-resuming ${scheduled}/${total} saved session${total === 1 ? '' : 's'}`, scheduled ? 'ok' : 'info');
       } else {
         pushToast(`${recs.length} saved session${recs.length === 1 ? '' : 's'} — :resume-all to restore`, 'info');
       }
@@ -517,6 +518,28 @@ export default function App({
     // through would render rows nothing budgeted for, which pushes the frame
     // past the last screen row and tears the view.
     setToasts(prev => [...prev.slice(-(MAX_TOAST_ROWS - 1)), { id, kind, text, expiresAt }]);
+  };
+
+  // 0447: the ONE fleet-wide daily-budget gate. Every path that starts a
+  // claude — launchSession, launchFromRecord (:resume, multi-restore,
+  // :resume-all, boot auto-resume), :clear/:restart and :cr — calls this
+  // first. Before 0447 only launchSession checked, so the others spent past
+  // the budget. Reads settings through a ref so a delayed launch (resume-all
+  // stagger, :cr after the summary) sees the CURRENT budget, not the one in
+  // the closure that scheduled it. Existing sessions keep running; this only
+  // blocks NEW work. :budget 0 disables. Returns true (and toasts) when blocked.
+  const budgetSettingsRef = useRef(settings);
+  budgetSettingsRef.current = settings;
+  const budgetBlocked = () => {
+    const budget = budgetSettingsRef.current.dailyBudgetUSD || 0;
+    if (!(budget > 0)) return false;
+    const spent = costStoreRef.current.dayCost();
+    if (spent < budget) return false;
+    pushToast(
+      `daily budget reached · $${spent.toFixed(2)} / $${budget.toFixed(2)} · :budget <usd> to raise`,
+      'error',
+    );
+    return true;
   };
 
   // ── Cost store wiring ───────────────────────────────────
@@ -985,6 +1008,9 @@ export default function App({
           pushToast(`no live session focused`, 'warn');
           return null;
         }
+        // 0447: check BEFORE the kill — over budget, keep the session we
+        // could not replace instead of killing it and refusing the relaunch.
+        if (budgetBlocked()) return null;
         const cfg = {
           slot: target.slot,
           cwd: target.cwd,
@@ -1044,6 +1070,8 @@ export default function App({
         if (refusedFor(target, 'compact')) return null;
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
+        // 0447: over budget, don't spend a summary turn on a relaunch we'd refuse.
+        if (budgetBlocked()) return null;
         const cfg = {
           slot: target.slot,
           cwd: target.cwd,
@@ -1075,6 +1103,12 @@ export default function App({
           if (!reply) return;
           clearInterval(poll);
           const summary = reply.text;
+          // 0447: re-check at relaunch time (budget may have been crossed
+          // while waiting); refuse before the kill so the session survives.
+          if (budgetBlocked()) {
+            pushToast(`compact-restart abandoned · slot ${cfg.slot} kept running, summary discarded`, 'warn');
+            return;
+          }
           try { fleet.kill(target.id); } catch {}
           setTimeout(() => {
             try {
@@ -1288,17 +1322,23 @@ export default function App({
           return null;
         }
         // Multi-restore: iterate, skip slots in use or without records.
-        let resumed = 0, fresh = 0, skipped = 0, missing = 0;
+        let resumed = 0, fresh = 0, skipped = 0, missing = 0, blocked = false;
         for (const slot of tokens) {
           const rec = getResumeRecord(slot);
           if (!rec) { missing++; continue; }
           if (agents.find(a => a.slot === slot && a.status !== 'empty')) { skipped++; continue; }
           try {
-            if (launchFromRecord(slot, rec) === 'fresh') fresh++; else resumed++;
+            const how = launchFromRecord(slot, rec);
+            // 0447: over budget — the rest would be refused too; one toast is
+            // enough. dayCost() can't move inside this synchronous loop, so a
+            // refusal only ever happens on the first launch attempted.
+            if (how === 'blocked') { blocked = true; break; }
+            if (how === 'fresh') fresh++; else resumed++;
           } catch (e) {
             pushToast(`slot ${slot} failed: ${e?.message || String(e)}`, 'warn');
           }
         }
+        if (blocked) return null; // 0447: budget toast says it all; nothing launched
         const parts = [`resumed ${resumed + fresh}/${tokens.length}`];
         if (fresh) parts.push(`${fresh} fresh`);
         if (skipped) parts.push(`${skipped} skipped (in use)`);
@@ -1310,8 +1350,9 @@ export default function App({
         // Restart the sessions open at last close (the open-set in bySlot).
         // Cold starts are staggered (broadcastStaggerMs) to avoid opening every
         // streaming connection at once.
-        const { scheduled, skipped, total, counts } = resumeAllSessions(agents);
+        const { scheduled, skipped, total, counts, blocked } = resumeAllSessions(agents);
         if (total === 0) { pushToast(`no saved sessions to resume`, 'info'); return null; }
+        if (blocked) return null; // 0447: budget toast already shown
         const parts = [`resuming ${scheduled}/${total}`];
         if (counts?.fresh) parts.push(`${counts.fresh} fresh`);
         if (skipped) parts.push(`${skipped} skipped (slot in use)`);
@@ -1953,19 +1994,8 @@ export default function App({
 
   const launchSession = (payload) => {
     try {
-      // Fleet-wide daily budget guardrail — refuse new launches once
-      // today's spend exceeds the configured budget. Existing sessions
-      // keep running; this only blocks NEW work that would compound the
-      // overage. Bypass with :budget 0 to disable.
-      const budget = settings.dailyBudgetUSD || 0;
-      const spent = costStoreRef.current.dayCost();
-      if (budget > 0 && spent >= budget) {
-        pushToast(
-          `daily budget reached · $${spent.toFixed(2)} / $${budget.toFixed(2)} · :budget <usd> to raise`,
-          'error',
-        );
-        return;
-      }
+      // Fleet-wide daily budget guardrail (0447: shared gate, see budgetBlocked).
+      if (budgetBlocked()) return;
 
       let { slot, repoPath, branch, model, permissionMode, prompt } = payload;
       const provider = providerOf(payload);
@@ -2051,8 +2081,10 @@ export default function App({
   //   - location-only ("fresh") record → fleet.launch a brand-new session in
   //     the repo, no history, totals at 0. This is what every non-save exit
   //     (don't-save, terminal close, crash) leaves behind.
-  // Returns 'resumed' | 'fresh'. Throws on launch failure.
+  // Returns 'resumed' | 'fresh' | 'blocked' (0447: daily budget reached —
+  // budgetBlocked already toasted). Throws on launch failure.
   const launchFromRecord = (slot, rec) => {
+    if (budgetBlocked()) return 'blocked';
     // 0365: identity trail — every record→slot mapping is logged so a future
     // crossover (wrong repo/sid landing on a slot) leaves evidence. The 2026-08-09
     // incident was undiagnosable because MC_DEBUG was off and no path logged this.
@@ -2091,6 +2123,7 @@ export default function App({
   const resumeSession = (slot, rec) => {
     try {
       const how = launchFromRecord(slot, rec);
+      if (how === 'blocked') return; // 0447: budget toast already shown
       setModal(null);
       setNewSlot(null);
       setFocusedSlot(slot);
@@ -2123,10 +2156,15 @@ export default function App({
     // Planned fresh vs. resumed split, computed up-front so the toast is accurate
     // even though the actual launches are staggered (and thus async).
     const plannedFresh = toResume.filter(r => r.fresh || !r.sessionId).length;
+    // 0447: the budget gate runs inside EACH delayed launch (launchFromRecord),
+    // so a budget crossed mid-stagger stops the rest. After the first refusal
+    // the remaining launches are dropped quietly — one budget toast, not N.
+    let refused = false;
     toResume.forEach((r, i) => {
       const doResume = () => {
+        if (refused) return;
         try {
-          launchFromRecord(r.slot, r);
+          if (launchFromRecord(r.slot, r) === 'blocked') refused = true;
         } catch (e) {
           pushToast(`slot ${r.slot} failed: ${e?.message || String(e)}`, 'warn');
         }
@@ -2134,7 +2172,9 @@ export default function App({
       if (gap === 0 || i === 0) doResume();
       else setTimeout(doResume, gap * i);
     });
-    return { scheduled: toResume.length, skipped, total: recs.length, counts: { fresh: plannedFresh } };
+    // `blocked`: the first (synchronous) launch was refused by the budget gate,
+    // so nothing will start — callers skip their "resuming N" toast (0447).
+    return { scheduled: toResume.length, skipped, total: recs.length, counts: { fresh: plannedFresh }, blocked: refused };
   };
 
   const sendOne = (text, id) => {
