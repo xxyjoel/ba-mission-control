@@ -2401,7 +2401,8 @@ export default function App({
   // Card width fills the terminal evenly across however many are live,
   // capped at settings.gridCols columns so wide terminals don't end up
   // with a single huge card. AND auto-reduces column count when the
-  // terminal is too narrow to fit gridCols cards at the 20-col minimum
+  // terminal is too narrow to fit gridCols cards at MIN_CARD_W (34 cols,
+  // tui/lib/gridLayout.js; was 20 before 0459 — comment fixed in 0467)
   // (audit: cards used to spill past the right edge and overlap when
   // a 5-col grid was forced into an 80-col terminal).
   const termCols = termSize.cols;

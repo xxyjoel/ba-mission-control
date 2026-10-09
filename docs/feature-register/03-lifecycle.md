@@ -4,6 +4,10 @@ Area: `server/fleet.mjs`, `server/ptyAgent.mjs`, `server/agent.mjs`,
 `server/zoomSession.mjs`, `server/shellSession.mjs`, `server/procStats.mjs`,
 `server/hookSettings.mjs`, `tui/main.jsx`.
 
+> **Note (2026-10-08, 0467):** `server/zoomSession.mjs` was deleted in 0444, so
+> the "Legacy zoom session" rows below describe code that no longer exists.
+> Zoom always attaches to the slot's own PTY now, in mock mode too.
+
 Written 2026-09-19. Read-only audit — no product code was changed. Line numbers
 are against the working tree as of that afternoon (`main` at `f2fda14`, plus the
 uncommitted changes to `ledgerOwner.mjs`, `ptyAgent.mjs` and

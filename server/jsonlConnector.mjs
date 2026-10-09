@@ -229,10 +229,10 @@ export function parseEvent(ev, agent) {
   }
 
   agent.lastEventTs = Date.now();
-  // 0229-fix: JSONL-only activity clock. Unlike lastEventTs (also bumped by the
-  // PTY onData handler on EVERY byte, incl. cosmetic repaints — the "update
-  // available" banner, health chip, spinner), this advances ONLY on a
-  // status-bearing JSONL event. toJSON()'s hook-vs-connector freshness merge
+  // 0229-fix: JSONL-only activity clock. lastEventTs above is also bumped by
+  // spawn, send, resume and auto-restart (and, on Cursor slots only, by every
+  // PTY byte; 0450 stopped claude PTY bytes from bumping it). This one
+  // advances ONLY on a status-bearing JSONL event (comment fixed in 0467). toJSON()'s hook-vs-connector freshness merge
   // compares against THIS, so terminal chatter can't keep the connector looking
   // "fresher" than a real Stop hook and pin an idle card to 'working'.
   agent.lastConnectorTs = Date.now();

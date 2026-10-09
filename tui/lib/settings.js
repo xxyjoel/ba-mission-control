@@ -99,15 +99,18 @@ export const SETTINGS_DEFAULTS = {
   autoCompactSuggest: true,
   toastDurationMs: 4000,
   // Per-slot session cost cap (USD). 0 disables. When a slot's
-  // costSession crosses this number, Agent.send() refuses further
-  // user-driven messages until the cap is raised or disabled via
+  // costSession reaches this number, send() (and zoom's writeInput) refuses
+  // further user-driven messages until the cap is raised or disabled via
   // :cap <slot> <usd> (0 disables). There is no :resetcap verb (0452).
   // Designed to catch runaway Bash-loops before they cost $20.
   costCapUSD: 0,
   // Fleet-wide cumulative spend cap for the calendar day (UTC). 0
-  // disables. Fleet.launch() refuses new sessions once today's total
-  // exceeds this number. Existing sessions keep running — this guards
-  // against starting new work, not against ongoing turns.
+  // disables. budgetBlocked() in tui/App.jsx refuses every launch path
+  // (New Session, :template, :resume, :resume-all, boot auto-resume,
+  // :clear/:restart, :cr) once today's total reaches this number (>=).
+  // Fleet.launch() itself does not check it (0447; comment fixed in 0467).
+  // Existing sessions keep running — this guards against starting new
+  // work, not against ongoing turns.
   dailyBudgetUSD: 0,
   // Slack Incoming Webhook URL — used by :feedback and :request. Leave
   // empty to disable. Set with `:slack <url>` from the command bar.
@@ -205,8 +208,8 @@ export const SETTINGS_SCHEMA = [
   ]},
   { id: 'safety', title: 'SAFETY', items: [
     { key: 'broadcastConfirm', label: 'Confirm before broadcast', kind: 'toggle', desc: 'Stops a stray ↵ from blasting all sessions' },
-    { key: 'costCapUSD',       label: 'Per-slot cost cap',  kind: 'number', min: 0, max: 100, step: 0.5, unit: ' USD', desc: '0 disables. When a session crosses this, further sends are refused until you raise or disable it with :cap <slot> <usd> (0 disables).' },
-    { key: 'dailyBudgetUSD',   label: 'Fleet daily budget', kind: 'number', min: 0, max: 1000, step: 1, unit: ' USD', desc: '0 disables. Refuses new launches once today\'s fleet total exceeds.' },
+    { key: 'costCapUSD',       label: 'Per-slot cost cap',  kind: 'number', min: 0, max: 100, step: 0.5, unit: ' USD', desc: '0 disables. When a session reaches this, further sends are refused until you raise or disable it with :cap <slot> <usd> (0 disables).' },
+    { key: 'dailyBudgetUSD',   label: 'Fleet daily budget', kind: 'number', min: 0, max: 1000, step: 1, unit: ' USD', desc: '0 disables. Refuses new launches, resumes and restarts once today\'s fleet total reaches this.' },
   ]},
   // PLUGINS — memory-management features. Each row toggles a plugin
   // declared in tui/lib/plugins.js. The `desc` column shows what the

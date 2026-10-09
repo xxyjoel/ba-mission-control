@@ -3,6 +3,12 @@
 A new-session orientation doc. Read this before opening a file you've
 never touched.
 
+> **Note (2026-10-08, 0467):** `server/zoomSession.mjs` was deleted in 0444.
+> Zoom no longer spawns a claude of its own; `tui/zoom/PtyPane.jsx` draws the
+> slot's own emulator through `agent.attachZoomView()`. The mentions of
+> zoomSession below are history. The current layout is in the project
+> `CLAUDE.md` and `docs/audit/ARCHITECTURE.md`.
+
 Pairs with: `docs/HOTKEYS.md` (every key, with claude conflict
 analysis), `CLAUDE.md` (workflow rules), and the deeper audits in
 `docs/audit/` (snapshots — may be stale).

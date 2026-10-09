@@ -107,7 +107,7 @@ const NOTES_BODY = [
   ['empty',             'free slot — faint dashed'],
   ['',                  ''],
   ['Derived indicators (NOT states)', ''],
-  ['STUCK Nm',          'red chip when working/waiting + silent ≥5min — see agent.stuckMin'],
+  ['STUCK Nm',          'red chip: working, no transcript line or hook event ≥5min'],
   ['ctx high',          'past warn band — yellow'],
   ['ctx full',          'over threshold (/compact needed) — red'],
   ['focused',           'keyboard target — bright cyan'],

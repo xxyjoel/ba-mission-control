@@ -17,10 +17,66 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are pruned from the saved map at boot (history keeps them).
 - `:resume` and `:forget` accept slots up to the configured fleet size, not
   just 1–10.
+- `q` then `q` in the quit box saves and quits. Only `[d]` quits without saving.
+- Kill and restart no longer leave a claude running: mc sends SIGTERM, then
+  SIGKILL after 1.5 s, and a respawn waits for the old claude to exit.
+- Pause, resume and kill reach every process claude started, including the
+  shells its Bash tool runs. Resuming restores the status from before the pause.
+- A claude left frozen (paused) by an mc crash is ended at the next mc start.
+- Two copies of mc started at the same moment can no longer both take the
+  config dir; the lock is released only after every claude has stopped.
+- The daily budget is checked on every way a session starts: `:resume`,
+  `:resume-all`, auto-resume at boot, `:clear` / `:restart` and `:cr`.
+- `:cap <slot>` accepts any live slot, and `:cap default` no longer
+  overwrites a cap you set on one slot by hand.
+- Typing in zoom obeys the cost cap, and zoom stays open when `:model` or
+  `:perm` restarts the session.
+- Mock mode (`MC_MOCK`) zoom never starts a real claude.
+- claude's permission-mode line stays visible in zoom after claude installs an
+  update.
+- mc's record of the permission mode follows changes you make inside claude.
+- A paused slot shows PAUSED even when its hooks last said working.
+- STUCK ignores screen redraws and never shows beside waiting or paused.
+- Hook status times come from when the event happened, so replayed old
+  events no longer light the background-agent chip.
+- When git fails the card shows `?` instead of a clean dot, and a folder that
+  is not a repo shows no git chips. The unused `gitPollSec` setting is gone.
+- `:model` compares against the model claude is actually running, so picking
+  the same model (or `auto` again) does not restart the session. The
+  Dashboard shows that model and its context use.
+- A slot is reported as resumed only when it really resumed; otherwise the
+  toast says it opened fresh. One session id can be live in only one slot.
+- `:resume` with a bad slot number (`:resume 99`, `:resume 1 99`) warns and
+  restores nothing.
+- Up and Down move by the columns the grid actually draws.
+- Queued messages are sent one at a time, each with its own Enter.
+- Cards are at least 34 columns wide and no card row wraps. A 120-column
+  terminal now draws 3 columns even when the setting asks for 4 or 5.
+- The Dashboard strips terminal escapes from activity and names and keeps the
+  NAME column aligned for wide characters.
+- `:transcript` and `:where` print the real path of claude's transcript.
+- A new claude parked on its folder-trust dialog shows as waiting and no
+  longer swallows your first message.
+- mc started from inside a claude session no longer turns off transcripts
+  for its own claude slots.
+- README: it now says closing the terminal and Ctrl-C save sessions;
+  zoom scroll is `Ctrl+F`; `N` is not a hotkey.
 
 ### Changed
 - New-model discovery no longer polls `claude --version` every 60 s. mc checks
   at boot, then only when an install changes the folder holding `claude`.
+- `.mc/MEMORY.md` injection and `:remember` are off by default. Turn on
+  *.mc/MEMORY.md auto-inject* in Settings → PLUGINS. Settings saved earlier may
+  already hold `true` and keep it.
+- Quieter at idle: the screen is redrawn and `sessions.json` written only when
+  something changes, and `claude agents` is asked every 120 s (plus once after
+  a launch, kill or exit) instead of every 20 s. Measured with 0 agents:
+  0.96% → 0.23% of one core, 929 → 12 bytes/s of terminal output.
+- Sub-agent files that have settled are no longer re-checked on every scan.
+- `scripts/measure-idle.mjs` counts mc's child processes too.
+- `npm test` gives each test file a temporary home, so tests never touch your
+  real `~/.claude` or `~/.config/claude-mc`. Tests against the real claude
+  are opt-in with `MC_RUN_REAL=1` (billed).
 
 ## [1.2.3] — 2026-09-24
 

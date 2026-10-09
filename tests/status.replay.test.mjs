@@ -8,12 +8,13 @@
 // toJSON()'s precedence model regresses, the recording that caught the
 // original bug goes red.
 //
-// Time is virtualized by mocking Date.now() to the replay cursor. Both the
-// tailer (hookStatusTs = Date.now()) and the connector (lastConnectorTs =
-// Date.now()) stamp with the wall clock, so setting the mocked clock to each
-// event's recorded ts before applying it reproduces production timing
-// relationships bit-for-bit — including multi-hour gaps no synthetic test
-// would ever write.
+// Time is virtualized by mocking Date.now() to the replay cursor. Since 0449
+// the tailer stamps working/waiting hookStatusTs (and lastSubHookTs) from the
+// record's own ts, clamped to now; idle (Stop) and the connector
+// (lastConnectorTs) still stamp Date.now(). Setting the mocked clock to each
+// event's recorded ts before applying it makes all of these equal, so the
+// replay reproduces production timing — including multi-hour gaps no
+// synthetic test would ever write. (Header fixed in 0467.)
 //
 // Fixture format (tests/fixtures/status-corpus/):
 //   <name>.status.ndjson — hook records, the emit-status.mjs on-disk shape:

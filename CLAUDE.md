@@ -1,8 +1,8 @@
 # Project: BlueArch Mission Control
 
-Keyboard-first terminal TUI for managing up to 10 real `claude` CLI agent
-sessions. Stack: Node 20+ · Ink (React for terminals) · `tsx` for JSX runtime ·
-no build step.
+Keyboard-first terminal TUI for managing real `claude` CLI agent sessions
+(10 slots by default; the `maxSlots` setting allows up to 64). Stack: Node 20+ ·
+Ink (React for terminals) · `tsx` for JSX runtime · no build step.
 
 ## Repo layout (orient yourself before edits)
 
@@ -10,11 +10,27 @@ no build step.
 - `tui/main.jsx` — boots the Fleet, renders `<App/>`, wires shutdown
 - `tui/App.jsx` — top-level: hotkeys, focus, modal routing, fleet subscription
 - `tui/Card.jsx`, `Header.jsx`, `Aggregate.jsx`, `FleetLog.jsx`, `StatusBar.jsx`
-- `tui/modals/{Help,Broadcast,NewSession,Settings,Zoom}.jsx`
-- `tui/lib/{themes,format,models,settings,TextField}` — palettes, render helpers,
-  Claude-model metadata, on-disk settings persistence, minimal text input
-- `server/` — **data layer only, no HTTP.** `Fleet` (EventEmitter, 10 slots),
-  `Agent` (one `claude` subprocess per slot, stream-json I/O), `git`, `repos`
+- `tui/modals/{Help,Broadcast,NewSession,Settings,Zoom,Dashboard,QuitConfirm,…}.jsx`
+- `tui/zoom/PtyPane.jsx` — zoom body: draws the slot's own terminal emulator and
+  forwards keys to claude; `tui/zoom/zoomKeys.js` holds the few keys zoom keeps
+- `tui/lib/{themes,format,models,settings,sessionStore,gridLayout,TextField,…}` —
+  palettes, render helpers, Claude-model metadata, settings persistence, saved
+  sessions, card-grid geometry, minimal text input
+- `server/` — **data layer only, no HTTP.**
+  - `Fleet` (EventEmitter; 10 slots by default, 1–64) picks the agent class.
+  - Default path: one interactive `claude` per slot in a node-pty.
+    `ptyCore.mjs` is the provider-neutral PTY (spawn, emulator, send queue,
+    pause/kill/restart); `ptyAgent.mjs` is claude on top of it (argv, hooks).
+    Cursor slots use `providers/cursor/cursorAgent.mjs` on the same core.
+  - State comes from what claude writes, not from a wire protocol:
+    `sessionFileTailer` + `jsonlConnector` read claude's session JSONL,
+    `statusHookTailer` reads the hook status file that `hooks/emit-status.mjs`
+    appends, `subagentUsageTailer` adds sub-agent usage, and
+    `deriveStatus.mjs` turns those signals into one status.
+  - `agent.mjs` (stream-json I/O) is the legacy path behind `FLEET_USE_PTY=0`;
+    `mockAgent.mjs` replays fixtures under `MC_MOCK`. `git.mjs` reads git state;
+    `repos.mjs` scans for repos.
+  - `server/zoomSession.mjs` is gone (0444): zoom never spawns its own claude.
 
 The TUI reads `fleet.snapshot()` directly and subscribes to
 `fleet.on('change', …)`. There is no HTTP/SSE layer anymore.
@@ -43,10 +59,13 @@ The TUI reads `fleet.snapshot()` directly and subscribes to
   constraint — needs to be reflected in the user-facing README before the
   next merge. If you can't tell what changed from the diff, run
   `git log main..HEAD` against the previous merge point.
-- Before touching anything in `server/agent.mjs`, recognize that it is
-  managing a real `claude` subprocess. Pause/resume use POSIX signals
-  (SIGSTOP/SIGCONT). Don't introduce sleeps in the event handler — the
-  stream-json wire format is line-oriented and we must drain stdout.
+- Before touching `server/ptyCore.mjs`, `server/ptyAgent.mjs` or
+  `server/agent.mjs`, recognize that they manage a real `claude` process.
+  Pause/resume/kill signal claude's whole process tree (SIGSTOP/SIGCONT,
+  SIGTERM then SIGKILL). Don't introduce sleeps in a data or event handler:
+  the PTY and the legacy stream-json stdout must both be drained.
+- Run tests only through `node scripts/run-tests.mjs` (or `npm test`). It gives
+  each file a temporary HOME. Real-claude tests need `MC_RUN_REAL=1` and cost money.
 - Always prefer adding a TODO comment over deferring work in chat. Format:
   `// TODO(<short-tag>): <what + why>` at the relevant line.
 
