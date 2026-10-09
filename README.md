@@ -51,8 +51,8 @@ back to the session that spawned it, so one agent spawning five still gives you 
 honest number.
 
 **Stop a runaway agent, don't just watch it.** `:cap <slot> <usd>` refuses to send
-another message once a session reaches its limit. `:budget <usd>` refuses to launch,
-resume or restart anything once the fleet reaches its daily figure. Both act on the
+another message once a session reaches its limit. `:budget <usd>` refuses new launches,
+resumes, `:clear` / `:restart` and `:cr` once the fleet reaches its daily figure. Both act on the
 next message or launch: a turn that is already running finishes, so the final total can
 end up a little past the figure. These refuse work; they do not just report it afterwards.
 
@@ -823,10 +823,11 @@ opt in):
   (`:cap 3 10` bumps slot 3 to $10). A hand-set cap stays until that slot is
   relaunched (`:cap <slot> 0` turns it off but still counts as hand-set).
 - **Daily budget** — `:budget <usd>` refuses to start sessions once today's
-  fleet-wide spend reaches the budget. That covers every way a session
-  starts: New Session, `:template`, `:resume`, `:resume-all`, auto-resume at
-  boot, `:clear` / `:restart` (refused before the kill) and `:cr`. Sessions
-  already running keep running. Use `:budget 0` to disable. `:budget` alone
+  fleet-wide spend reaches the budget: New Session, `:template`, `:resume`,
+  `:resume-all`, auto-resume at boot, `:clear` / `:restart` (refused before
+  the kill) and `:cr`. Sessions already running keep running, and a running
+  session that restarts itself is not blocked: crash auto-restart, and the
+  restart that `:model` or `:perm` does. Use `:budget 0` to disable. `:budget` alone
   shows today's spend.
 
 Both limits act on the next message or launch. A turn that is already

@@ -105,9 +105,10 @@ export const SETTINGS_DEFAULTS = {
   // Designed to catch runaway Bash-loops before they cost $20.
   costCapUSD: 0,
   // Fleet-wide cumulative spend cap for the calendar day (UTC). 0
-  // disables. budgetBlocked() in tui/App.jsx refuses every launch path
+  // disables. budgetBlocked() in tui/App.jsx refuses the launch paths
   // (New Session, :template, :resume, :resume-all, boot auto-resume,
   // :clear/:restart, :cr) once today's total reaches this number (>=).
+  // Crash auto-restart and the :model/:perm respawn are not gated.
   // Fleet.launch() itself does not check it (0447; comment fixed in 0467).
   // Existing sessions keep running — this guards against starting new
   // work, not against ongoing turns.
@@ -209,7 +210,7 @@ export const SETTINGS_SCHEMA = [
   { id: 'safety', title: 'SAFETY', items: [
     { key: 'broadcastConfirm', label: 'Confirm before broadcast', kind: 'toggle', desc: 'Stops a stray ↵ from blasting all sessions' },
     { key: 'costCapUSD',       label: 'Per-slot cost cap',  kind: 'number', min: 0, max: 100, step: 0.5, unit: ' USD', desc: '0 disables. When a session reaches this, further sends are refused until you raise or disable it with :cap <slot> <usd> (0 disables).' },
-    { key: 'dailyBudgetUSD',   label: 'Fleet daily budget', kind: 'number', min: 0, max: 1000, step: 1, unit: ' USD', desc: '0 disables. Refuses new launches, resumes and restarts once today\'s fleet total reaches this.' },
+    { key: 'dailyBudgetUSD',   label: 'Fleet daily budget', kind: 'number', min: 0, max: 1000, step: 1, unit: ' USD', desc: '0 disables. Refuses new launches and resumes once today\'s fleet total reaches this.' },
   ]},
   // PLUGINS — memory-management features. Each row toggles a plugin
   // declared in tui/lib/plugins.js. The `desc` column shows what the

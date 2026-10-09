@@ -25,8 +25,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A claude left frozen (paused) by an mc crash is ended at the next mc start.
 - Two copies of mc started at the same moment can no longer both take the
   config dir; the lock is released only after every claude has stopped.
-- The daily budget is checked on every way a session starts: `:resume`,
-  `:resume-all`, auto-resume at boot, `:clear` / `:restart` and `:cr`.
+- The daily budget is also checked by `:resume`, `:resume-all`, auto-resume
+  at boot, `:clear` / `:restart` and `:cr`. A crash auto-restart or a
+  `:model` / `:perm` restart of a running session is still not blocked.
 - `:cap <slot>` accepts any live slot, and `:cap default` no longer
   overwrites a cap you set on one slot by hand.
 - Typing in zoom obeys the cost cap, and zoom stays open when `:model` or
