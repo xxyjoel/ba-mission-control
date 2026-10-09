@@ -92,9 +92,6 @@ test('statusHookTailer drive:external exposes tick() and is stop-safe', () => {
 // its file doesn't exist yet) bypassed the Fleet's shared driver — 2 timers per
 // never-prompted slot, 20 at 10 slots. Under drive:'external' the creation
 // check now runs from tick(), so live timers must not grow with slot count.
-// TODO(0465): tests/ptyAgent.plumbing.characterize.test.mjs:274 (ptyAgent lane)
-// must call t.mock.timers.tick(0), not runAll(): with these timers gone only a
-// mocked setImmediate is queued and Node 26's runAll() throws "time -1".
 // Live setTimeout AND setInterval handles are counted by wrapping the globals
 // the tailers call — an interval coming back under external drive must count.
 function trackTimeouts() {

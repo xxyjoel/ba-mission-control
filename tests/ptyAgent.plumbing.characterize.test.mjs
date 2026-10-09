@@ -271,7 +271,9 @@ test('write: slash command with paste off also defers the CR', (t) => {
   t.mock.timers.tick(3000);
   agent.send('  /compact');
   assert.deepEqual(spawn.spawned[0]._writes, ['  /compact']);
-  t.mock.timers.runAll();
+  // 0465: only a mocked setImmediate is queued now (the tailer creation timers
+  // run from the Fleet tick); Node 26's runAll() throws "time -1" on that.
+  t.mock.timers.tick(0);
   assert.deepEqual(spawn.spawned[0]._writes, ['  /compact', '\r']);
 });
 
