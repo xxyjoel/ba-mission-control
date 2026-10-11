@@ -26,7 +26,7 @@ import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
-import { parseEvent, pushTail } from './jsonlConnector.mjs';
+import { parseEvent, pushTail, reportedPermissionMode } from './jsonlConnector.mjs';
 // 0408-F1/M6: the rotation hunt classifies every candidate transcript so a
 // BACKGROUND FORK (sessionKind:'bg') is never adopted as the slot's session.
 // This import closes the module cycle bgSessions.mjs documents (sessionFileTailer
@@ -232,6 +232,10 @@ export function startSessionTailer({
   let watcher = null;
   let pollTimer = null;
   let statPollTimer = null;       // 0179: cloud-path backstop
+  // 0465: drive:'external' — set once init() finds no file; tick() then runs
+  // the creation check instead of a per-slot setTimeout chain. Set only inside
+  // init's no-file branch so an early tick() can't attach before init does.
+  let awaitingCreate = false;
   let offset = 0;
   let buffer = '';
   let readingLock = false; // serialize concurrent reads on rapid appends
@@ -360,7 +364,8 @@ export function startSessionTailer({
   //
   // parseEvent ACCUMULATES tokens/cost/spark/tail, so we replay into a SCRATCH
   // object and copy back only the last-writer-wins "current state" fields
-  // (status/awaitingPrompt/activity/todos/context/resolvedModel). That keeps the
+  // (status/awaitingPrompt/activity/todos/context/resolvedModel, and
+  // permissionMode — 0439). That keeps the
   // real agent's additive counters untouched. Returns the EOF offset it read to
   // (so the forward tailer continues from exactly there), or null on failure.
   async function primeStatusFromDisk() {
@@ -385,12 +390,28 @@ export function startSessionTailer({
       status: agent.status, awaitingPrompt: agent.awaitingPrompt ?? null,
       activity: agent.activity, todos: agent.todos, context: agent.context,
       resolvedModel: agent.resolvedModel,
+      permissionMode: agent.permissionMode, // 0439: tail notes only real mode changes
       tail: [], tokensIn: 0, tokensCacheRead: 0, tokensOut: 0, costSession: 0, // absorb the additive side-effects
     };
     let any = false;
+    // 0439: the mode claude last reported in the window, copied back below.
+    // Only records written by the CURRENT claude count: a spawn passes
+    // `--permission-mode <agent.permissionMode>`, so older records are the
+    // previous process's history (changePermissionMode restarts claude over
+    // the same transcript). permission-mode records carry no timestamp — they
+    // take the last one seen. An unstamped agent takes the last report.
+    const modeFloor = Number.isFinite(agent.permissionModeArgvTs) ? agent.permissionModeArgvTs : null;
+    let lastTs = null;
+    let replayedMode = null;
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
-      try { if (parseEvent(JSON.parse(line), scratch)) any = true; } catch { /* skip junk */ }
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; /* skip junk */ }
+      const ts = Date.parse(ev?.timestamp ?? '');
+      if (Number.isFinite(ts)) lastTs = ts;
+      try { if (parseEvent(ev, scratch)) any = true; } catch { /* skip junk */ }
+      const mode = reportedPermissionMode(ev);
+      if (mode && (modeFloor == null || (lastTs != null && lastTs >= modeFloor))) replayedMode = mode;
     }
     // Did this primed region contain a /clear? On /clear claude rotates to a NEW
     // transcript, so the reset almost always lands at the TOP of the file we're
@@ -421,7 +442,15 @@ export function startSessionTailer({
         agent.context = scratch.context;
       }
       if (scratch.resolvedModel) agent.resolvedModel = scratch.resolvedModel;
-      mergeReplayedTail(scratch.tail);
+      // 0439: replayed "permission mode →" notes describe the PREVIOUS claude's
+      // history, not a change this agent made — drop them, and note the one
+      // real change (if any) instead.
+      const replayTail = scratch.tail.filter(e => !(e?.kind === 'sys' && /^permission mode → /.test(e.text || '')));
+      if (replayedMode && replayedMode !== agent.permissionMode) {
+        agent.permissionMode = replayedMode; // validated in reportedPermissionMode
+        replayTail.push({ kind: 'sys', text: `permission mode → ${replayedMode}` });
+      }
+      mergeReplayedTail(replayTail);
       try { agent.emit('change'); } catch {}
     }
     return stats.size;
@@ -515,6 +544,11 @@ export function startSessionTailer({
     let nextPath;
     try { nextPath = claudeSessionPath({ cwd: agent.cwd, sessionId: sid }); } catch { return; }
     path = nextPath;
+    // 0465: the re-point attaches its own watcher (or the tick reads the new
+    // path); a pending creation check must not attach a second one later.
+    // TODO(0465): the self-driven pollCreate chain is not cancelled here, so a
+    // re-point before the pinned file appears can leak one watcher (pre-existing).
+    awaitingCreate = false;
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
     offset = 0; buffer = ''; lastSize = 0; frozenPolls = 0; repointMissTicks = 0; lastHuntDirMtime = 0;
     await primeSessionStartedAt();   // 0416/6: new transcript, new record 0
@@ -523,6 +557,17 @@ export function startSessionTailer({
     offset = primedTo != null ? primedTo : 0;
     attachWatcher();
     await readNew();
+  }
+
+  // The creation check shared by the self-driven poll and tick() (0465).
+  function tryAttachCreated() {
+    if (!attachWatcher()) return false;
+    awaitingCreate = false;
+    // The file did not exist at attach, so the head read returned null.
+    // It exists now — read record 0 or the slot stays ageless for life.
+    primeSessionStartedAt();
+    readNew();
+    return true;
   }
 
   async function init() {
@@ -557,20 +602,22 @@ export function startSessionTailer({
       // Fast (500ms) for the first ~10s, then 2s: claude doesn't write the
       // JSONL until the first user message commits, so an unprompted slot
       // would otherwise poll 2×/s for its whole life (creationPollDelay).
-      let creationAttempts = 0;
-      const pollCreate = () => {
-        if (stopped) return;
-        if (attachWatcher()) {
-          pollTimer = null;
-          // The file did not exist at attach, so the head read returned null.
-          // It exists now — read record 0 or the slot stays ageless for life.
-          primeSessionStartedAt();
-          readNew();
-          return;
-        }
-        pollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
-      };
-      pollTimer = setTimeout(pollCreate, creationPollDelay(0));
+      // 0465: under drive:'external' the Fleet tick runs tryAttachCreated()
+      // instead — no per-slot timer (was 2 per never-prompted slot, 20 at 10).
+      if (drive === 'external') {
+        awaitingCreate = true;
+      } else {
+        let creationAttempts = 0;
+        const pollCreate = () => {
+          if (stopped) return;
+          if (tryAttachCreated()) {
+            pollTimer = null;
+            return;
+          }
+          pollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
+        };
+        pollTimer = setTimeout(pollCreate, creationPollDelay(0));
+      }
     } else {
       // Watcher attached on an existing file — kick a first read in
       // case the PTY child appended between our stat and our watch.
@@ -599,6 +646,7 @@ export function startSessionTailer({
     path,
     stop() {
       stopped = true;
+      awaitingCreate = false;
       if (watcher) {
         try { watcher.close(); } catch {}
         watcher = null;
@@ -616,6 +664,10 @@ export function startSessionTailer({
     // as the self-owned interval; safe to call on a stopped tailer.
     tick() {
       if (stopped) return;
+      // 0465: the creation check, folded into the shared tick. It reads on
+      // attach; otherwise fall through so the rotation hunt still runs (claude
+      // may never write the pinned sid's file and mint its own instead).
+      if (awaitingCreate && tryAttachCreated()) return;
       readNew();
       maybeRepoint();
     },

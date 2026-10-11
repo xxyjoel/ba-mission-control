@@ -20,6 +20,7 @@ import { MODELS, estimatedPricingFor } from '../tui/lib/models.js';
 import { summarizeToolInput, SUBAGENT_TOOLS, subagentLabel } from './eventShapes.mjs';
 import { detectPrompt, promptFromToolUse } from './detectPrompt.mjs';
 import { updateSpark } from './spark.mjs';
+import { knownClaudeMode } from './permissionModes.mjs';
 // Ring size + text ceilings are derived from SETTINGS_SCHEMA's `fleetLogLines`
 // max, so the log can always be supplied with as many lines as it may be set to
 // (see the FLEET-LOG SUPPLY BUDGET block in tui/lib/settings.js). This used to
@@ -221,15 +222,17 @@ export function parseEvent(ev, agent) {
         && !/<command-name>\s*\/clear\b/.test(text)) {
       const cmd = text.match(/<command-name>\s*(\/[^\s<]+)/)?.[1];
       if (cmd) pushTail(agent, { kind: 'sys', text: `local command: ${cmd}` });
-      return Boolean(cmd);
+      // 0439: the line still reports claude's current mode — keep it.
+      const modeChanged = applyPermissionMode(agent, ev.permissionMode);
+      return Boolean(cmd) || modeChanged;
     }
   }
 
   agent.lastEventTs = Date.now();
-  // 0229-fix: JSONL-only activity clock. Unlike lastEventTs (also bumped by the
-  // PTY onData handler on EVERY byte, incl. cosmetic repaints — the "update
-  // available" banner, health chip, spinner), this advances ONLY on a
-  // status-bearing JSONL event. toJSON()'s hook-vs-connector freshness merge
+  // 0229-fix: JSONL-only activity clock. lastEventTs above is also bumped by
+  // spawn, send, resume and auto-restart (and, on Cursor slots only, by every
+  // PTY byte; 0450 stopped claude PTY bytes from bumping it). This one
+  // advances ONLY on a status-bearing JSONL event (comment fixed in 0467). toJSON()'s hook-vs-connector freshness merge
   // compares against THIS, so terminal chatter can't keep the connector looking
   // "fresher" than a real Stop hook and pin an idle card to 'working'.
   agent.lastConnectorTs = Date.now();
@@ -238,6 +241,15 @@ export function parseEvent(ev, agent) {
 }
 
 function handleUser(ev, agent) {
+  // 0439: every user line claude writes carries the session's CURRENT
+  // permission mode (`permissionMode`), so a Shift+Tab inside claude reaches
+  // mc here even when no permission-mode record follows. Applied before the
+  // tool_result / prompt split; a mode change alone still counts as a change.
+  const modeChanged = applyPermissionMode(agent, ev.permissionMode);
+  return handleUserContent(ev, agent) || modeChanged;
+}
+
+function handleUserContent(ev, agent) {
   const content = ev.message?.content;
 
   // Tool results land as user events with array content carrying
@@ -566,9 +578,25 @@ function handleSystem(ev, agent) {
 }
 
 function handlePermissionMode(ev, agent) {
-  if (typeof ev.permissionMode !== 'string') return false;
-  if (agent.permissionMode === ev.permissionMode) return false;
-  agent.permissionMode = ev.permissionMode;
-  pushTail(agent, { kind: 'sys', text: `permission mode → ${ev.permissionMode}` });
+  return applyPermissionMode(agent, ev.permissionMode);
+}
+
+// applyPermissionMode — 0439. The transcript is untrusted: only a mode claude
+// accepts is applied (an arbitrary string would be saved by sessionStore and
+// passed to `claude --permission-mode` on the next resume). Returns true when
+// agent.permissionMode moved.
+function applyPermissionMode(agent, value) {
+  const mode = knownClaudeMode(value);
+  if (!mode || agent.permissionMode === mode) return false;
+  agent.permissionMode = mode;
+  pushTail(agent, { kind: 'sys', text: `permission mode → ${mode}` });
   return true;
+}
+
+// reportedPermissionMode(ev) — 0439: the known claude mode a transcript record
+// reports, or null. sessionFileTailer's prime uses it to tell which replayed
+// records reported a mode.
+export function reportedPermissionMode(ev) {
+  if (ev?.type !== 'user' && ev?.type !== 'permission-mode') return null;
+  return knownClaudeMode(ev.permissionMode);
 }

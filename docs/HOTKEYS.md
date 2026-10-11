@@ -19,31 +19,36 @@ inventory and is no longer authoritative — line numbers are stale.
 
 ## 1. mc fleet view (no modal open)
 
-`tui/App.jsx:1140-1322`. Gated by `if (modal) return` at line 1169 — none
-of these fire while a modal (including Zoom) is open.
+The main `useInput` handler in `tui/App.jsx`. It returns early while a modal
+(including Zoom) is open, so none of these fire there. Line numbers are left
+out on purpose: they went stale after every change (0467).
 
-| Key | Action | File:Line |
-|---|---|---|
-| `?` | Open Help | 1182 |
-| `,` / `Esc` | Open Settings | 1180 |
-| `b` / `B` | Open Broadcast | 1183 |
-| `d` / `D` | Open Dashboard | 1184 |
-| `q` / `Q` | Open QuitConfirm | 1189 |
-| `n` / `Ctrl+N` | Open NewSession (lowercase only — Shift+N is free) | 1252 |
-| `/` | Enter filter mode | 1192 |
-| `:` | Enter command bar | 1197 |
-| `Shift+Tab` | Cycle permission mode | 1175 |
-| `0`–`9` | Jump to slot 1–10 | 1203 |
-| `←` `→` `↑` `↓` (or `h` `l` `k` `j` if vim keys) | Grid focus nav | 1225-1228 |
-| `↵` (enter) | Zoom focused agent OR launch new | 1235 |
-| `p` / `P` | Pause focused agent (SIGSTOP) | 1266 |
-| `r` / `R` | Resume focused agent (SIGCONT) | 1273 |
-| `k` / `K` | Kill focused agent (press twice within 3s) | 1280 |
-| `a` / `A` | Approve pending action | 1313 |
+| Key | Action |
+|---|---|
+| `?` | Open Help |
+| `,` / `Esc` | Open Settings |
+| `b` / `B` | Open Broadcast |
+| `d` / `D` | Open Dashboard |
+| `q` / `Q` | Open QuitConfirm. Inside it `s`, `q`, `y` or `Enter` save and quit (so `q` `q` saves), `d` quits without saving, `n` / `Esc` cancel |
+| `Ctrl+C` | Quit and save (same as `[s]`) |
+| `n` / `Ctrl+N` | Open NewSession. Uppercase `N` is not bound |
+| `!` | Open the shell overlay |
+| `Shift+L` | Fleet log: all ↔ narrative |
+| `/` | Enter filter mode (press again to clear) |
+| `:` | Enter command bar |
+| `Shift+Tab` | Cycle permission mode |
+| `0`–`9` | Jump to slot 1–10 |
+| `[` / `]` | Previous / next pane (when the grid pages) |
+| `←` `→` `↑` `↓` (or `h` `l` `k` `j` if vim keys) | Grid focus nav. `↑` / `↓` step by the columns the grid draws |
+| `↵` (enter) | Zoom focused agent OR launch new |
+| `p` / `P` | Pause focused agent (SIGSTOP to claude's whole process tree) |
+| `r` / `R` | Resume focused agent (SIGCONT) |
+| `K` | Kill focused agent (press twice within 3s). Uppercase only: lowercase `k` is vim-up |
+| `a` / `A` | Approve pending action (only while waiting) |
 
 ## 2. Command bar (`:` or `/` active)
 
-`tui/App.jsx:1144-1166`. Override everything while active.
+The command-bar branch at the top of App.jsx's `useInput`. Overrides everything while active.
 
 | Key | Action |
 |---|---|
@@ -65,7 +70,7 @@ All chrome keys are in the `Ctrl+A..Z` range — the ONLY range Ink delivers as
 | Key | mc action | Claude key it shadows | Severity |
 |---|---|---|---|
 | `Ctrl+Q` | Exit zoom | none | **None** — Q=quit; replaces the old Esc-exit and the dead `Ctrl+]` |
-| `Ctrl+Y` | Enter scroll mode (`w`/`s` line · `f`/`b` half-page up/down · `g`/`G` top/bottom · `Esc` exits) | `Ctrl+Y` paste-deleted-text | **Low** — claude editing-only key |
+| `Ctrl+F` | Enter scroll mode (`w`/`s` line · `f`/`b` half-page up/down · `g`/`G` top/bottom · `Esc` exits) | `Ctrl+F` forward-char | **Low** — claude editing-only key. Was `Ctrl+Y` until 0420 (Ctrl+Y is Cursor's chat picker) |
 | `Ctrl+K` | Toggle mc's tools panel | `Ctrl+K` delete-to-end-of-line | **Low** — claude editing-only key; moved here off `Ctrl+T` (claude todos) |
 | `Ctrl+U` | Toggle mc's stats panel | `Ctrl+U` delete-to-line-start | **Low** — claude editing-only key; moved here off `Ctrl+S` (claude stash) |
 | `Ctrl+J` / `Shift+Enter` | Newline without submitting | matches claude's own `chat:newline` | **None** — same action |
@@ -88,7 +93,7 @@ Every key not in the table above is encoded and written to the PTY.
 | `Backspace` / `Delete` | `\x7f` (both — Ink can't distinguish) |
 | `Return` | `\r` |
 | `Esc` | `\x1b` (forwarded — zoom exit is `Ctrl+Q`, not Esc) |
-| `Ctrl+<letter>` | `0x01`-`0x1a` (except `Ctrl+Q/Y/K/U/J` — intercepted as chrome keys, see §3) |
+| `Ctrl+<letter>` | `0x01`-`0x1a` (except `Ctrl+Q/F/K/U/J` — intercepted as chrome keys, see §3) |
 | `Alt+<X>` | `\x1b` + X |
 | Multi-char paste in bracketed mode | `CSI 200~ … CSI 201~` |
 | Printable | as-is |
@@ -130,10 +135,11 @@ Every key not in the table above is encoded and written to the PTY.
 |---|---|---|
 | `Ctrl+A` | Cursor to line start | ✓ |
 | `Ctrl+E` | Cursor to line end | ✓ |
+| `Ctrl+F` | Cursor forward one character (readline) | ✗ **intercepted by mc** (scroll mode — see §3) |
 | `Ctrl+K` | Delete to end of line | ✗ **intercepted by mc** (tools panel — see §3) |
 | `Ctrl+U` | Delete to line start | ✗ **intercepted by mc** (stats panel — see §3) |
 | `Ctrl+W` | Delete previous word | ✓ |
-| `Ctrl+Y` | Paste deleted text | ✗ **intercepted by mc** (scroll mode — see §3) |
+| `Ctrl+Y` | Paste deleted text | ✓ (forwarded since scroll moved to `Ctrl+F`) |
 | `Alt+Y` (after Ctrl+Y) | Cycle paste history | ✓ (needs Option-as-Meta on macOS) |
 | `Alt+B` / `Alt+F` | Word back / forward | ✓ (needs Option-as-Meta) |
 
@@ -180,7 +186,7 @@ because mc doesn't intercept any letters.
 ## 6. Conflict matrix (zoom only — fleet view is gated)
 
 The five PtyPane intercepts are the entire conflict surface. After the
-`Ctrl+Q/Y/K/U/J` rewrite, mc no longer shadows any of claude's general
+`Ctrl+Q/F/K/U/J` rewrite, mc no longer shadows any of claude's general
 controls (`Esc`, `Ctrl+T`, `Ctrl+S`, `Shift+Tab` all forward). The only
 remaining overlaps are with claude's three readline EDITING keys, which
 only matter while the user is typing in the composer:
@@ -188,7 +194,7 @@ only matter while the user is typing in the composer:
 | mc key | mc action | Claude key it shadows | Severity |
 |---|---|---|---|
 | `Ctrl+Q` | Exit zoom | none | None |
-| `Ctrl+Y` | Scroll mode | paste-deleted-text (editing only) | Low |
+| `Ctrl+F` | Scroll mode | forward-char (editing only) | Low |
 | `Ctrl+K` | Tools panel | delete-to-end-of-line (editing only) | Low |
 | `Ctrl+U` | Stats panel | delete-to-line-start (editing only) | Low |
 | `Ctrl+J` | Newline | claude's own newline | None — same action |
@@ -197,9 +203,12 @@ only matter while the user is typing in the composer:
 
 ## 7. Scroll bindings (in zoom) — SHIPPED
 
-**Status:** the mode-prefix scheme shipped, bound to `Ctrl+Y` (not the
+**Status:** the mode-prefix scheme shipped, bound to `Ctrl+F` (not the
 originally-explored `Ctrl+\`, which is `0x1c` — outside Ink's ctrl-letter
-range and therefore unreachable). `Ctrl+Y` enters scroll mode; while active,
+range and therefore unreachable). It was first bound to `Ctrl+Y`; 0420 moved
+it to `Ctrl+F` because `Ctrl+Y` is Cursor's chat picker and `Ctrl+G` is
+claude's open-in-editor (history in `tui/zoom/zoomKeys.js`). `Ctrl+F` enters
+scroll mode; while active,
 `w`/`s` scroll one line, `f`/`b` half a page up/down (0392), `g`/`G` jump to top/bottom, and
 `Esc` (or any other key) exits and returns input to claude. See `ZOOM_KEYS.SCROLL`
 in `tui/zoom/zoomKeys.js` and the scroll-mode handler in `PtyPane.jsx`. The

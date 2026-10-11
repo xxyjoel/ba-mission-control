@@ -165,13 +165,16 @@ export function padCol(s, width) {
   return out + ' '.repeat(Math.max(0, width - used));
 }
 
-export function fmtClock(ts, use24 = true) {
+// 0464: `seconds: false` drops the seconds field (HH:MM). App uses it while the
+// fleet is idle so the header changes at most once a minute.
+export function fmtClock(ts, use24 = true, { seconds = true } = {}) {
   const d = new Date(ts);
-  if (use24) return d.toISOString().slice(11, 19);
+  if (use24) return d.toISOString().slice(11, seconds ? 19 : 16);
   let h = d.getUTCHours(), m = d.getUTCMinutes(), s = d.getUTCSeconds();
   const ap = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')} ${ap}`;
+  const ss = seconds ? `:${String(s).padStart(2, '0')}` : '';
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${ss} ${ap}`;
 }
 
 // humanize — sanitize a tier-2 (machine-flavor) preview line so the
@@ -259,12 +262,16 @@ export function humanize(text) {
   return out;
 }
 
-export function fmtDuration(ms) {
-  const sec = Math.floor(ms / 1000);
+// 0464: `seconds: false` returns HH:MM (the header's idle session timer).
+// A negative span (a clock sampled before the start stamp) reads as 0, not
+// "-1:-1" (review of 0464).
+export function fmtDuration(ms, { seconds = true } = {}) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const ss = seconds ? `:${String(s).padStart(2, '0')}` : '';
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${ss}`;
 }
 
 // Compact, variable-length duration for stat chips — "2h14m", "12m", "45s".

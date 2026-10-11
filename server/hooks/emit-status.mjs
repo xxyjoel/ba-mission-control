@@ -28,7 +28,7 @@ async function main() {
     return;
   }
 
-  const { hook_event_name: event, session_id, notification_type, tool_name, agent_id, agent_type } = payload;
+  const { hook_event_name: event, session_id, notification_type, tool_name, agent_id, agent_type, permission_mode } = payload;
 
   if (!session_id || !event) return; // missing required fields → write nothing
 
@@ -55,6 +55,11 @@ async function main() {
   // background agent's PreToolUse burst was overwriting 'waiting' back to
   // 'working' while a permission box sat on screen (focus-duck).
   if (agent_id !== undefined || agent_type !== undefined) record.sub = true;
+  // 0439: claude reports its current permission mode on the hook payload
+  // (UserPromptSubmit, PreToolUse, …), so a Shift+Tab made inside claude
+  // reaches mc. Kept on ANY event that carries it. Capped like tool_name; the
+  // tailer validates it against the known modes before applying it.
+  if (typeof permission_mode === 'string') record.permission_mode = permission_mode.slice(0, 32);
 
   // mode applies only when appendFileSync CREATES the file (0408/S4);
   // existing files are tightened once at boot by tightenStateModes().

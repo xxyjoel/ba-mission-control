@@ -87,7 +87,7 @@ const SECTIONS = [
     ['/compact  (or :compact)', 'ask focused session for a summary so far'],
     ['/compact-restart  (or :cr)', 'L1 · summary → kill → relaunch with summary'],
     ['/clear   (or :clear · :restart)', 'kill + relaunch focused session · fresh sessionId'],
-    ['/remember  (or :remember · :rem)', 'L2 · append a dated note to <cwd>/.mc/MEMORY.md'],
+    ['/remember  (or :remember · :rem)', 'L2 · note to <cwd>/.mc/MEMORY.md · plugin off by default'],
     ['/memory   (or :memory · :mem)', "L2 · dump this repo's project memory into the tail"],
     ['/mcp     (or :mcp)', 'L3 · list MCP servers attached to the focused session'],
     [':tasks  (or :todo · :t)', "GitHub Issues for focused session's repo (via gh)"],
@@ -99,7 +99,7 @@ const SECTIONS = [
   ]},
   { title: 'SETTINGS', rows: [
     ['Open settings menu', 'esc  (or  ,)'],
-    ['Quit', 'q → confirm modal (or ctrl-c)'],
+    ['Quit', 'q → confirm (q/s save · d discards) · ctrl-c saves'],
   ]},
 ];
 

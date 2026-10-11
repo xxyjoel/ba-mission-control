@@ -19,6 +19,7 @@ import { loadSettings } from './lib/settings.js';
 import { zoomBodyDims } from './lib/zoomGeometry.js';
 import { syncFromSnapshot, setQuitMode, pruneSessions, setStoreReadOnly } from './lib/sessionStore.js';
 import { acquireInstanceLock, releaseInstanceLock, tightenStateModes } from './lib/instanceLock.js';
+import { reapOrphanedPaused, createPausedWatcher } from './lib/pausedPids.js';
 import { MODELS } from './lib/models.js';
 import { loadModelCache, applyCacheToCatalog, autoProbeOnVersionChange, syncModelsFromApi } from './lib/modelProbe.js';
 import { dlog } from './lib/debugLog.js';
@@ -140,7 +141,11 @@ if (!lock.ok) {
   setStoreReadOnly(true);
   // eslint-disable-next-line no-console
   console.error(
-    `mc: another instance (pid ${lock.holderPid}) owns this config dir — `
+    // 0445: ok:false now also covers "the lock could not be created" (error set,
+    // or a racer mid-write with no readable pid yet) — don't print "pid undefined".
+    (lock.error
+      ? `mc: could not create the instance lock (${lock.error}) — `
+      : `mc: another instance${lock.holderPid ? ` (pid ${lock.holderPid})` : ''} owns this config dir — `)
     + `session/settings/cost saving is DISABLED in this one. Close the other `
     + `mc, or use MC_CONFIG_DIR for an isolated sandbox / MC_ALLOW_MULTI=1 to override.`,
   );
@@ -149,6 +154,19 @@ try {
   const { dropped, deduped, closed } = pruneSessions({ maxSlots: bootSettings.maxSlots });
   if (dropped || deduped || closed) dlog('store', 'prune', { dropped, deduped, closed });
 } catch { /* hygiene must never block boot */ }
+
+// 0443: a slot paused (SIGSTOP) when the last mc died hard is still frozen
+// under pid 1. End it before any slot launches or auto-resumes. Only the lock
+// holder does this — a second instance must not act on the owner's records.
+if (lock.ok) {
+  try {
+    // Awaited: SIGTERM, a grace period, then SIGKILL, and auto-resume must not
+    // start until the old claude has let go of its session. Costs nothing
+    // when no record is orphaned.
+    const { reaped, killed, skipped } = await reapOrphanedPaused();
+    if (reaped.length || skipped.length) dlog('store', 'paused-reap', { reaped, killed, skipped });
+  } catch { /* hygiene must never block boot */ }
+}
 
 // 0404: fix every agent's PTY geometry to the zoom body size BEFORE the first
 // spawn. A claude that is resized later reprints its whole frame and leaves the
@@ -167,6 +185,13 @@ const fleet = new Fleet({
 // mc alive (unref'd) and never throws into the app.
 const stopHeapProbe = startHeapProbe(fleet);
 
+// 0443: save {pid, startTime} of every paused slot so the next boot can end a
+// slot that is still frozen after a crash. 'change' fires synchronously from
+// pause() / resume() / kill(), so the record is on disk before any later
+// SIGKILL of mc. The watcher writes only when the paused set moves.
+const onPausedChange = createPausedWatcher();
+fleet.on('change', () => { try { onPausedChange(fleet.agents); } catch {} });
+
 // Enter the terminal alt-screen so mc's render lives in a dedicated
 // buffer that the OS restores on exit. Without this, mc draws inline
 // in the normal buffer — its last frame persists in scrollback after
@@ -178,8 +203,12 @@ const stopHeapProbe = startHeapProbe(fleet);
 const altScreen = process.stdout.isTTY === true;
 if (altScreen) process.stdout.write('\x1b[?1049h');
 
+// 0464: incrementalRendering rewrites only the lines that changed instead of
+// erasing and redrawing the whole frame (the review measured -73% terminal
+// output with it).
 const app = render(<App fleet={fleet} auth={auth} />, {
   exitOnCtrlC: true,
+  incrementalRendering: true,
 });
 
 // Capture the open-set to the resume store at the LAST possible moment before
@@ -212,7 +241,10 @@ const shutdown = () => {
   if (shutdownStarted) return;
   shutdownStarted = true;
   persistOpenSet();          // capture live set BEFORE killing
-  try { releaseInstanceLock(); } catch {}
+  // 0445: the instance lock is released LAST (in the reaper below, and in the
+  // 'exit' net when the loop drains first) — not here. Releasing before the
+  // children are dead let a new mc claim the config dir while this one's
+  // final persists and wedged claudes were still live.
   try { stopHeapProbe(); } catch {}
   try { killShellSession(); } catch {}
   try { fleet.stopPolling(); } catch {}
@@ -229,6 +261,7 @@ const shutdown = () => {
   // reaper lands the SIGKILL.
   const reaper = setTimeout(() => {
     try { fleet.hardKillAll(); } catch {}
+    try { releaseInstanceLock(); } catch {} // 0445: last, after every kill
     process.exit(0);
   }, 1500);
   reaper.unref?.();
@@ -255,8 +288,10 @@ process.on('SIGHUP',  shutdown);
 process.on('SIGTSTP', () => { dlog('app', 'sigtstp-swallowed', {}); });
 // Defense in depth: if the process is stopped by some OTHER means (`kill -STOP`)
 // and later resumed (`kill -CONT` / `fg`), re-enter the alt-screen so the fleet
-// view isn't left painted into the normal buffer; the render loop repaints on
-// its next tick.
+// view isn't left painted into the normal buffer. 0464: App's own SIGCONT
+// listener (registered after this one) then forces Ink's full redraw — with
+// incrementalRendering and an idle fleet, no tick would repaint the cleared
+// screen.
 process.on('SIGCONT', () => {
   if (altScreen) { try { process.stdout.write('\x1b[?1049h'); } catch {} }
   dlog('app', 'sigcont-reinit', {});
@@ -307,6 +342,11 @@ process.on('exit', () => {
   if (altScreen) {
     try { process.stdout.write('\x1b[?1049l'); } catch {}
   }
+  // 0445: release the instance lock LAST on every exit path (clean drain,
+  // crash, signal) — after the kills above. releaseInstanceLock only unlinks
+  // a lock that names this pid, so a read-only second instance never removes
+  // the owner's lock.
+  try { releaseInstanceLock(); } catch {}
 });
 
 // Wait for the Ink render to exit (Ctrl-C or `q` → useApp().exit()).
@@ -324,8 +364,12 @@ try { fleet.killAll(); } catch {}
 // Give SIGTERM a short grace, SIGKILL stragglers, and exit explicitly —
 // matching the signal path's semantics. unref() keeps the timer from
 // holding the loop open itself: a clean drain still exits immediately.
+// 0445: the clean quit used to never release the lock (only the signal path
+// did). It is released last here, after hardKillAll, and by the 'exit' net
+// when the loop drains before this timer fires.
 const reapTimer = setTimeout(() => {
   try { fleet.hardKillAll(); } catch {}
+  try { releaseInstanceLock(); } catch {}
   process.exit(0);
 }, 1500);
 reapTimer.unref?.();

@@ -104,6 +104,9 @@ test('zoom recipe B: Ctrl+J writes bracketed-paste-wrapped \\n when mode on', as
   assert.equal(writes.length, 1, 'exactly one write');
   assert.equal(writes[0], '\x1b[200~\n\x1b[201~',
     'Ctrl+J must be wrapped in bracketed paste with embedded LF');
+  // 0446: written through agent.writeInput as an edit, not a submit/paste,
+  // so the cost cap never blocks inserting a newline.
+  assert.deepEqual(stub.getWriteOpts(), [{ submit: false, paste: false }]);
   unmount();
 });
 
@@ -163,6 +166,8 @@ test('zoom recipe H: multi-char paste wrapped in CSI 200~/201~ when mode on', as
   if (writes.length === 1) {
     assert.equal(writes[0], '\x1b[200~hello world\x1b[201~',
       'wrapped paste when delivered as one chunk');
+    // 0446: flagged as a paste so the cost cap can refuse it.
+    assert.deepEqual(stub.getWriteOpts(), [{ submit: false, paste: true }]);
   } else {
     // Char-by-char delivery — no wrap, just verify nothing got duplicated.
     assert.equal(writes.join(''), 'hello world');
@@ -196,6 +201,19 @@ test('zoom recipe J: typing "a" produces exactly one write of "a"', async () => 
   const writes = stub.getWrites();
   assert.equal(writes.length, 3, 'three keystrokes → three writes');
   assert.deepEqual(writes, ['a', 'b', 'c']);
+  // 0446: plain keystrokes go through agent.writeInput unflagged.
+  assert.ok(stub.getWriteOpts().every((o) => !o.submit && !o.paste));
+  unmount();
+});
+
+// ─── 0446 — Enter goes through agent.writeInput as a submit ─────────
+test('zoom recipe 0446: Enter writes \\r via agent.writeInput flagged submit, and marks the agent submitted', async () => {
+  const { stdin, stub, unmount } = renderPane();
+  await tick(60);
+  await press(stdin, '\r');
+  assert.deepEqual(stub.getWrites(), ['\r']);
+  assert.deepEqual(stub.getWriteOpts(), [{ submit: true, paste: false }]);
+  assert.equal(stub.getMarkUserSubmittedCalls(), 1, 'markUserSubmitted still fires on Enter');
   unmount();
 });
 

@@ -3,6 +3,13 @@
 Generated 2026-06-09 by the systematic audit pass. Source of truth for
 "what's actually in this repo, who calls what, where does state live."
 
+**Updated 2026-10-08 (task 0467) for the PTY design.** Sections 1, 3, 6, 7
+and 9 describe the default path: one interactive `claude` per slot in a
+node-pty, with state read from the files claude writes. The stream-json
+`Agent` is now the legacy path behind `FLEET_USE_PTY=0`. The ERD (§2) and the
+state table (§5) still name `Agent`; read that as "the slot's agent object"
+(`PtyAgent` by default). `server/zoomSession.mjs` was deleted in 0444.
+
 Companion docs:
 - `COMPONENTS.md` — per-component purpose, props, orphan flags
 - `IMPROVEMENTS.md` — 500+ task backlog bucketed by category
@@ -22,7 +29,8 @@ Companion docs:
 │  preflight()  →  claude --version + claude auth status          │
 │  new Fleet()                                                    │
 │  render(<App fleet={fleet} auth={auth}/>)                       │
-│  wire SIGINT/SIGTERM → fleet.killAll() + app.unmount()          │
+│  wire SIGINT/SIGTERM/SIGHUP → save open set, killAll, unmount,  │
+│    SIGKILL stragglers after 1.5 s, release instance lock last   │
 └──────────────────────┬──────────────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────────────┐
@@ -36,8 +44,17 @@ Companion docs:
                        │ snapshot/event bus
 ┌──────────────────────▼──────────────────────────────────────────┐
 │ DATA LAYER  (in-process, no HTTP)                               │
-│  Fleet (10 slots, EventEmitter, pub-sub snapshot)               │
-│    Agent[] — one per slot, owns a `claude` subprocess           │
+│  Fleet (10 slots default, 1–64; EventEmitter, snapshot)         │
+│    one shared tick drives every slot's tailers                  │
+│    PtyAgent[] (default) — extends PtyCore:                      │
+│      PtyCore: node-pty spawn, xterm-headless emulator, send     │
+│        queue, pause/resume/kill on the process tree, restart    │
+│      sessionFileTailer + jsonlConnector — claude's JSONL        │
+│      statusHookTailer — hook NDJSON (working/waiting/idle)      │
+│      subagentUsageTailer — sub-agent usage into the parent      │
+│      deriveStatus() — signals → one status + STUCK              │
+│    CursorAgent — Cursor slots on the same PtyCore               │
+│    Agent — legacy stream-json (FLEET_USE_PTY=0)                 │
 │    MockAgent — replays fixture instead of spawning claude       │
 └──────────────────────┬──────────────────────────────────────────┘
                        │
@@ -47,7 +64,8 @@ Companion docs:
 │  ~/.config/claude-mc/settings.json   — user preferences         │
 │  ~/.config/claude-mc/costs-week.json — week/day cost buckets    │
 │  ~/.config/claude-mc/templates.json  — named session bundles    │
-│  ~/.local/state/claude-mc/sessions/<id>.jsonl — transcript      │
+│  ~/.local/state/claude-mc/status/<sid>.ndjson — hook events     │
+│  ~/.claude/projects/<cwd>/<sid>.jsonl — claude's transcript     │
 │  ~/.claude/abtop-rate-limits.json    — plan usage (claude-side) │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -175,51 +193,42 @@ erDiagram
 
 ---
 
-## 3. Message flow: user types in Zoom → claude reply renders
+## 3. Message flow: user sends a message → claude reply renders
+
+Default PTY path. The message goes in as typed bytes; the reply comes back
+through the files claude writes, not through stdout.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor U as User
-    participant TF as TextField
-    participant ZM as Zoom.jsx
     participant AP as App.jsx
+    participant AG as PtyAgent (PtyCore)
+    participant PTY as claude in node-pty
+    participant HK as hooks/emit-status.mjs
+    participant ST as statusHookTailer
+    participant JT as sessionFileTailer + jsonlConnector
     participant FL as Fleet
-    participant AG as Agent
-    participant CL as claude subprocess
-    participant CS as CostStore
-    participant SS as SessionStore
 
-    U->>TF: types, Ctrl+J newline, Enter
-    TF->>ZM: onSubmit(text)
-    ZM->>AP: onSendMessage(text, agentId)
-    AP->>FL: fleet.agentById(id)
-    FL-->>AP: agent
+    U->>AP: Broadcast / approve / command (or types in zoom)
     AP->>AG: agent.send(text)
-    AG->>AG: cost-cap check (costSession >= cap → refuse)
-    AG->>CL: stdin.write(JSON user msg)
-    AG->>AG: appendTail({kind:'user'})
-    AG->>AG: status = 'working'
+    AG->>AG: cost-cap check (costSession >= cap → refuse, tail note)
+    AG->>AG: not ready yet (startup, trust dialog)? → queue
+    AG->>PTY: write text (bracketed paste), Enter on the next tick
+    PTY->>HK: PreToolUse / Notification / Stop hook
+    HK->>HK: append one NDJSON line to status/<sid>.ndjson
+    ST->>AG: hookStatus + hookStatusTs (event time)
+    PTY->>PTY: append lines to ~/.claude/projects/…/<sid>.jsonl
+    JT->>AG: tokens, context, cost, todos, tail, model, permission mode
     AG-->>FL: emit('change')
-    FL-->>AP: emit('change', snapshot)
-    AP->>AP: setSnapshot()
-
-    CL-->>AG: stream_event (partial delta)
-    AG->>AG: activity += text  (#scheduleChange, 50ms throttle)
-    CL-->>AG: assistant (full message)
-    AG->>AG: tokensIn/Out, context, detectPrompt()
-    AG-->>FL: emit('change')
-    CL-->>AG: result (turn complete)
-    AG->>AG: costSession += total_cost_usd
-    AG-->>FL: emit('change')
-    FL-->>AP: emit('change', snapshot)
-    AP->>CS: CostStore.update(agents)
-    CS->>CS: delta per agent.id, weeks/days bucket
-    AP->>SS: syncFromSnapshot(agents, historyLimit)
-    SS->>SS: bySlot upsert, history dedupe/trim
-    AP->>ZM: re-render with new tail/cost/tokens
-    ZM-->>U: visible response + cost overlay
+    FL-->>AP: snapshot (toJSON → deriveStatus)
+    AP->>AP: drop the snapshot if nothing visible changed
+    AP-->>U: card / zoom re-render
 ```
+
+In zoom, `PtyPane` draws the agent's own emulator and sends keys through
+`agent.writeInput()`, which applies the same cost-cap check. Zoom never
+starts a claude of its own.
 
 ---
 
@@ -266,7 +275,9 @@ sequenceDiagram
 | Owner | State | Lives in | Persisted | Notes |
 |-------|-------|----------|-----------|-------|
 | Fleet | `agents[]`, `sessionStart`, `defaultCostCapUSD` | server/fleet.mjs in-memory | no | Lost on restart; restored by SessionStore |
-| Agent | spawn handle, transcript writer, tail, spark, status, tokens, cost | server/agent.mjs in-memory | tail goes to transcript jsonl | Dies with subprocess |
+| Agent (PtyAgent by default) | pty, emulator, send queue, tail, spark, signals, tokens, cost | server/ptyCore.mjs + server/ptyAgent.mjs in-memory | no — rebuilt from claude's JSONL on resume | Dies with the process |
+| Paused-pid record | {pid, startTime} of paused slots | tui/lib/pausedPids.js | next to sessions.json | Next boot ends a paused claude left under pid 1 |
+| Instance lock | pid of the mc that owns the config dir | tui/lib/instanceLock.js | `mc.lock` in the config dir | A second mc runs read-only |
 | App | UI focus, modal, toasts, command-bar buffer, kill/quit-arm refs | tui/App.jsx React state | no | Per-session UI; resets on relaunch |
 | SessionStore | bySlot map + rolling history | tui/lib/sessionStore.js | `~/.config/claude-mc/sessions.json` | Schema v2; trimmed at `settings.sessionHistoryLimit` |
 | CostStore | week/day buckets + per-agent lastSeen | tui/lib/costStore.js | `~/.config/claude-mc/costs-week.json` | Rolls over Monday 00:00 UTC |
@@ -279,46 +290,59 @@ sequenceDiagram
 
 | Emitter | Event | Triggered by | Payload | Listeners |
 |---------|-------|--------------|---------|-----------|
-| Agent | `'change'` | every stream event (throttled 50ms), state transitions, send, pause, resume, kill | (none — snapshot pulled on demand) | Fleet |
+| Agent | `'change'` | tailer reads (JSONL, hook NDJSON, sub-agent files), state transitions, send, pause, resume, kill | (none — snapshot pulled on demand) | Fleet |
 | Fleet | `'change'` | any Agent `'change'`, plus launch/kill/setCostCap | `{ sessionStart, now, agents: [...] }` snapshot | App.jsx (single subscriber) |
-| Node | `'SIGINT' \| 'SIGTERM'` | OS | — | main.jsx shutdown handler |
+| Node | `'SIGINT' \| 'SIGTERM' \| 'SIGHUP'` | OS (Ctrl-C, kill, terminal closed) | — | main.jsx shutdown handler (saves; only the in-app `[d]` discards) |
+| Node | `'SIGCONT'` | OS | — | main.jsx re-enters the alt screen; App forces a full redraw |
 | stdout | `'resize'` | TTY SIGWINCH | — | App.jsx termSize tracker |
 
 ---
 
-## 7. Subprocess boundary (claude wire format)
+## 7. Subprocess boundary
 
-`Agent.start()` spawns the `claude` CLI in stream-json mode:
+### Default: interactive claude in a PTY (`PtyAgent`)
+
+`PtyAgent` spawns the interactive `claude` in a node-pty:
 
 ```
 claude
-  --session-id <uuid>                  ← stable across restarts for resume
-  --input-format stream-json
-  --output-format stream-json
-  --print
-  --include-partial-messages
-  [--model <id>]
-  [--permission-mode plan|default|acceptEdits]
-  [--resume]
+  --session-id <uuid>        ← new session (or --resume <uuid> when a transcript exists)
+  [--model <cli id>]
+  [--permission-mode <mode>]
   --add-dir <cwd>
+  --settings '<hooks JSON>'  ← wires Notification / PreToolUse / Stop to hooks/emit-status.mjs
 ```
 
-**Inbound (proc.stdout):** newline-delimited JSON; routed by `event.type`:
-- `system` (event: `init`) — session ready; resets restart backoff
-- `stream_event` (content_block_delta) — partial text → `activity`
-- `assistant` (full message) — append to tail, detect awaiting prompt, update tokens/context
-- `user` — echo back (rare)
-- `result` — turn done; folds in `total_cost_usd`
+The child env is mc's env minus the parent claude's session markers
+(`childEnv()` in `ptyCore.mjs`, 0469), so mc run from inside claude still gets
+transcripts.
 
-**Outbound (proc.stdin):** newline-delimited JSON; one shape:
-```json
-{ "type":"user", "message": {"role":"user","content":"<text>"} }
-```
+**Inbound:** nothing is parsed from the PTY output except screen checks
+(approval prompt, active-turn spinner, folder-trust dialog). Data comes from:
+- `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` — claude's transcript, read by
+  `sessionFileTailer`, parsed by `jsonlConnector`
+- `~/.local/state/claude-mc/status/<sid>.ndjson` — hook events, read by
+  `statusHookTailer`
+- `<sid>/subagents/**/agent-*.jsonl` — sub-agent usage, read by
+  `subagentUsageTailer`
 
-**Lifecycle signals:**
-- `SIGSTOP` / `SIGCONT` — pause/resume (POSIX; doesn't terminate the process)
-- `SIGTERM` — graceful kill
-- `proc.on('exit')` → exponential-backoff auto-restart unless `killed:true`
+**Outbound:** text written to the PTY (bracketed paste when claude has it on),
+then Enter on a later tick. Queued messages go one at a time.
+
+**Lifecycle signals** (to claude's process group and every descendant):
+- `SIGSTOP` / `SIGCONT` — pause/resume
+- `SIGTERM`, then `SIGKILL` after 1.5 s — kill, restart, quit
+- PTY exit → auto-restart with backoff unless killed; a respawn waits for the
+  old claude to exit
+
+### Legacy: stream-json (`Agent`, `FLEET_USE_PTY=0`)
+
+`Agent.start()` spawns `claude --print --input-format stream-json
+--output-format stream-json --include-partial-messages …` and parses
+newline-delimited JSON from stdout (`system` init, `stream_event` deltas,
+`assistant`, `user`, `result` with `total_cost_usd`). Input is one JSON
+`{ "type":"user", "message": {…} }` line per message. Zoom does not work on
+this path.
 
 ---
 
@@ -344,7 +368,11 @@ claude
 | `~/.config/claude-mc/costs-week.json` | CostStore | created on first update | Silent reset on parse error → cost-tracking loss |
 | `~/.config/claude-mc/templates.json` | TemplateStore | optional; bundled defaults if missing | Silently ignored on parse error |
 | `~/.config/claude-mc/debug-keys.log` | TextField (`MC_DEBUG_KEYS=1` only) | append-only diagnostic | Silent open-fail if dir missing — TODO(debug-keys-mkdir) |
-| `~/.local/state/claude-mc/sessions/<id>.jsonl` | Agent transcript | created on first send | Silent fail if FS read-only |
+| `~/.local/state/claude-mc/status/<sid>.ndjson` | hooks/emit-status.mjs (writes), statusHookTailer (reads) | one line per hook event; `MC_STATUS_DIR` overrides the dir | Hook always exits 0; a write failure loses that event |
+| `~/.claude/projects/<encoded-cwd>/<sid>.jsonl` | external (claude CLI) | written by claude; read by the tailers | Tailer polls for creation until the first message |
+| `~/.config/claude-mc/mc.lock` | instanceLock | created with `wx` at boot, released last at exit | A live holder makes the second mc read-only |
+| paused-pid record (config dir) | pausedPids | written when the paused set changes | Next boot signals only a pid whose start time and parent still match |
+| `~/.local/state/claude-mc/sessions/<id>.jsonl` | legacy Agent transcript (`FLEET_USE_PTY=0` only) | created on first send | Silent fail if FS read-only |
 | `~/.claude/abtop-rate-limits.json` | external (claude CLI) | best-effort read | UI gracefully degrades when missing |
 
 ---

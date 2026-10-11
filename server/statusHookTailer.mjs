@@ -11,6 +11,7 @@
 import { promises as fsp, watch as fsWatch } from 'node:fs';
 import { statusFilePath } from './statusFile.mjs';
 import { creationPollDelay } from './sessionFileTailer.mjs';
+import { knownClaudeMode } from './permissionModes.mjs';
 
 // Mirror sessionFileTailer.mjs intervals (0179 pattern).
 const STAT_POLL_MS = 1500;     // backstop for cloud-synced paths where fs.watch never fires
@@ -32,9 +33,17 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
   let core = createReadCore(filePath);
   let lastSid = agent.sessionId;
 
+  // 0439: a rebuilt tailer replays the hook file from offset 0. A mode in a
+  // record OLDER than the argv mc last spawned claude with is history — after
+  // changePermissionMode restarts claude with `--permission-mode NEW`, the old
+  // records must not put the old mode back. ptyAgent stamps the spawn; an
+  // unstamped agent falls back to this tailer's start.
+  const modeFloorFallback = Date.now();
+
   let stopped = false;
   let watcher = null;
   let creationPollTimer = null;
+  let awaitingCreate = false; // 0465: drive:'external' — tick() runs the creation check
   let statPollTimer = null;
   let readingLock = false;
 
@@ -55,6 +64,10 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     filePath = nextPath;
     core = createReadCore(filePath);
     if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+    // TODO(0465): under drive:'self' a pending pollCreate is not cancelled here;
+    // if this attach succeeds, that timer's later attachWatcher() overwrites
+    // `watcher` and this one is never closed (pre-existing; external drive is
+    // safe — tick() attaches only while !watcher).
     attachWatcher(); // failure is fine — the stat-poll backstop covers creation
   }
 
@@ -79,9 +92,18 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
           // background agents are still working. toJSON keeps an idle card
           // on 'working' while this clock is fresh (focus-duck read IDLE
           // with three builders running, 2026-08-30).
-          agent.lastSubHookTs = Date.now();
+          // 0449: the record's own time, never the read time — a replay from
+          // offset 0 must not make a 14 h old sub event look live. max() so an
+          // older record (repointed file) can't move the clock backwards.
+          agent.lastSubHookTs = Math.max(agent.lastSubHookTs || 0, eventTs(ev));
           continue;
         }
+        // 0439: claude reports its permission mode on the hook payload, so a
+        // Shift+Tab inside claude (zoom) moves mc's record — the zoom chip, the
+        // saved session and the mode a resume restarts in. Read here, before
+        // the 0390 / P3 branches (P3 `continue`s). Subagent records are skipped
+        // above: a subagent's mode says nothing about the main thread's.
+        applyHookPermissionMode(agent, ev, modeFloorFallback);
         // 0390: PostToolUse for a human-blocking tool = the ask was ANSWERED —
         // protocol truth from claude itself, the only channel that reports it
         // explicitly. Clear the pending prompt so a resolved ask can never pin
@@ -103,7 +125,7 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
         // above).
         if (ev?.event === 'PostToolUse' && agent.hookStatus === 'waiting') {
           agent.hookStatus = 'working';
-          agent.hookStatusTs = Date.now();
+          agent.hookStatusTs = eventTs(ev); // 0449
           agent.emit?.('change');
           continue;
         }
@@ -111,7 +133,18 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
         if (s != null) {
           const changed = agent.hookStatus !== s;
           agent.hookStatus = s;
-          agent.hookStatusTs = Date.now();
+          // 0449: working/waiting stamp the EVENT time (clamped to now).
+          // Replay from offset 0 used to stamp read time, so a 14 h old
+          // PreToolUse looked 0.3 s old. IDLE keeps the read time on purpose:
+          // its only reader is deriveStatus's hook-idle branch, which compares
+          // it with lastConnectorTs — and that clock (jsonlConnector.mjs:238)
+          // is the time mc READ the transcript line. Stamping a Stop with its
+          // own ts let any transcript record read after the Stop beat it (up to
+          // 1.5 s of stat-poll on cloud paths), turning a finished turn into
+          // WAITING/WORKING. Both sides of that comparison must share a clock.
+          // TODO(0449): move lastConnectorTs to the record's own time too, then
+          // drop this idle exception (jsonlConnector is another lane's file).
+          agent.hookStatusTs = s === 'idle' ? Date.now() : eventTs(ev);
           if (changed) agent.emit?.('change');
         }
         // null-mapping events leave hookStatus/hookStatusTs unchanged and do not emit
@@ -139,17 +172,23 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     // Creation poll with backoff: the status NDJSON only appears on the first
     // hook event, so an unprompted slot would otherwise poll 2×/s forever.
     // Fast for ~10s, then 2s (creationPollDelay — shared with sessionFileTailer).
-    let creationAttempts = 0;
-    const pollCreate = () => {
-      if (stopped) return;
-      if (attachWatcher()) {
-        creationPollTimer = null;
-        doRead();
-        return;
-      }
-      creationPollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
-    };
-    creationPollTimer = setTimeout(pollCreate, creationPollDelay(0));
+    // 0465: under drive:'external' the Fleet tick runs the check instead — no
+    // per-slot timer (was 2 per never-prompted slot, 20 at 10).
+    if (drive === 'external') {
+      awaitingCreate = true;
+    } else {
+      let creationAttempts = 0;
+      const pollCreate = () => {
+        if (stopped) return;
+        if (attachWatcher()) {
+          creationPollTimer = null;
+          doRead();
+          return;
+        }
+        creationPollTimer = setTimeout(pollCreate, creationPollDelay(++creationAttempts));
+      };
+      creationPollTimer = setTimeout(pollCreate, creationPollDelay(0));
+    }
   }
 
   // Stat-poll backstop: fs.watch silently never fires on many cloud-synced
@@ -166,11 +205,15 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
     // 0381: one externally-driven backstop pass (drive: 'external').
     tick() {
       if (stopped) return;
+      // 0465: the creation check, folded into the shared tick. A failed attach
+      // still reads: doRead() returns [] on ENOENT and repoints a rotated sid.
+      if (awaitingCreate && !watcher && attachWatcher()) awaitingCreate = false;
       doRead();
     },
     stop() {
       if (stopped) return; // idempotent
       stopped = true;
+      awaitingCreate = false;
       if (watcher) {
         try { watcher.close(); } catch {}
         watcher = null;
@@ -185,6 +228,36 @@ export function startStatusHookTailer({ agent, drive = 'self' }) {
       }
     },
   };
+}
+
+// eventTs(ev) — 0449. The record's own ms timestamp (emit-status.mjs writes
+// Date.now() at hook time), clamped to now so a skewed or hand-edited future
+// ts can't pin freshness. The file is untrusted: anything but a finite number
+// of MILLISECONDS (no coercion of true/"5"/[7]; a seconds value like 1.7e9 is
+// below MIN_EVENT_TS_MS) falls back to now. Date.now() is read per call so
+// tests that mock the clock (status.replay) keep working.
+const MIN_EVENT_TS_MS = 1e12; // 2001-09-09 in ms; any seconds-based ts is far below
+export function eventTs(ev) {
+  const now = Date.now();
+  const ts = ev?.ts;
+  return typeof ts === 'number' && Number.isFinite(ts) && ts >= MIN_EVENT_TS_MS
+    ? Math.min(ts, now) : now;
+}
+
+// applyHookPermissionMode — 0439. Set agent.permissionMode from a hook record's
+// `permission_mode` when it is a known claude mode (the file is untrusted) and
+// the record is not older than the argv claude was last spawned with, and the
+// record is not a subagent's. Emits
+// 'change' only when the value moves.
+function applyHookPermissionMode(agent, ev, floorFallback) {
+  if (ev?.sub) return false; // a subagent's mode says nothing about the main thread's
+  const mode = knownClaudeMode(ev?.permission_mode);
+  if (!mode || mode === agent.permissionMode) return false;
+  const floor = Number.isFinite(agent.permissionModeArgvTs) ? agent.permissionModeArgvTs : floorFallback;
+  if (!(Number(ev.ts) >= floor)) return false;
+  agent.permissionMode = mode;
+  agent.emit?.('change');
+  return true;
 }
 
 /**
@@ -259,7 +332,8 @@ export function createReadCore(filePath) {
  *
  * Maps one parsed NDJSON hook record to a status string or null.
  * Record shape (from server/hooks/emit-status.mjs):
- *   { ts: number, session_id: string, event: string, notification_type?: string }
+ *   { ts: number, session_id: string, event: string, notification_type?: string,
+ *     tool_name?: string, sub?: true, permission_mode?: string }
  *
  * @param {unknown} ev — the parsed record (or any garbage)
  * @returns {'working'|'waiting'|'idle'|null}
@@ -282,6 +356,13 @@ export function mapEventToStatus(ev) {
 
   if (event === 'Notification') {
     if (notification_type === 'permission_prompt') return 'waiting';
+    // TODO(0363): agent_needs_input is deliberately unmapped (0451). Real hook
+    // logs show it after Stop + idle_prompt (5b7a6c0d:20-22, 93c118d4:12523-31),
+    // paired same-ms with agent_completed (df4c967a:655, add052b8:11610), and
+    // just before a main-thread PreToolUse (add052b8:12495). Mapping it to
+    // 'waiting' left idle cards WAITING with no expiry, and bgStatusFromEvents
+    // shares this mapper. Unresolved, possibly real blocks: aae20e51:8094-8098,
+    // fcefd2e4:3746-3749. Settle its meaning in 0363 before mapping it.
     if (notification_type === 'idle_prompt') return 'idle';
     return null;
   }

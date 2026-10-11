@@ -3,8 +3,8 @@
 <p align="center">
   <strong>Run a fleet of Claude Code agents. Know what every one of them costs.</strong><br>
   A keyboard-first terminal TUI for <strong>real</strong> <code>claude</code> CLI agents —
-  10 live by default and up to 64, every conversation saved and brought back with one command,
-  with spend measured per session and hard limits that refuse to go past them.<br>
+  10 slots by default (the setting goes up to 64), every conversation saved and brought back
+  with one command, with spend measured per session and limits that refuse new work once reached.<br>
   No GUI. No Electron. No prefix keys.
 </p>
 
@@ -51,9 +51,10 @@ back to the session that spawned it, so one agent spawning five still gives you 
 honest number.
 
 **Stop a runaway agent, don't just watch it.** `:cap <slot> <usd>` refuses to send
-another message once a session passes its limit. `:budget <usd>` refuses to launch
-anything new once the fleet passes its daily figure. These are enforcement, not a
-dashboard that tells you afterwards.
+another message once a session reaches its limit. `:budget <usd>` refuses new launches,
+resumes, `:clear` / `:restart` and `:cr` once the fleet reaches its daily figure. Both act on the
+next message or launch: a turn that is already running finishes, so the final total can
+end up a little past the figure. These refuse work; they do not just report it afterwards.
 
 **Never hunt for the stuck one.** Status comes from Claude Code's own lifecycle
 hooks, not from watching a pane go quiet, so a session blocked on a permission prompt
@@ -203,6 +204,7 @@ Configurable env vars:
 | `CLAUDE_BIN`   | `claude`       | Path to the `claude` CLI |
 | `REPO_PARENTS` | see `server/repos.mjs` | Colon-separated parent dirs scanned for the New Session repo picker. Recursive to depth 3. Overridden by a folder chosen in-app via `:repos` (which persists to settings). |
 | `MC_MOCK`      | _unset_        | Fixture name (e.g. `approval-request`) — when set, every launched session replays a JSONL fixture from `server/fixtures/` instead of spawning a real `claude` subprocess. Use for deterministic Zoom UX iteration without API spend. |
+| `MC_STATUS_DIR` | `~/.local/state/claude-mc/status` | Absolute path for the per-session hook status files. mc passes it to claude so the hook writes where mc reads. Used by the real-claude tests. |
 | `MC_HEAP_LOG`  | _unset_        | When set, logs memory (rss/heap) + per-structure counts every 60 s to `~/.local/state/claude-mc/heap/` for diagnosing long-uptime memory growth. Independent of this, `kill -USR2 <mc pid>` writes a heap snapshot on demand (owner-only, `0600`). Off by default. |
 
 Settings (theme, density, grid columns, **max windows per pane**, ctx
@@ -239,7 +241,15 @@ what next": `check back` (working), `ready to review →` (idle, plan complete),
 (Settings → LAYOUT, `windowsPerPane`, default 9 — a 3×3); when more sessions
 are live, or the terminal is too short to fit them, the extra cards spill onto
 additional panes instead of being clipped. `[` / `]` switch panes; the active
-pane follows the focused card.
+pane follows the focused card. `↑` / `↓` move by the columns the grid actually
+draws.
+
+**Card width.** A card is never narrower than 34 columns, the narrowest width
+where every row keeps its figures. When the *Grid columns* setting asks for
+more cards than fit, the grid draws fewer columns: a 120-column terminal draws
+3 columns whether the setting is 3, 4 or 5, and an 80-column terminal draws 2.
+On a terminal narrower than 36 columns one card takes the full width. No row
+on a card ever wraps.
 
 ## What's actually running
 
@@ -254,7 +264,9 @@ a session is working, idle, or blocked on a prompt.
 A legacy path still exists behind `FLEET_USE_PTY=0`. It drives
 `claude --print --input-format stream-json --output-format stream-json` over
 stdin and stdout and maps those events onto the same UI state. It is kept as a
-rollback and is not what you get by default. The table below describes that path:
+rollback and is not what you get by default. Zoom does not work on that path: it
+shows "zoom is not supported for this session" instead. The table below
+describes that path:
 
 | stream-json event (legacy path only) | UI effect |
 | --- | --- |
@@ -306,18 +318,21 @@ Verifiability — every action is observable:
   `ctx` — sidechains keep their own window). On resume, pre-existing sub-agent
   files are primed at EOF so historical spend isn't double-counted.
 - **Git state** (branch, dirty count, ahead/behind) is read via `git` calls
-  in the session's cwd on launch and after each turn.
+  in the session's cwd when the slot starts or restarts (the legacy
+  `FLEET_USE_PTY=0` path also re-reads it after each turn). When git fails or
+  times out the card shows `?` instead of a count, never a clean `●`. A folder
+  that is not a git repo shows no git chips.
 
 ### Session states
 
-Each agent has exactly one status from this six-value enum (`server/agent.mjs`):
+Each agent has exactly one status from this six-value enum (derived in `server/deriveStatus.mjs`):
 
 | State     | Meaning |
 | ---       | --- |
 | `idle`    | attached, no current activity |
 | `working` | actively processing — streaming text, calling tools, thinking |
 | `waiting` | model delivered a prompt awaiting user approval (a.k.a. "needs input") |
-| `paused`  | process frozen via SIGSTOP (user pressed pause) |
+| `paused`  | claude and every process it started frozen via SIGSTOP (user pressed pause). Paused always wins over the other statuses while it lasts. |
 | `error`   | crashed or API failure — auto-restart may retry |
 | `empty`   | slot is vacant, no agent assigned |
 
@@ -347,9 +362,13 @@ toast.
 
 **Not states (derived indicators):**
 
-- `STUCK Nm` — a red chip on the card when an agent is `working` or
-  `waiting` AND has been silent for ≥ 5 minutes (`agent.stuckMin`). Not a
-  status — the underlying state is still `working`/`waiting`.
+- `STUCK Nm` — a red chip on the card when an agent is `working` and nothing
+  real has happened for ≥ 5 minutes: no transcript line and no hook event
+  (`agent.stuckMin`). Claude redrawing its spinner does not count, so a tool
+  or thinking phase that runs longer than 5 minutes with no output also shows
+  STUCK. Never shown beside `waiting` (the session is waiting on you) or
+  `paused`, and not while sub-agents run. Not a status — the underlying state
+  is still `working`.
 - `ctx high` / `ctx full` — derived from `agent.context` vs the
   warn-band / threshold settings, not from `status`.
 - **Session Health dot** — when the optional
@@ -389,6 +408,11 @@ auto-injected; nothing to configure. *(Takes effect per session on next spawn �
 a session already running when mc updated keeps its old status source until
 relaunched.)*
 
+A new claude in a folder it has not been told to trust opens with a
+folder-trust dialog. mc shows that slot as `waiting` and holds any queued
+messages until you answer the dialog in zoom, so your first message is not
+typed into the dialog.
+
 **Session summaries** (`/compact`, `/compact-restart`) are manual,
 user-invoked actions — they're not bound to a state transition. There is
 no automatic stage-bound summary today.
@@ -405,7 +429,7 @@ no automatic stage-bound summary today.
 | `,` | Settings menu |
 | `B` | Broadcast modal — types the message into each targeted session **and submits it** (no manual Enter per session) |
 | `D` | Fleet dashboard — sortable one-row-per-slot table for at-scale triage |
-| `n` / `N` / `Ctrl+N` | New session — appended below the last active card (fills a killed-slot hole only when there's no room to append) |
+| `n` / `Ctrl+N` | New session — appended below the last active card (fills a killed-slot hole only when there's no room to append) |
 | `P` / `R` | Pause (SIGSTOP) / Resume (SIGCONT) |
 | `K` | Kill — **uppercase only** (lowercase `k` stays vim-up and never kills); armed by first press (3s window); confirms on second `K`. `:kill <slot>` follows the same arm/confirm flow; `:kill! <slot>` bypasses. |
 | `A` | Approve — send a generic "continue" message to the focused session. Only accepted while the session is **waiting** for input (a warn toast explains otherwise) |
@@ -414,23 +438,29 @@ no automatic stage-bound summary today.
 | `?` | Help |
 | `/` | Filter — type a substring (matches name/branch/model/status); non-matches dim. Press `/` again to clear. |
 | `:` | Command bar (see below) |
-| `Q` | Quit — opens a confirm with an explicit choice: **`[s]` save & quit** (or `Enter`) vs **`[d]` quit, no save** vs `[n]`/`Esc` cancel |
-| `Ctrl-C` | Quit immediately (treated as **no save** — see below) |
+| `q` | Quit — opens a confirm: **`[s]` save & quit** (also `q`, `y` or `Enter`, so `q` `q` saves) vs **`[d]` quit, no save** vs `[n]`/`Esc` cancel |
+| `Ctrl-C` | Quit immediately and save, the same as `[s]` (see below) |
 
 ### Session save / restore
 
-**Save is opt-in; every other exit is a "clear."** Only a proper **`[s]` save &
-quit** preserves the live conversations *and* their token/cost totals so
-`:resume-all` can rehydrate them with `claude --resume`. Any other exit — `[d]`
-quit-no-save, closing the terminal (SIGHUP), `Ctrl-C`, or a crash — records only
-the open repo **locations**: `:resume-all` then reopens those repos as **fresh**
-sessions (no history, in/out/cost reset to 0). Per-slot crash recovery during a
-running session still resumes the conversation.
+**Every exit saves except `[d]`.** `[s]` save & quit, `q` `q`, `Ctrl-C`, closing
+the terminal (SIGHUP) and SIGTERM all keep the live conversations *and* their
+token/cost totals, so `:resume-all` can bring them back with `claude --resume`.
+Only **`[d]` quit, no save** records just the open repo **locations**:
+`:resume-all` then reopens those repos as **fresh** sessions (no history,
+in/out/cost reset to 0). A crash that mc catches saves too; a `kill -9` of mc
+cannot save anything. Per-slot crash recovery during a running session still
+resumes the conversation.
+
+A slot is reported as **resumed** only when claude really reattached to the old
+conversation. When the saved transcript is gone, the slot opens a fresh session
+and the toast says `slot N: no saved transcript — opened fresh`. One session id
+can be live in only one slot at a time.
 
 | Command | What it does |
 | --- | --- |
-| `:resume-all` | Restart the slots that were **open when mc last closed**. After a *save* quit each is rehydrated via `claude --resume` (conversation + totals restored); after any non-save exit each reopens **fresh** in its repo. The toast reports `resuming N · M fresh`. Killed/closed slots are excluded. On boot, a toast surfaces this if records exist. |
-| `:resume <slot> [slot ...]` | Restore **specific** slots — e.g. `:resume 1 3 5` or `:resume 1,3,5`. Bare `:resume` resumes (SIGCONT) the focused **live** session — the pair to `:pause` — or, when the focused slot is empty, restores that slot's saved record. |
+| `:resume-all` | Restart the slots that were **open when mc last closed**. After a saving exit each is rehydrated via `claude --resume` (conversation + totals restored); after `[d]` each reopens **fresh** in its repo. The toast reports `resuming N · M fresh`. Killed/closed slots are excluded. On boot, a toast surfaces this if records exist. |
+| `:resume <slot> [slot ...]` | Restore **specific** slots — e.g. `:resume 1 3 5` or `:resume 1,3,5`. Every slot must be a whole number from 1 to the fleet size; if any is not (`:resume 99`, `:resume 1 99`), mc shows the valid range and restores nothing. Bare `:resume` resumes (SIGCONT) the focused **live** session — the pair to `:pause` — or, when the focused slot is empty, restores that slot's saved record. |
 | `:history [n]` | **View-only** browse of the last N sessions for historical reference. Never bulk-restores (by design). |
 | `:sessions` (alias `:ls`) | List the sessions that were open at last close — the set `:resume-all` restores. |
 | `:forget <slot>` | Drop one slot from the `:resume-all` set. |
@@ -453,13 +483,13 @@ is lifted out of the body and shown as a discrete `⬆ update` chip on the right
 of the zoom header so it doesn't encroach on the conversation — toggle with
 **Hide claude update banner in zoom** (`hideClaudeUpdateBanner`, default on) in
 Settings → LAYOUT. Rows inside claude's composer are never hidden, so your own
-typing can't be mistaken for the banner. Keys available there:
+typing can't be mistaken for the banner. Claude's own footer (the
+permission-mode line) is never hidden either. Keys available there:
 
 | Keys | Action |
 | --- | --- |
-| `/` | Type a slash command — autocomplete dropdown appears above the composer. `Tab` fills the highlighted name (keeping any args you've typed); `↵` runs it. See below for the catalog. |
-| `⌥↵`  ·  `Ctrl+J` | Newline in composer (plain `↵` submits) |
-| `↑` / `↓` | Recall prior submitted prompt (history nav in composer) |
+| `/`, `@`, `↑` / `↓`, `⌥↵` | **Claude's own** slash commands, file mentions, prompt history and newline. mc passes them straight through. |
+| `Ctrl+J` / `Shift+↵` | Newline without submitting (plain `↵` submits) |
 | `Ctrl+F` | Enter **scroll mode** — view scrollback without forwarding keys to claude (the embedded session owns the screen, so mc brackets a dedicated mode rather than fighting it for arrow keys) |
 | `w` / `s` _(scroll mode)_ | Scroll one line back / forward through history |
 | `f` / `b` _(scroll mode)_ | Scroll half a page up / down |
@@ -468,7 +498,7 @@ typing can't be mistaken for the banner. Keys available there:
 | `Ctrl+U` | Expand / collapse the stats panel (defaults to a compact one-liner) |
 | `Ctrl+K` | Show / hide tool-call events in the log |
 | `Ctrl+Q` | **Close the zoom view** |
-| `Esc`, `Ctrl+T`, `Ctrl+S`, `Shift+Tab` | **Forwarded to claude** — its own cancel/back-out, todos, stash, and permission-mode cycle. mc no longer shadows these (chrome keys are `Ctrl+Q/Y/K/U`, all unused by claude). |
+| `Esc`, `Ctrl+T`, `Ctrl+S`, `Shift+Tab` | **Forwarded to claude** — its own cancel/back-out, todos, stash, and permission-mode cycle. mc no longer shadows these (mc's own keys are `Ctrl+Q/F/K/U`; claude uses those only for line editing). |
 
 **Session geometry is fixed, on purpose.** Every session's `claude` runs at the
 zoom body size — computed once from your terminal (`tui/lib/zoomGeometry.js`)
@@ -506,7 +536,7 @@ The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the h
 | `:cols 3\|4\|5` | Change grid columns |
 | `:perm <mode>` | Set default permission mode (`default`, `acceptEdits`, `bypassPermissions`, `plan`) |
 | `:model` | Show the focused session's requested vs. resolved model |
-| `:model <id>` | Switch the focused session's model live (restarts the subprocess) |
+| `:model <id>` | Switch the focused session's model live. Restarts claude only when the new model differs from the one claude is running (picking `auto` again, or the model it already runs, changes nothing). |
 | `:model default <id>` | Set the fleet default model for new launches |
 | `:model refresh` | Programmatically probe the live model catalog — see [Model catalog](#model-catalog) |
 | `:kill [slot]` | Kill focused (or specified) session |
@@ -520,6 +550,10 @@ The overlay chrome matches the Zoom modal: `shell · <$SHELL> · <cwd>` in the h
 | `:update` | Report **claude version drift**: the on-disk `claude --version` vs the version each live session actually launched on (running processes keep their old binary until restarted). Drifted slots get a fleet-log line; converge by quit+relaunch. |
 | `:whoami` (or `:auth`) | Re-probe `claude auth status` and surface email + subscription |
 | `:usage` | Re-read plan-side rate-limit telemetry (`5h` and `7d` quota %) |
+| `:transcript` (or `:tx`, `:log`) | Print the full path of the focused session's claude transcript file, or say none is on disk yet |
+| `:where` | Print the config dir and the focused session's transcript path |
+| `:remember "<note>"` (or `:rem`) | Append a dated note to `<cwd>/.mc/MEMORY.md`. **Off by default** — needs *.mc/MEMORY.md auto-inject* (`plugin_projectMemory`) turned on in Settings → PLUGINS. With it on, a new session in that folder also gets the file prepended to its first message. Settings saved before this default changed may already hold `true`. |
+| `:memory` (or `:mem`) | Show the focused repo's `.mc/MEMORY.md` in the session tail |
 | `:note <text>` (or `:n`) | Inject a local annotation into the focused session's chat log (not sent to claude) |
 | `:slack <url>` | Set the Slack incoming-webhook URL. `:slack clear` removes it. |
 | `:feedback <msg>` | Send feedback to Slack (includes auth + fleet + plan-usage context) |
@@ -669,17 +703,33 @@ tui/
     Broadcast.jsx     Send one prompt to N sessions
     NewSession.jsx    Single-input launcher: fuzzy-match recents or type a path
     Settings.jsx      btop-style settings (tabs: GENERAL / LAYOUT / COLORS / ALERTS / SAFETY / NOTES)
-    Zoom.jsx          Single-session detail (full tail + ctx bar + msg input)
+    Zoom.jsx          Single-session view: header, stats/tools panels, PtyPane body
+    Dashboard.jsx     Sortable one-row-per-slot table (D)
+    QuitConfirm.jsx   Save / no-save quit choice
     RepoPicker.jsx    Filesystem browser to choose the repo scan folder (:repos)
+  zoom/
+    PtyPane.jsx       Draws the slot's own terminal emulator; forwards keys to claude
+    zoomKeys.js       The few keys zoom keeps for itself (Ctrl+Q/F/K/U/J)
   lib/
     themes.js         7 palettes (BlueArch / Tokyo Night / Gruvbox / Catppuccin / Solarized / Amber / Matrix)
     format.js         bar / sparkline / fmtK / fmtMoney / trunc / fmtClock
     models.js         Claude model metadata (label, maxCtx, kind, costs)
     settings.js       Schema + defaults + on-disk persistence
+    sessionStore.js   Saved sessions for :resume / :resume-all
+    gridLayout.js     Card grid geometry and paging
     TextField.jsx     Minimal single-line input (Ink has none built-in)
 server/
-  fleet.mjs           10-slot fleet manager + pub-sub (EventEmitter)
-  agent.mjs           One claude subprocess wrapper (stream-json I/O)
+  fleet.mjs           Slot manager (10 by default, up to 64) + pub-sub (EventEmitter)
+  ptyCore.mjs         One slot's PTY: spawn, emulator, send queue, pause/kill, restart
+  ptyAgent.mjs        claude on top of PtyCore: argv, hooks, tailers (the default)
+  deriveStatus.mjs    The one function that turns a slot's signals into its status
+  sessionFileTailer.mjs  Follows claude's session JSONL; jsonlConnector.mjs parses it
+  statusHookTailer.mjs   Follows the hook status file (working / waiting / idle)
+  subagentUsageTailer.mjs  Adds sub-agent token use to the parent session
+  hooks/emit-status.mjs  The hook claude runs; appends one NDJSON line per event
+  claudeSessions.mjs  Reads `claude agents --json` (which sessions claude has open)
+  providers/          Slot backends: Claude, and Cursor under providers/cursor/
+  agent.mjs           Legacy stream-json wrapper (FLEET_USE_PTY=0 only)
   mockAgent.mjs       Fixture-driven Agent stand-in for UX iteration (MC_MOCK)
   fixtures/           JSONL fixtures replayed by MockAgent
   git.mjs             branch / dirty / ahead-behind via `git`
@@ -763,14 +813,26 @@ from any view.
 Two tiers of cost protection, both off by default (set the values to
 opt in):
 
-- **Per-slot cap** — `:cap <slot> <usd>` rejects further user messages
-  to that slot once its `costSession` crosses the cap. `:cap default
-  <usd>` persists a fleet-wide default applied to every new launch.
-  Raise the cap with the same command to continue (`:cap 3 10` bumps
-  slot 3 to $10).
-- **Daily budget** — `:budget <usd>` blocks NEW launches once today's
-  fleet-wide spend exceeds the cap. Existing sessions keep running.
-  Use `:budget 0` to disable. `:budget` alone shows today's spend.
+- **Per-slot cap** — `:cap <slot> <usd>` refuses further messages to that
+  slot once its `costSession` reaches the cap. This covers sends from the
+  grid, broadcast, approve and typing in zoom (Enter and pastes are refused;
+  a respawn after `:model` or `:perm` keeps the cap). `<slot>` can be any
+  live slot up to the fleet size, not just 1–10. `:cap default <usd>`
+  persists a fleet-wide default for every new launch; it does not change a
+  slot you capped by hand. Raise the cap with the same command to continue
+  (`:cap 3 10` bumps slot 3 to $10). A hand-set cap stays until that slot is
+  relaunched (`:cap <slot> 0` turns it off but still counts as hand-set).
+- **Daily budget** — `:budget <usd>` refuses to start sessions once today's
+  fleet-wide spend reaches the budget: New Session, `:template`, `:resume`,
+  `:resume-all`, auto-resume at boot, `:clear` / `:restart` (refused before
+  the kill) and `:cr`. Sessions already running keep running, and a running
+  session that restarts itself is not blocked: crash auto-restart, and the
+  restart that `:model` or `:perm` does. Use `:budget 0` to disable. `:budget` alone
+  shows today's spend.
+
+Both limits act on the next message or launch. A turn that is already
+running finishes, and a message queued before the cap was reached is still
+sent, so the final total can end a little past the figure.
 
 Both also have form-editable rows under the SAFETY section of the
 settings menu (`,` or `esc`).
@@ -799,19 +861,11 @@ Usage:
 
 Edit `~/.config/claude-mc/templates.json` to add your own.
 
-### `@file` mention autocomplete (in Zoom composer)
+### `@file` mentions in zoom
 
-Type `@` followed by a partial filename to summon a dropdown of files
-and folders under the session's working directory:
-
-- `↑` `↓` navigates
-- `Tab` or `↵` accepts (folders get a trailing `/` so you can keep
-  descending — same UX as the path autocomplete in New Session)
-- Suppressed while the slash dropdown owns the input — the prefixes
-  (`@` vs `/`) are distinct so they never need to coexist
-
-Useful for "look at @src/auth/oauth.ts" without copy-pasting from
-another terminal.
+Zoom is claude's own interface, so claude's `@` file mentions work there as
+they do in a plain terminal: type `@` and part of a filename to get claude's
+picker. mc does not add its own.
 
 ## Reliability features
 
@@ -821,9 +875,14 @@ These guard against the failure modes that hit hardest at fleet scale.
   background polling into a single shared wakeup (stretching to 3s when
   nothing is working), gates the invisible command-bar caret, and detects
   transcript rotation with one directory stat instead of a per-file sweep.
-  Measured: idle CPU cut ~3× (1.07% → 0.35% of one core, zero agents);
-  reproduce with `node scripts/measure-idle.mjs`. Renders, statuses, and
-  keystroke latency are unchanged — active sessions keep full cadence.
+  At idle the screen is redrawn only when something on it changes (the
+  clocks show HH:MM until an agent is working), `sessions.json` is written
+  only when a record changes, and `claude agents` is asked every 120 s plus
+  once after a launch, kill or exit. Measured with `node
+  scripts/measure-idle.mjs` (mc plus every process it starts, 240 s, stub
+  agents, one machine): 0 agents 0.96% → 0.23% of one core and 929 → 12
+  bytes/s of terminal output; 64 idle agents 1.15% → 0.55%. Renders,
+  statuses and keystroke latency are unchanged while agents work.
 - **Status truth, regression-proofed.** A card blocked on a question
   (`AskUserQuestion` / plan approval) reads **INPUT** for the entire wait —
   the hook channel goes silent while an ask is pending, and the pending
@@ -834,7 +893,8 @@ These guard against the failure modes that hit hardest at fleet scale.
   stays fixed.
 - **Press-K-twice to kill.** A first press arms the kill action for 3
   seconds and shows a warning toast; the second `K` confirms and SIGTERMs
-  the subprocess. Eliminates the most painful misfire (accidental loss of
+  claude and every process it started, then SIGKILLs anything still alive
+  after 1.5 s. Eliminates the most painful misfire (accidental loss of
   work). The `:kill` command bar entry follows the same arm-then-confirm
   flow; `:kill!` (bang) bypasses for explicit batch use.
 - **Auto-restart on transient errors.** When a `claude` subprocess exits
@@ -844,6 +904,14 @@ These guard against the failure modes that hit hardest at fleet scale.
   the next successful `init` event, so a recovered slot is eligible again
   on its next independent failure. After 3 failed restarts the slot enters
   the errored state with `K clears slot` hint.
+- **Pause stops the whole tree.** `P` / `:pause` sends SIGSTOP to claude and
+  to every process it started (including Bash-tool shells that run in their
+  own session), and resume sends SIGCONT to all of them. If mc dies hard
+  while a slot is paused, the next mc start ends the frozen claude it left
+  behind (only when the pid, start time and parent all still match).
+- **One mc per config dir.** A second mc started on the same config dir
+  opens read-only, so two copies cannot overwrite each other's saved
+  sessions or spend.
 - **Quit can't stall.** `q → save` SIGTERMs every child, gives them a 1.5s
   grace, SIGKILLs any straggler, and exits — a claude wedged on a permission
   prompt can no longer hold mc's shutdown hostage (previously the quit hung
@@ -853,9 +921,9 @@ These guard against the failure modes that hit hardest at fleet scale.
   force-closed terminal), the card says exactly that — with the fix
   (`claude agents` → stop the orphan, then `:resume` the slot) — instead of
   silently burning restart attempts on a failure that can't succeed.
-- **Stuck-detection.** When a slot is in `working` or `waiting` status but
-  hasn't emitted any event from the subprocess in the last 5 minutes, the
-  card shows a red `STUCK Nm` chip and a one-shot toast fires (`slot N ·
+- **Stuck-detection.** When a slot is `working` but has had no transcript
+  line and no hook event in the last 5 minutes (screen redraws do not count),
+  the card shows a red `STUCK Nm` chip and a one-shot toast fires (`slot N ·
   stuck 5m · no events while working`). Re-arms automatically when the
   slot starts emitting again.
 - **Context-pressure toasts.** Crossing 80% / 90% of the model's max
@@ -883,6 +951,7 @@ These guard against the failure modes that hit hardest at fleet scale.
   The legacy `FLEET_USE_PTY=0` path additionally writes a combined
   inbound/outbound transcript to `.../claude-mc/sessions/<sessionId>.jsonl`,
   disabled with `MC_NO_TRANSCRIPT=1`. The default PTY path does not write it.
+  On both paths `:transcript` prints claude's own session file.
 
 ## Known caveats
 
@@ -893,12 +962,13 @@ These guard against the failure modes that hit hardest at fleet scale.
   stopped via `claude agents`. mc's card surfaces this state with the
   remediation; prefer `q → save` (which now cannot stall) over killing the
   terminal.
-- **Pause via SIGSTOP** freezes the process but does not cancel in-flight API
-  requests. The claude subprocess will receive their results when SIGCONT'd.
-- **Permission prompts in `default` mode.** The stream-json wire format does
-  not expose a structured permission event. The `A` hotkey sends a generic
+- **Pause via SIGSTOP** freezes the processes but does not cancel in-flight API
+  requests. claude receives their results when it is resumed. A tool that
+  detaches itself to pid 1 is outside claude's tree and is not paused.
+- **Permission prompts in `default` mode.** The `A` hotkey sends a generic
   "yes, continue" message that unblocks most prompts, but for tight
-  control prefer `acceptEdits` or `bypassPermissions`.
+  control prefer `acceptEdits` or `bypassPermissions`, or answer the prompt
+  in zoom.
 
 ### State persisted across runs
 
@@ -976,15 +1046,32 @@ has no usable TTY/PTY (node-pty emits no output; ink mis-parses control bytes).
 Those run normally for you locally and on every push (the pre-push hook runs
 `npm test` with `CI` unset). Set `MC_RUN_PTY=1` to force them on anywhere.
 
+**The suite never touches your real home.** The runner gives each test file
+its own temporary `HOME`, `MC_CONFIG_DIR`, `XDG_STATE_HOME` and
+`XDG_CONFIG_HOME`, deletes them afterwards, and sets `CLAUDE_BIN=/usr/bin/false`
+so no test can start the real claude (`tests/runner.hermetic.test.mjs` checks
+this). Run single files through the runner too:
+`node scripts/run-tests.mjs <test files…>`. A bare
+`node --test` does not get this protection.
+
+**Tests against the real claude are opt-in.** They are skipped unless you set
+`MC_RUN_REAL=1`:
+
+```sh
+MC_RUN_REAL=1 node scripts/run-tests.mjs tests/real/claude.real.test.mjs
+```
+
+They take about a minute and **cost money**: a few haiku turns and one sonnet
+turn on your own claude login. claude itself still writes to your real home
+while they run (a folder-trust entry in `~/.claude.json`, lines in
+`~/.claude/history.jsonl`, and whatever your own hooks and MCP servers write).
+
 The suite uses Node's built-in `node:test` runner plus
 `ink-testing-library` for component rendering. Coverage includes:
 
 - `tests/detectPrompt.test.mjs` — structured-prompt classification
   (numbered, checkbox, lettered Option A/B/C, binary fallback, priority
   rules, the screenshot regression).
-- `tests/Zoom.chips.test.jsx` — chip render + keystroke dispatch
-  (letter and digit keys both work, wire format includes the original
-  marker, multi-select seeds from pre-checked defaults).
 - `tests/RepoPicker.test.jsx` — filesystem browser lists real subdirs
   (filtering dotfiles / node_modules / files), ↵ picks a child, `.`
   picks the current folder, esc cancels.
@@ -996,18 +1083,26 @@ The suite uses Node's built-in `node:test` runner plus
   `Ctrl+J` insert a newline; the meta/shift Return paths are checked
   before the plain-return submit branch so macOS users don't
   accidentally submit half-typed messages.
-- `tests/Zoom.input.test.jsx` — stats panel defaults to compact +
-  `Ctrl+S` toggles; PgUp pins the log and shows the "↓ N below"
-  indicator; `Ctrl+G` snaps back to live; `↑`/`↓` walk through
-  composer history.
-- `tests/agent.costCap.test.mjs` — a per-slot cap refuses the send that
-  would cross it, in both agent classes, and a respawn cannot tunnel past it.
+- `tests/zoom/zoomKeys.realparser.test.jsx` — each zoom key (`Ctrl+Q/F/K/U/J`)
+  is driven as raw bytes through Ink's real key parser.
+- `tests/zoom/ptyPane.scrollHold.test.jsx` — scroll mode holds its place
+  while the session keeps printing.
+- `tests/agent.costCap.test.mjs` — the legacy agent refuses a send once the
+  session's cost has reached its cap, and `cap 0` means no cap.
+- `tests/zoom/ptyPane.guardedInput.test.jsx` — on the default PTY path,
+  Enter and pastes typed in zoom are refused once the cap is reached, and the
+  cap still holds after a `:model` / `:perm` respawn.
+- `tests/App.dailyBudget.test.jsx` — over the daily budget, `:template`,
+  `:resume`, `:resume-all` (including its delayed launches), boot
+  auto-resume, `:clear` / `:restart` and `:cr` launch nothing.
+- `tests/sessionSave.sighup.test.mjs` — closing the terminal keeps the full
+  resumable record.
 - `tests/costStore.twoInstances.test.mjs` — two running copies of mc cannot
   corrupt each other's spend ledger.
 - `tests/status.replay.test.mjs` — every status misreport ever filed is
   checked in as a recording and replayed through the live pipeline, so a
   status bug that is fixed stays fixed.
-- `tests/recipes/zoom.recipes.test.jsx`,
+- `tests/recipes/zoom-text-input.recipes.test.jsx`,
   `tests/recipes/newsession.recipes.test.jsx`,
   `tests/recipes/repopicker.recipes.test.jsx`,
   `tests/recipes/pty.recipes.test.jsx` — declarative recipe coverage for
@@ -1025,24 +1120,23 @@ can `type` characters, `press` a key, `tick` for timers, assert on
 failing step's label, the assertion, and the last frame — so you can
 diff actual UI against intent.
 
-Example, from `tests/recipes/zoom.recipes.test.jsx`:
+Example, from `tests/recipes/dashboard.recipes.test.jsx`:
 
 ```jsx
 import { runRecipe } from '../lib/recipe.js';
-import Zoom from '../../tui/modals/Zoom.jsx';
-import { theme, makeAgent } from '../lib/fixtures.js';
+import Dashboard from '../../tui/modals/Dashboard.jsx';
 
-test('recipe: Ctrl+S expands the stats panel', () => runRecipe({
-  component: Zoom,
-  props: { agent: makeAgent(), theme, threshold: 150000, weekCost: 0,
-           onSendMessage: () => {}, onSlashCommand: () => {},
-           onClose: () => {}, onCyclePerm: () => {} },
-  steps: [
-    { expectFrame: [/ctrl\+s expand/], expectNotFrame: [/USAGE · SESSION/] },
-    { press: '\x13' },                  // Ctrl+S
-    { expectFrame: [/CONTEXT/, /USAGE · SESSION/] },
-  ],
-}));
+test('recipe: dashboard renders one row per LIVE agent (empties filtered)', async () => {
+  await runRecipe({
+    component: Dashboard,
+    props: dashProps(),   // three live agents + one empty slot
+    steps: [
+      { expectFrame: [/FLEET DASHBOARD/, /3 live/, /alpha/, /beta/, /gamma/] },
+      // The empty slot 4 must NOT appear in the body.
+      { expectNotFrame: [/EMP|\[4\]/] },
+    ],
+  });
+});
 ```
 
 Common fixtures (`makeAgent`, `chatTail`, the active `theme`) live in
@@ -1053,8 +1147,6 @@ writing a JSON document, not a React component.
 - `tests/lib/recipe.js` — in-process runner (Ink + `ink-testing-library`).
 - `tests/lib/fixtures.js` — agent / tail / theme helpers.
 - `tests/recipes/*.recipes.test.jsx` — one file per UI surface.
-- `tests/Card.tier.test.jsx` — Card tail filters tier-2 entries by
-  default and shows a hidden-count hint.
 
 ### Full-PTY recipe backend
 

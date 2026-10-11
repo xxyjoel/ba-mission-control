@@ -1,5 +1,9 @@
 # Feature register 04 — the zoom view and the terminal inside it
 
+> **Note (2026-10-08, 0467):** scroll mode is now `Ctrl+F`, not `Ctrl+Y`
+> (moved in 0420; `Ctrl+Y` is forwarded to claude). Read every `Ctrl+Y` below
+> as `Ctrl+F`. See `tui/zoom/zoomKeys.js` and `docs/HOTKEYS.md`.
+
 Area: `tui/modals/Zoom.jsx`, `tui/zoom/PtyPane.jsx`, `tui/zoom/ptyKeys.js`,
 `tui/zoom/zoomKeys.js`, `tui/zoom/claudeBanner.js`, `tui/lib/zoomGeometry.js`,
 and the shell overlay surface in `tui/App.jsx` + `server/shellSession.mjs`.

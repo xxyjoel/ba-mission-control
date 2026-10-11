@@ -31,10 +31,10 @@
 // - R13: spawn is injectable for tests — defaults to node-pty.spawn.
 
 import { deriveStatus } from './deriveStatus.mjs';
-import { PtyCore, bottomContentRows } from './ptyCore.mjs';
+import { PtyCore, bottomContentRows, childEnv } from './ptyCore.mjs';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { MODELS, modelByCli } from '../tui/lib/models.js';
+import { MODELS, modelByCli, resolveModelId } from '../tui/lib/models.js';
 import { fullStatus } from './git.mjs';
 import { claudeSessionPath, startSessionTailer } from './sessionFileTailer.mjs';
 import { pushTail } from './jsonlConnector.mjs';
@@ -121,6 +121,41 @@ const WORKING_RX = /esc to interrupt/i;
 // verdict stands again).
 const SUB_ACTIVE_MS = 15_000;
 
+// 0468: claude's folder-trust dialog. claude opens on it in a folder it has not
+// trusted, BEFORE its composer, with "No, exit" highlighted — an Enter typed
+// into it ends the session. Anchors from a real capture (claude 2.1.294, fresh
+// temp dir, no input; tests/fixtures/claude-trust-dialog.screen.txt):
+//
+//    ❯ No, exit
+//      Yes, I trust this folder
+//
+// It must be the live bottom of the screen, not a copy in scrollback: both
+// option rows, the ❯ cursor on one of them, and the "Enter to confirm" footer
+// as the LAST content row. A resumed transcript that quotes the dialog has
+// claude's composer and status line below it, so it does not match (0468
+// review: a false match would hold the queue for good).
+const TRUST_YES_RX = /Yes, I trust this folder/;
+const TRUST_NO_RX = /\bNo, exit\b/;
+const TRUST_CURSOR_RX = /❯\s*(No, exit|Yes, I trust this folder)/;
+const TRUST_FOOTER_RX = /^\s*Enter to confirm\b.*\bEsc to cancel\s*$/;
+
+// 0468: once the dialog was seen, the queue waits this long after it leaves so
+// claude's composer is drawn before the first message is typed.
+const TRUST_SETTLE_MS = 1000;
+
+export function detectTrustDialog(rows) {
+  if (!Array.isArray(rows)) return false;
+  const content = rows.filter((r) => typeof r === 'string' && r.trim() !== '');
+  if (!content.length || !TRUST_FOOTER_RX.test(content[content.length - 1])) return false;
+  let yes = false, no = false, cursor = false;
+  for (const r of content) {
+    if (!yes && TRUST_YES_RX.test(r)) yes = true;
+    if (!no && TRUST_NO_RX.test(r)) no = true;
+    if (!cursor && TRUST_CURSOR_RX.test(r)) cursor = true;
+  }
+  return yes && no && cursor;
+}
+
 // detectWorking — true when the rendered rows show claude's active-turn
 // interrupt hint. Pure (mirrors detectApprovalPrompt) so it's unit-testable.
 export function detectWorking(rows) {
@@ -175,8 +210,23 @@ export class PtyAgent extends PtyCore {
     // 0404: fixed PTY geometry from Fleet's viewport (see PtyCore).
     cols,
     rows,
+    // 0437: per-agent binary and env overlay for the opt-in real-claude tests,
+    // which start the real claude under the real HOME while mc itself stays in
+    // the test sandbox. Unset → CLAUDE_BIN and the inherited env, as before.
+    // bin still goes to spawn() as argv[0], never through a shell.
+    bin,
+    env,
+    // 0442: injectable process-tree signaller (see PtyCore). Undefined →
+    // signalProcessTree for the real node-pty spawn, pty.kill for a fake one.
+    signalGroup,
   } = {}) {
-    super({ spawn, cols, rows });
+    super({ spawn, cols, rows, ...(signalGroup !== undefined ? { signalGroup } : {}) });
+    // 0450: claude repaints its spinner while wedged; its screen bytes must
+    // not reset the STUCK clock (lastEventTs). Hooks + transcript are the
+    // real-event clocks here.
+    this._ptyBytesAreEvents = false;
+    this._bin = bin || null;
+    this._envOverlay = env && typeof env === 'object' ? { ...env } : null;
     this.slot = slot;
     this.id = id || `slot-${slot}`;
     this.name = name;
@@ -213,9 +263,12 @@ export class PtyAgent extends PtyCore {
     // mutated by jsonlConnector on tool_use/tool_result. Surfaced as
     // activeSubagents in toJSON for the ⋔{n} card indicator + Zoom list.
     this.pendingSubagents = new Map();
-    this.dirty = 0;
-    this.ahead = 0;
-    this.behind = 0;
+    // 0452: git state is unknown (null) until refreshGit reads it; isRepo
+    // null = not checked yet, false = cwd is not a repo (no git chips).
+    this.isRepo = null;
+    this.dirty = null;
+    this.ahead = null;
+    this.behind = null;
     this.spark = Array(SPARK_LEN).fill(0); // 0385: blank cold-start — fill(1) rendered a FULL bar at 0 tok/min
     // tok/min sparkline baseline — jsonlConnector.updateSpark() reads
     // these to normalize the rate over elapsed wall time (#26).
@@ -231,8 +284,9 @@ export class PtyAgent extends PtyCore {
     this.usageTailer = null;
     // JSONL-only activity clock (bumped solely by jsonlConnector.parseEvent),
     // used by toJSON()'s hook-vs-connector freshness merge. Distinct from
-    // lastEventTs (which onData also bumps on every PTY byte) so cosmetic
-    // terminal repaints can't defeat a real Stop-hook idle transition.
+    // lastEventTs (also bumped by send/spawn/resume; 0450: no longer by PTY
+    // bytes) so only transcript lines can defeat a real Stop-hook idle
+    // transition.
     this.lastConnectorTs = 0;
     // 0398: last SUB-tagged hook event (background/subagent tool activity).
     // Fresh values keep an idle main thread reading 'working' in toJSON.
@@ -271,6 +325,10 @@ export class PtyAgent extends PtyCore {
     }
     if (modelArg) args.push('--model', modelArg);
     if (this.permissionMode) args.push('--permission-mode', this.permissionMode);
+    // 0439: the instant this claude's mode was fixed by argv. Hook and
+    // transcript records older than this are the previous process's history
+    // and must not override it (statusHookTailer, primeStatusFromDisk).
+    this.permissionModeArgvTs = Date.now();
     if (this.cwd) args.push('--add-dir', this.cwd);
 
     // Inject the MC hooks settings block so every spawned claude emits status
@@ -281,7 +339,18 @@ export class PtyAgent extends PtyCore {
     const _hookSettings = buildHookSettings({ emitterPath: EMITTER_PATH });
     args.push('--settings', JSON.stringify(_hookSettings));
 
-    return { bin: CLAUDE_BIN, args, modelArg };
+    // 0468: a claude slot in a folder claude has not trusted opens on the trust
+    // dialog; readiness() holds queued sends until it is gone. mc never answers
+    // it (autoTrust still only reaches non-claude factories, by design).
+    // TODO(claude-bypass-dialog): with permissionMode bypassPermissions, claude's
+    // first-use warning is another pre-composer dialog with "No, exit"
+    // highlighted; readiness() does not detect it, so the first send's Enter can
+    // still pick it. Needs a real capture before adding an anchor.
+    const spec = { bin: this._bin || CLAUDE_BIN, args, modelArg };
+    // 0437: an env overlay is applied on top of PtyCore's default env.
+    // 0469: childEnv() drops the parent claude's session markers on both paths.
+    if (this._envOverlay) spec.env = { ...childEnv(), ...this._envOverlay };
+    return spec;
   }
 
   onSpawned({ modelArg }) {
@@ -375,10 +444,44 @@ export class PtyAgent extends PtyCore {
     return false;
   }
 
-  // R1: a fixed banner-draw window, not a scrape — claude's composer is ready
-  // well inside it and there is no pre-composer dialog to wait out.
+  // R1: a banner-draw window — claude's composer is ready well inside READY_MS.
+  // 0468: plus a scrape for claude's folder-trust dialog (not the bypass
+  // warning — see TODO(claude-bypass-dialog) in buildSpawn). While it is on
+  // screen queued sends are held (typing into it would pick "No, exit") and
+  // the slot reads 'waiting'; once it is gone the queue drains after
+  // TRUST_SETTLE_MS. The user answers it in zoom — never mc.
   readiness() {
-    return { delayMs: READY_MS };
+    this._trustSeenTs = 0;
+    this._trustNoted = false;
+    return {
+      delayMs: READY_MS,
+      pollMs: 250,
+      predicate: () => {
+        const now = Date.now();
+        if (this.#scanTrustDialog()) {
+          this._trustSeenTs = now;
+          if (!this._trustNoted) {
+            this._trustNoted = true;
+            this.appendTail({
+              kind: 'sys',
+              text: 'claude is asking whether to trust this folder — answer it in zoom; queued messages wait',
+            });
+            this.emit('change');
+          }
+          return false;
+        }
+        return !this._trustSeenTs || now - this._trustSeenTs >= TRUST_SETTLE_MS;
+      },
+    };
+  }
+
+  // 0468: the trust dialog is on screen. Fails closed (false) on a term error.
+  #scanTrustDialog() {
+    try {
+      return detectTrustDialog(bottomContentRows(this.term, APPROVE_SCAN_ROWS));
+    } catch {
+      return false;
+    }
   }
 
   afterStart() {
@@ -397,7 +500,9 @@ export class PtyAgent extends PtyCore {
 
   async refreshGit() {
     const st = await fullStatus(this.cwd);
-    if (!st.isRepo) return;
+    // 0452: assign the non-repo result too — isRepo false and null counts are
+    // what tell the Card/Zoom to draw no clean dot. Null is unknown, never 0.
+    this.isRepo = st.isRepo;
     if (st.branch) this.branch = st.branch;
     this.dirty = st.dirty;
     this.ahead = st.ahead;
@@ -431,8 +536,8 @@ export class PtyAgent extends PtyCore {
   // 200-800ms for claude to commit the JSONL user event. parseEvent
   // will subsequently confirm via the JSONL stream (idempotent).
   // Programmatic sends (send/broadcast/approve) already flip status
-  // via PtyCore's write path; this method covers the zoom-typed path
-  // that goes pty.write(...) directly.
+  // via PtyCore's write path; this method covers the zoom-typed path,
+  // which writes keystrokes through PtyCore.writeInput (0446).
   markUserSubmitted() {
     this.status = 'working';
     this.lastEventTs = Date.now();
@@ -452,7 +557,17 @@ export class PtyAgent extends PtyCore {
 
   changeModel(model) {
     if (!model) return false;
-    if (model === this.model) return false;
+    // 0453: compare against the model claude is RUNNING. After an in-claude
+    // `/model`, resolvedModel holds it and this.model is stale; after
+    // :resume-all this.model may be a CLI-form id. Both sides go to a catalog
+    // id ('auto' → newest opus) so `:model <launch model>` is not a no-op.
+    // A resolvedModel the catalog does not know stays as its raw cli id, so it
+    // never equals a catalog request and `:model <catalog id>` still restarts.
+    const asId = (m) => modelByCli(resolveModelId(m))?.id ?? m;
+    const running = this.resolvedModel
+      ? (modelByCli(this.resolvedModel)?.id ?? this.resolvedModel)
+      : asId(this.model);
+    if (asId(model) === running) return false;
     const prev = this.model;
     this.model = model;
     this.resolvedModel = null;
@@ -500,11 +615,16 @@ export class PtyAgent extends PtyCore {
       lastSubHookTs:   this.lastSubHookTs,
       pendingSubagents: this.pendingSubagents,
       hasPty:          !!this.pty,
-      paused:          this.status === 'paused',
+      // 0450: the SIGSTOP flag too — a transcript line read after the stop
+      // can overwrite the stored 'paused'.
+      paused:          (!!this.paused && !!this.pty) || this.status === 'paused',
       errored:         this.status === 'error',
       scanApproval:    () => this.#scanApprovalPrompt(),
       scanWorking:     () => this.#scanWorking(),
       liveSubAgents:   (opts) => this.usageTailer?.liveAgents?.(opts),
+      // 0468: only before the first drain — after it the dialog has been
+      // answered, and a quoted copy in the transcript must not flip status.
+      scanTrust:       () => !this.ready && this.#scanTrustDialog(),
     };
   }
 
@@ -524,6 +644,7 @@ export class PtyAgent extends PtyCore {
       model: this.model,
       resolvedModel: this.resolvedModel,
       branch: this.branch,
+      isRepo: this.isRepo,
       dirty: this.dirty,
       ahead: this.ahead,
       behind: this.behind,

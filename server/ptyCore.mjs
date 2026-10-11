@@ -23,17 +23,20 @@
 //       argv for this (re)spawn. Called by start() on every spawn, so it
 //       reads this.resuming / model / mode fresh. bin and args go to spawn()
 //       as an argv array — never a shell string (bins are user-controlled).
-//       env defaults to { ...process.env, TERM: 'xterm-256color' }; a provider
+//       env defaults to childEnv() (process.env minus claude's session
+//       markers, TERM=xterm-256color, 0469); a provider
 //       that needs a least-privilege env returns its own.
 //   appendTail(ln)
 //       push a { kind, text } line onto the slot's tail ring. Core reports
 //       queue / signal / exit / restart events through it.
-//   readiness() → { delayMs } | { predicate(core) → bool, pollMs? }
-//       when the first queued send may be typed. delayMs is a fixed timer
-//       (claude: READY_MS). predicate is polled every pollMs (default 250)
-//       until it returns true — for a CLI that can show a dialog before its
-//       composer (cursor-agent's workspace trust), so a queued prompt is never
-//       typed into the dialog. A throwing predicate reads as not ready.
+//   readiness() → { delayMs } | { predicate(core) → bool, pollMs?, delayMs? }
+//       when the first queued send may be typed. delayMs alone is a fixed
+//       timer. predicate is polled every pollMs (default 250) until it
+//       returns true — for a CLI that can show a dialog before its composer
+//       (cursor-agent's workspace trust; claude's folder trust, 0468), so a
+//       queued prompt is never typed into the dialog. With both (claude:
+//       READY_MS), the first poll runs at delayMs instead of pollMs. A
+//       throwing predicate reads as not ready.
 //
 // Optional (default no-op / false):
 //   onSpawned(spec)            right after spawn(), with buildSpawn()'s spec —
@@ -57,6 +60,7 @@
 // stateSince / workingStartTs anchors the provider initializes).
 
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { spawn as ptySpawn } from 'node-pty';
 import xterm from '@xterm/headless';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
@@ -79,7 +83,124 @@ const DEFAULT_ROWS = 24;
 
 const RESTART_MAX = 3;
 
+// 0441: how long a stopping claude gets to honour SIGTERM before SIGKILL. Same
+// grace as the shutdown reaper in tui/main.jsx. A claude wedged on a
+// permission prompt (or entangled with claude's daemon) ignores SIGTERM; once
+// the slot forgets it, nothing else would ever end it.
+export const STOP_GRACE_MS = 1500;
+
 const DEFAULT_READY_POLL_MS = 250;
+
+// 0442: signal every process claude started, not claude alone. pty.kill()
+// signals the leader only — measured: claude in Ts+ while its child sleeps
+// stayed in S+, so a "paused" card kept running work. node-pty forks claude as
+// a session leader (pid == pgid), and some children stay in that group (MCP
+// servers, caffeinate), so process.kill(-pid) reaches those. claude's Bash
+// tool does NOT stay: each Bash-tool shell calls setsid and leads its own
+// session and group (measured on a live claude: zsh ppid=claude, pgid=own pid,
+// stat Ss). Builds, tests and sleeps run under those shells, so the group
+// signal alone misses exactly the work a pause is meant to stop. Hence the
+// descendant walk below.
+//
+// treeSignalTargets — pure: given `ps` rows [{pid, ppid, pgid}], the extra
+// kill() targets beyond the leader's own group (-rootPid). A descendant group
+// is signalled as -pgid ONLY when that group's leader is itself a descendant
+// (a setsid'd Bash-tool shell); any other stray descendant gets its own pid.
+// So no target can be mc's own group, pgid 0/1, or any group this tree does
+// not lead. Cycles / self-parented rows end the walk.
+export function treeSignalTargets(rootPid, rows) {
+  const kids = new Map();
+  for (const r of rows || []) {
+    if (!Number.isInteger(r?.pid) || !Number.isInteger(r?.ppid) || r.pid === r.ppid) continue;
+    if (!kids.has(r.ppid)) kids.set(r.ppid, []);
+    kids.get(r.ppid).push(r);
+  }
+  const desc = new Map(); // pid → row
+  const queue = [rootPid];
+  while (queue.length) {
+    for (const r of kids.get(queue.shift()) || []) {
+      if (r.pid === rootPid || desc.has(r.pid)) continue;
+      desc.set(r.pid, r);
+      queue.push(r.pid);
+    }
+  }
+  const targets = new Set();
+  for (const r of desc.values()) {
+    if (r.pid <= 1 || r.pgid === rootPid) continue; // covered by -rootPid
+    if (Number.isInteger(r.pgid) && r.pgid > 1 && desc.has(r.pgid)) targets.add(-r.pgid);
+    else targets.add(r.pid);
+  }
+  return [...targets];
+}
+
+// One `ps` snapshot, argv form. [] on any failure — a missing or failing ps
+// must never make pause / kill fail; the leader's group is still signalled.
+function psTable() {
+  try {
+    const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid='], { encoding: 'utf8', timeout: 2000 });
+    return out.split('\n').map((l) => {
+      const [pid, ppid, pgid] = l.trim().split(/\s+/).map(Number);
+      return { pid, ppid, pgid };
+    }).filter((r) => Number.isInteger(r.pid));
+  } catch { return []; }
+}
+
+// (pid, sig): the leader's group, then every extra target from the walk. The
+// snapshot is taken BEFORE the group signal: once a SIGTERM/SIGKILL lands,
+// claude can die and its children reparent to pid 1, and the walk would find
+// nothing. For SIGSTOP a second walk after the group stop catches a shell
+// claude spawned between the snapshot and the stop. Errors from the group
+// signal propagate (PtyCore#signal falls back on ESRCH/EPERM); each extra
+// target's error is swallowed so one ESRCH does not cut off the rest.
+export function signalProcessTree(pid, sig, list = psTable) {
+  const before = treeSignalTargets(pid, list());
+  process.kill(-pid, sig);
+  const extra = new Set(before);
+  if (sig === 'SIGSTOP') for (const t of treeSignalTargets(pid, list())) extra.add(t);
+  for (const t of extra) {
+    try { process.kill(t, sig); } catch {}
+  }
+}
+
+// 0469: env keys a running claude sets for ITS OWN session. When mc is started
+// from inside a claude session they are in process.env, and a slot's claude
+// that inherits them treats itself as that session's child: with
+// CLAUDE_CODE_CHILD_SESSION it turns transcript saving off ("inherited
+// CLAUDE_CODE_CHILD_SESSION marker"), so status, resume and :model have no
+// JSONL. The list is claude's own (the keys claude 2.1.x keeps out of the env
+// it hands its child shells), plus its per-session entrypoint, messaging IPC
+// and bridge ids. Exact names, not a CLAUDE_CODE_* prefix: user settings such
+// as CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_MAX_OUTPUT_TOKENS, CLAUDE_CODE_TMPDIR
+// and ANTHROPIC_* must still reach the child.
+export const CLAUDE_SESSION_ENV_KEYS = Object.freeze([
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_INVOKED_SKILLS',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_PID',
+  'CLAUDE_EFFORT',
+  'AI_AGENT',
+  'TRACEPARENT',
+]);
+
+// 0469: the env a spawned agent CLI starts from — process.env minus the
+// parent claude's session markers, with TERM set for the PTY.
+// TODO(0469): other spawn paths still pass the markers through, outside this
+// lane: server/agent.mjs (legacy FLEET_USE_PTY=0 slots, env: process.env),
+// server/shellSession.mjs (shell pane; a claude run there saves no
+// transcript), server/loginPty.mjs (claude auth login) and the cursor
+// provider (stripAnthropicEnv, its own env). Each should build on childEnv().
+export function childEnv(base = process.env) {
+  const env = { ...base, TERM: 'xterm-256color' };
+  for (const k of CLAUDE_SESSION_ENV_KEYS) delete env[k];
+  return env;
+}
 
 // pasteForSubmit — build the content chunk a programmatic send (broadcast /
 // approve) writes to the PTY BEFORE the submit CR. Mirrors PtyPane's proven
@@ -161,9 +282,18 @@ export class PtyCore extends EventEmitter {
     // no viewport is known (tests, non-TTY).
     cols,
     rows,
+    // 0442: (pid, sig) → signals the process group led by pid and every
+    // descendant that left it (signalProcessTree). The default only for the
+    // real node-pty spawn. An injected
+    // (fake) spawn hands out made-up pids, and a group signal to one of them
+    // could stop or kill an unrelated real process group on this machine — so
+    // with a fake spawn the default is null and signals go to pty.kill, unless
+    // the test injects its own recorder here.
+    signalGroup = spawn === ptySpawn ? signalProcessTree : null,
   } = {}) {
     super();
     this._spawn = spawn;
+    this._signalGroup = signalGroup;
 
     this.pty = null;
     // Persistent xterm-headless emulator. Created in start(),
@@ -192,11 +322,33 @@ export class PtyCore extends EventEmitter {
     // stopped process never handles a queued SIGTERM, so it must be SIGCONTed
     // first or it survives the slot as an orphaned T-state process (P6/0408).
     this.paused = false;
+    // 0442: the stored status at the moment of pause(); resume() restores it.
+    this._statusBeforePause = null;
     this.killed = false;
+    // 0441: ptys sent SIGTERM by kill() or a restart teardown that have not
+    // exited yet → their SIGKILL timer. hardKill walks it too, and start()
+    // waits until it is empty, so a respawn never runs next to the old claude.
+    this._stopping = new Map();
+    // 0441: start() was called while an old pty was still stopping; spawn
+    // when the last one ends (exit or SIGKILL).
+    this._startDeferred = false;
+    // 0446: ptys _teardownForRestart replaced on purpose. A zoom pane bound
+    // to one of them must not read its exit as "claude exited" and close.
+    this._restartReplaced = new WeakSet();
+    // 0446: the cap text zoom last wrote to the tail, so a held Enter or
+    // repeated pastes log one line, not one per key. Reset on an accepted
+    // submit/paste.
+    this._zoomCapNoted = null;
+    // The stuck clock: real events (transcript lines, send, spawn, resume,
+    // auto-restart). 0450: for claude (PtyAgent sets _ptyBytesAreEvents=false)
+    // PTY bytes do NOT bump it — claude repaints its spinner while wedged, and
+    // those repaints kept resetting STUCK. Subclasses keep the old any-byte
+    // clock by default: Cursor has no hooks and writes no tool_result line, so
+    // its screen output is the only liveness it has during a long tool.
     this.lastEventTs = Date.now();
-    // PTY-only activity clock. Unlike lastEventTs (which jsonlConnector also
-    // bumps on every parsed JSONL line), this advances ONLY when claude writes
-    // bytes to the terminal. The idle→working overlay needs it: a genuinely
+    this._ptyBytesAreEvents = true;
+    // PTY-only activity clock. Unlike lastEventTs, this advances ONLY when
+    // claude writes bytes to the terminal. The idle→working overlay needs it: a genuinely
     // idle session emits no bytes, so its last working frame (with the
     // "esc to interrupt" hint) lingers in the buffer forever — the scan alone
     // would pin it to 'working'. Requiring fresh PTY output disambiguates a
@@ -206,10 +358,12 @@ export class PtyCore extends EventEmitter {
     this.restartTimer = null;
     this.pendingSends = [];
     // false until readiness() says the CLI can take input (claude: the
-    // READY_MS window after spawn). send() queues into pendingSends until
-    // ready flips true, then drains.
+    // READY_MS window after spawn, held while its trust dialog shows — 0468).
+    // send() queues into pendingSends until ready flips true, then drains.
     this.ready = false;
     this.readyTimer = null;
+    // 0458: the pty a queued-message drain is running on (null when idle).
+    this._drainPty = null;
     ({ cols: this.cols, rows: this.rows } = clampPtyDims(cols, rows, DEFAULT_COLS, DEFAULT_ROWS));
   }
 
@@ -250,6 +404,20 @@ export class PtyCore extends EventEmitter {
       this.appendTail({ kind: 'sys', text: 'start ignored — PTY already running' });
       return;
     }
+    // 0441: wait for the old claude to end (exit, or the SIGKILL at
+    // STOP_GRACE_MS). A respawn next to it let two claudes share one session,
+    // and the old one's late hook / transcript lines could rewrite state the
+    // new one owns (0439's stale permission mode). Sends meanwhile stay in
+    // pendingSends: send() queues whenever this.pty is null.
+    if (this._stopping.size > 0) {
+      if (!this._startDeferred) {
+        this._startDeferred = true;
+        this.appendTail({ kind: 'sys', text: 'waiting for the old process to exit' });
+        this.emit('change');
+      }
+      return;
+    }
+    this._startDeferred = false;
     const spec = this.buildSpawn();
 
     this.pty = this._spawn(spec.bin, spec.args, {
@@ -257,7 +425,7 @@ export class PtyCore extends EventEmitter {
       cols: this.cols,
       rows: this.rows,
       cwd: this.cwd || process.cwd(),
-      env: spec.env || { ...process.env, TERM: 'xterm-256color' },
+      env: spec.env || childEnv(), // 0469: no inherited claude session markers
     });
 
     this.onSpawned(spec);
@@ -267,13 +435,18 @@ export class PtyCore extends EventEmitter {
     // PTY stdout drives two listeners:
     //   1) the persistent terminal (so its buffer always has the
     //      latest claude output — read by zoom on mount/re-mount)
-    //   2) liveness for stuck-detection in toJSON()
+    //   2) lastPtyTs, the freshness clock for the working overlay and the
+    //      approval-scrape gate. 0450: NOT lastEventTs when
+    //      _ptyBytesAreEvents is false (claude) — a repaint is not an event,
+    //      so it must not reset the STUCK clock. The spawn itself is one
+    //      (stamped here, since the first byte no longer does it).
+    this.lastEventTs = Date.now(); // 0450
     try {
       this._spawnProbeBuf = ''; // first output after (re)spawn — read on early exit
       this._spawnTs = Date.now(); // per-(re)spawn clock for the early-refusal window (0396)
       this._termDataSub = this.pty.onData((chunk) => {
-        this.lastEventTs = Date.now();
         this.lastPtyTs = Date.now(); // PTY-only clock for the idle→working overlay
+        if (this._ptyBytesAreEvents) this.lastEventTs = this.lastPtyTs; // 0450: non-claude subclasses only
         if (this._spawnProbeBuf.length < 4096) this._spawnProbeBuf += chunk;
         if (this.term) {
           try { this.term.write(chunk); } catch {}
@@ -296,6 +469,7 @@ export class PtyCore extends EventEmitter {
 
     // R1: queue any send()s that arrive during the banner-draw window.
     this.paused = false; // fresh process is not stopped (P6/0408)
+    this._statusBeforePause = null; // 0442
     this.#armReadiness();
 
     this.afterStart();
@@ -406,7 +580,8 @@ export class PtyCore extends EventEmitter {
         if (ok) becomeReady();
         else this.readyTimer = setTimeout(poll, pollMs);
       };
-      this.readyTimer = setTimeout(poll, pollMs);
+      // 0468: delayMs with a predicate is the earliest the first poll runs.
+      this.readyTimer = setTimeout(poll, r.delayMs ?? pollMs);
       return;
     }
     this.readyTimer = setTimeout(becomeReady, r.delayMs ?? 0);
@@ -420,6 +595,7 @@ export class PtyCore extends EventEmitter {
     if (exitedPty && exitedPty !== this.pty) return;
     dlog('pty', 'exit', { slot: this.slot, code, signal, killed: !!this.killed, restarts: this.restartCount || 0 });
     this.pty = null;
+    this.paused = false; // 0450: a dead process is not stopped; deriveStatus reads this flag
     this._exitSub = null;
     if (this._termDataSub) {
       // PTY is gone; the subscription's underlying handle is gone
@@ -465,6 +641,7 @@ export class PtyCore extends EventEmitter {
         text: `auto-restart ${this.restartCount}/${RESTART_MAX} in ${(backoffMs / 1000).toFixed(0)}s`,
       });
       this.status = 'working';
+      this.lastEventTs = Date.now(); // 0450: the crash/restart is an event
       this.emit('change');
       this.restartTimer = setTimeout(() => {
         this.restartTimer = null;
@@ -501,26 +678,77 @@ export class PtyCore extends EventEmitter {
     this.emit('change');
   }
 
-  send(text) {
-    if (this.costCapUSD > 0 && this.costSession >= this.costCapUSD) {
-      this.appendTail({
-        kind: 'err',
-        text: `cost cap reached · $${this.costSession.toFixed(2)} / $${this.costCapUSD.toFixed(2)} · raise with :cap ${this.slot} <usd>`,
-      });
-      this.emit('change');
+  // 0446: the one cost-cap check. Returns the refusal text once the cap is
+  // reached, else null. send() and writeInput() both refuse through
+  // #refuseIfCapped, so the cap holds on every input path; PtyPane reads this
+  // to show the same text in zoom.
+  capMessage() {
+    if (!(this.costCapUSD > 0 && this.costSession >= this.costCapUSD)) return null;
+    return `cost cap reached · $${this.costSession.toFixed(2)} / $${this.costCapUSD.toFixed(2)} · raise with :cap ${this.slot} <usd>`;
+  }
+
+  // `quiet` (0446, zoom only): refuse without logging when the same text was
+  // already logged for this run of refusals.
+  #refuseIfCapped({ quiet = false } = {}) {
+    const text = this.capMessage();
+    if (!text) return false;
+    if (quiet && this._zoomCapNoted === text) return true;
+    if (quiet) this._zoomCapNoted = text;
+    this.appendTail({ kind: 'err', text });
+    this.emit('change');
+    return true;
+  }
+
+  // 0446: true when `pty` was stopped by a changeModel/changePermissionMode
+  // respawn (the agent has, or is about to have, a successor). PtyPane uses it
+  // to stay open and follow the new pty instead of closing zoom.
+  replacedByRestart(pty) {
+    return !!pty && this._restartReplaced.has(pty);
+  }
+
+  // 0446: raw keystrokes from zoom. Writes to the CURRENT this.pty, so a pane
+  // opened before a changeModel/changePermissionMode respawn reaches the new
+  // claude, not the dead one. Once the cap is reached, a submit (Enter) or a
+  // paste is refused with send()'s message; plain keys still go through so the
+  // user can edit the prompt or back out with Esc. A chunk carrying a CR is
+  // treated as a submit even when the caller did not flag it.
+  //
+  // No pty (the 0441 window between teardown and the old claude's exit, or an
+  // exited slot): the bytes are dropped and false returned. Keystrokes are not
+  // queued into pendingSends (that queue holds whole messages) and do not
+  // revive the slot; attachZoomView owns the revive.
+  writeInput(bytes, { submit = false, paste = false } = {}) {
+    if (bytes == null || bytes === '') return false;
+    const gated = submit || paste || String(bytes).includes('\r');
+    if (gated && this.#refuseIfCapped({ quiet: true })) return false;
+    if (!this.pty) return false;
+    try {
+      this.pty.write(bytes);
+      if (gated) this._zoomCapNoted = null;
+      return true;
+    } catch {
       return false;
     }
+  }
+
+  send(text) {
+    if (this.#refuseIfCapped()) return false;
 
     // Queue path: no PTY (need respawn) OR PTY exists but not ready
     // (still in the banner-draw window). Both drain into the same
     // pendingSends and flush on ready / on init.
-    if (!this.pty || !this.ready) {
+    // 0458: a drain in progress on this pty also queues, so a message sent
+    // between two queued ones waits its turn instead of landing mid-drain.
+    const draining = !!this.pty && this._drainPty === this.pty;
+    if (!this.pty || !this.ready || draining) {
       this.pendingSends.push(text);
       this.appendTail({
         kind: 'sys',
-        text: this.pty
-          ? `queued · waiting for PTY ready (${this.pendingSends.length} pending)`
-          : 'respawning — queued; will resume session',
+        text: !this.pty
+          ? 'respawning — queued; will resume session'
+          : draining
+            ? `queued · sending earlier messages first (${this.pendingSends.length} pending)`
+            : `queued · waiting for PTY ready (${this.pendingSends.length} pending)`,
       });
       this.emit('change');
       if (!this.pty && !this.killed) {
@@ -544,7 +772,12 @@ export class PtyCore extends EventEmitter {
     return this.#writePtyMessage(text);
   }
 
-  #writePtyMessage(text) {
+  // `onSubmitted()` (0458) runs once this message's Enter is settled: at once
+  // when the CR rides in the same write, or one tick AFTER the deferred CR
+  // (so the next message never shares a tick with this Enter). It runs
+  // whether or not the CR was written; the drain re-checks the pty itself.
+  #writePtyMessage(text, onSubmitted = null) {
+    let submittedNow = false;
     try {
       const bracketed = !!this.term?.modes?.bracketedPasteMode;
       const isSlash = text.trimStart().startsWith('/');
@@ -557,7 +790,7 @@ export class PtyCore extends EventEmitter {
         // at all).
         this.pty.write(content);
         const pty = this.pty;
-        setImmediate(() => { try { if (pty && !this.killed) pty.write('\r'); } catch {} });
+        this.#deferSubmitCR(pty, onSubmitted);
       } else if (bracketed) {
         // Normal text, claude's bracketed-paste mode ON (the live case at the
         // prompt): write the 200~..201~ paste, then the submit CR on a
@@ -567,16 +800,19 @@ export class PtyCore extends EventEmitter {
         // session (#24 redux). Same separate-tick rule the slash path uses.
         this.pty.write(content);
         const pty = this.pty;
-        setImmediate(() => { try { if (pty && !this.killed) pty.write('\r'); } catch {} });
+        this.#deferSubmitCR(pty, onSubmitted);
       } else {
         // Paste mode off (e.g. unit tests, or a session not at its prompt):
         // historical single-write `text\r`.
         this.pty.write(content + '\r');
+        submittedNow = true;
       }
       this.status = 'working';
+      this.lastEventTs = Date.now(); // 0450: a send is an event (claude's echo no longer bumps it)
       this.activity = `▸ sending: ${text.slice(0, 120)}`;
       this.appendTail({ kind: 'user', text });
       this.emit('change');
+      if (submittedNow) onSubmitted?.();
       return true;
     } catch (e) {
       this.appendTail({ kind: 'err', text: `pty write failed: ${e.message}` });
@@ -584,22 +820,84 @@ export class PtyCore extends EventEmitter {
     }
   }
 
+  // The submit CR on its own tick (#24, #25). Captures `pty` so a respawn or
+  // kill mid-defer writes to the right target (or not at all). 0458: the
+  // caller's next step goes on a further tick, so a following paste is never
+  // written in the same tick as this Enter (the separate-tick rule again).
+  #deferSubmitCR(pty, onSubmitted) {
+    setImmediate(() => {
+      try { if (pty && !this.killed) pty.write('\r'); } catch {}
+      if (onSubmitted) setImmediate(onSubmitted);
+    });
+  }
+
+  // 0458: queued messages go out ONE AT A TIME — message N, its Enter, and
+  // only then message N+1. Writing every paste first and the Enters after
+  // (the old loop) merged the queue into one prompt under bracketed paste.
+  // _drainPty marks the pty a drain is running on; send() queues behind it.
   #drainPendingSends() {
     if (this.pendingSends.length === 0) return;
-    const drained = this.pendingSends.splice(0, this.pendingSends.length);
+    const n = this.pendingSends.length;
     this.appendTail({
       kind: 'sys',
-      text: `PTY ready · draining ${drained.length} queued message${drained.length === 1 ? '' : 's'}`,
+      text: `PTY ready · draining ${n} queued message${n === 1 ? '' : 's'}`,
     });
-    for (const text of drained) {
-      this.#writePtyMessage(text);
+    this.#drainNext(this.pty);
+  }
+
+  #drainNext(pty) {
+    // A respawn or kill since the last message: stop. Whatever is left stays
+    // in pendingSends and drains when the new pty is ready.
+    if (!pty || pty !== this.pty || !this.ready || this.killed) {
+      if (this._drainPty === pty) this._drainPty = null;
+      return;
     }
+    if (this.pendingSends.length === 0) {
+      this._drainPty = null;
+      return;
+    }
+    // TODO(0458): a message send() accepted into the queue is written even if
+    // the cost cap was reached while it waited (unchanged from before 0458).
+    // Re-checking the cap per queued message needs the owner's sign-off.
+    const text = this.pendingSends.shift();
+    this._drainPty = pty;
+    // Continue on success AND on a failed write: a failed message is lost and
+    // logged (as before 0458), but the drain keeps going so the rest are not
+    // stranded and a later send() cannot overtake them. `continued` guards against
+    // a write that throws after its CR was already scheduled.
+    let continued = false;
+    const next = () => { if (!continued) { continued = true; this.#drainNext(pty); } };
+    const ok = this.#writePtyMessage(text, next);
+    if (!ok) setImmediate(next);
+  }
+
+  // 0442: send `sig` to `pty`'s process tree (its group plus setsid'd
+  // descendants, see signalProcessTree). Falls back to pty.kill
+  // (the leader only) when there is no group signaller (fake spawn), no usable
+  // pid, or the group signal fails with ESRCH (group already gone / not yet
+  // formed) or EPERM. Any other error is thrown to the caller's catch.
+  #signal(pty, sig) {
+    const pid = pty?.pid;
+    // pid must be > 1: process.kill(-0) would signal mc's OWN group and -1
+    // every process this user may signal.
+    if (this._signalGroup && Number.isInteger(pid) && pid > 1) {
+      try {
+        this._signalGroup(pid, sig);
+        return;
+      } catch (e) {
+        if (e?.code !== 'ESRCH' && e?.code !== 'EPERM') throw e;
+      }
+    }
+    pty.kill(sig);
   }
 
   pause() {
     if (!this.pty) return false;
     try {
-      this.pty.kill('SIGSTOP');
+      this.#signal(this.pty, 'SIGSTOP');
+      // 0442: snapshot only on the first pause — a second pause() must not
+      // save 'paused' and have resume() bring back 'paused'.
+      if (!this.paused) this._statusBeforePause = this.status;
       this.paused = true;
       this.status = 'paused';
       this.appendTail({ kind: 'sys', text: 'SIGSTOP — process frozen' });
@@ -614,9 +912,20 @@ export class PtyCore extends EventEmitter {
   resume() {
     if (!this.pty) return false;
     try {
-      this.pty.kill('SIGCONT');
+      this.#signal(this.pty, 'SIGCONT');
       this.paused = false;
-      this.status = 'working';
+      // 0442: restore the status held before the pause instead of forcing
+      // 'working'. SIGSTOP froze the process, so whatever was true then is
+      // still true now: an idle session stays idle, a waiting prompt stays
+      // waiting, a mid-turn session resumes working. Forcing 'working' made an
+      // idle card read busy until the next transcript event. Only restore when
+      // nothing overwrote 'paused' meanwhile (an exit path writing 'error').
+      // 0450: deriveStatus reads `paused` first, so a hooked card shows PAUSED
+      // while stopped and its hook verdict again once resumed.
+      if (this.status === 'paused') this.status = this._statusBeforePause || 'idle';
+      // 0450: time spent frozen is not silence; restart the stuck clock.
+      this.lastEventTs = Date.now();
+      this._statusBeforePause = null;
       this.appendTail({ kind: 'sys', text: 'SIGCONT — process resumed' });
       this.emit('change');
       return true;
@@ -650,16 +959,69 @@ export class PtyCore extends EventEmitter {
       this.term = null;
       this.cell = null;
     }
+    // 0441: a respawn waiting on an old pty is cancelled — a killed slot is
+    // never revived.
+    this._startDeferred = false;
     if (this.pty) {
       // P6 (0408): a SIGSTOPped process never handles the SIGTERM — it stays
       // frozen in T state with the signal pending, unreachable once the Fleet
       // drops the agent from agents[]. Wake it first so the SIGTERM lands.
-      if (this.paused) {
-        try { this.pty.kill('SIGCONT'); } catch {}
-        this.paused = false;
-      }
-      try { this.pty.kill('SIGTERM'); } catch {}
+      // 0442: both go to the whole process tree, so stopped children wake
+      // and terminate with claude instead of staying frozen in T state.
+      // 0441: then SIGKILL at STOP_GRACE_MS unless it exits first.
+      this.#stopPty(this.pty);
     }
+  }
+
+  // 0441: true while any pty this agent signalled has not ended yet. Fleet
+  // keeps a killed agent in its stopping set until this goes false.
+  get stopping() { return this._stopping.size > 0; }
+
+  // 0441: SIGCONT (if paused) + SIGTERM `pty`'s tree, then SIGKILL it at
+  // STOP_GRACE_MS unless it exits first. The exit listener is a NEW
+  // subscription: it must never reach #onExit, whose state now belongs to
+  // the successor (P1/0408).
+  #stopPty(pty) {
+    if (this._stopping.has(pty)) return;
+    if (this.paused) {
+      try { this.#signal(pty, 'SIGCONT'); } catch {}
+      this.paused = false;
+    }
+    const entry = { timer: null, exitSub: null };
+    this._stopping.set(pty, entry);
+    try { entry.exitSub = pty.onExit(() => this.#stopped(pty)); } catch {}
+    entry.timer = setTimeout(() => {
+      entry.timer = null;
+      this.appendTail({ kind: 'sys', text: `SIGKILL — process ignored SIGTERM for ${STOP_GRACE_MS / 1000}s` });
+      try { this.#signal(pty, 'SIGKILL'); } catch {}
+      // Proceed on the SIGKILL, not only on the exit report: a SIGKILL that
+      // failed (EPERM) or a pty that never reports exit must not hold a
+      // respawn forever.
+      this.#stopped(pty);
+    }, STOP_GRACE_MS);
+    entry.timer.unref?.();
+    // After the bookkeeping: a pty whose exit fires synchronously on SIGTERM
+    // must find its entry.
+    try { this.#signal(pty, 'SIGTERM'); } catch {}
+  }
+
+  // 0441: `pty` exited or was SIGKILLed. Forget it; when it was the last one,
+  // run a respawn that start() deferred, and tell Fleet the agent is stopped.
+  #stopped(pty) {
+    const entry = this._stopping.get(pty);
+    if (!entry) return;
+    this._stopping.delete(pty);
+    if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    try { entry.exitSub?.dispose?.(); } catch {}
+    if (this._stopping.size > 0) return;
+    if (this._startDeferred && !this.killed) {
+      try { this.start(); } catch (e) {
+        this._startDeferred = false;
+        this.appendTail({ kind: 'err', text: `respawn failed: ${e.message}` });
+        this.emit('change');
+      }
+    }
+    this.emit('stopped');
   }
 
   // hardKill — SIGKILL escalation for shutdown. A claude child wedged on a
@@ -668,8 +1030,27 @@ export class PtyCore extends EventEmitter {
   // quit-stall → force-close → orphan-adopted-as-background-agent chain
   // (2026-08-12 incident, gtm-gov-miner). kill() must have run first.
   hardKill() {
-    if (this.pty) {
-      try { this.pty.kill('SIGKILL'); } catch {}
+    // 0441: shutdown never respawns. Without this, #stopped below would run a
+    // deferred start() on an agent kill() never reached, and the SIGKILL that
+    // follows would land on that brand-new claude.
+    this._startDeferred = false;
+    // 0441: also every pty still stopping after kill() or a restart teardown —
+    // the old claude a changeModel replaced is no longer this.pty.
+    for (const pty of [...this._stopping.keys()]) {
+      if (pty === this.pty) continue; // signalled below, once
+      try { this.#signal(pty, 'SIGKILL'); } catch {}
+      this.#stopped(pty);
+    }
+    // 0441: after kill(), this.pty is kept but its exit sub is gone; once
+    // #stopped recorded its exit, the pid may already belong to another
+    // process — signal it only while it is still stopping.
+    if (this.pty && (!this.killed || this._stopping.has(this.pty))) {
+      // 0442: the whole tree — a wedged claude's children must not outlive it.
+      // 0442: TODO(tree-after-exit): if the SIGTERM already ended claude, its
+      // setsid'd children have reparented to pid 1 and this walk finds none, so
+      // one that ignored SIGTERM survives. Reuse kill()'s snapshot to close it.
+      try { this.#signal(this.pty, 'SIGKILL'); } catch {}
+      this.#stopped(this.pty); // 0441: no-op unless kill() put it in _stopping
     }
   }
 
@@ -699,6 +1080,7 @@ export class PtyCore extends EventEmitter {
     if (this.pty) {
       const oldPty = this.pty;
       this.pty = null;
+      this._restartReplaced.add(oldPty); // 0446: see replacedByRestart
       // We're tearing down on purpose; suppress the auto-restart
       // path in #onExit by flipping killed briefly. start() resets
       // it back to false implicitly via constructor state.
@@ -706,11 +1088,10 @@ export class PtyCore extends EventEmitter {
       this.killed = true;
       // P6 (0408): a paused (SIGSTOPped) process must be woken or the SIGTERM
       // stays pending forever — same orphan shape kill() guards against.
-      if (this.paused) {
-        try { oldPty.kill('SIGCONT'); } catch {}
-        this.paused = false;
-      }
-      try { oldPty.kill('SIGTERM'); } catch {}
+      // 0442: signal the old process tree, same as kill().
+      // 0441: and keep it in _stopping: SIGKILL at STOP_GRACE_MS, hardKill
+      // still reaches it, and the caller's start() waits for it to end.
+      this.#stopPty(oldPty);
       this.killed = wasKilled;
     }
   }
@@ -762,6 +1143,13 @@ export class PtyCore extends EventEmitter {
       if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
       this.resuming = true;
       this.start();
+      // 0441: start() defers while the old claude is still stopping (at most
+      // STOP_GRACE_MS). A pane bound to a null pty would drop every key and
+      // never see the successor, so say so instead; reopening works once the
+      // respawn lands.
+      if (!this.pty && this._startDeferred) {
+        throw new Error('session is restarting — reopen zoom in a moment');
+      }
     }
     // 0404: NO resize here. The agent's PTY already runs at the fleet
     // viewport's geometry (Fleet.setViewport ← tui/lib/zoomGeometry.js), which

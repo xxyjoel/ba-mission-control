@@ -235,9 +235,16 @@ export default function Zoom({
     ? `⬆ update${claudeUpdate.version ? ` ${claudeUpdate.version}` : ''}` : '';
   const resolvedText = unknownResolved
     ? trunc(humanize(String(agent.resolvedModel)), 24) : '';
-  const gitChipsW = ((agent.dirty || 0) > 0 ? ` +${agent.dirty}`.length : ' ●clean'.length)
-    + (agent.ahead > 0 ? ` ↑${agent.ahead}`.length : 0)
-    + (agent.behind > 0 ? ` ↓${agent.behind}`.length : 0);
+  // 0452: same git contract as Card.jsx — isRepo false → no git chips;
+  // dirty === null → the read failed → UNKNOWN, never ●clean.
+  const gitNone    = agent.isRepo === false;
+  const dirtyKnown = agent.dirty !== null;
+  const dirtyChip  = gitNone ? ''
+    : !dirtyKnown ? ` ${UNKNOWN}`
+    : (agent.dirty || 0) > 0 ? ` +${agent.dirty}` : ' ●clean';
+  const aheadChip  = !gitNone && agent.ahead  > 0 ? ` ↑${agent.ahead}`  : '';
+  const behindChip = !gitNone && agent.behind > 0 ? ` ↓${agent.behind}` : '';
+  const gitChipsW = dirtyChip.length + aheadChip.length + behindChip.length;
   const rightW = (updateText ? updateText.length + 4 : 0)
     + (permText ? permText.length + 4 : 0)
     + `${statusGlyph} ${statusWord}`.length;
@@ -284,11 +291,11 @@ export default function Zoom({
           )}
           <Text color={theme.dim}>⎇ </Text>
           <Text color={theme.fg}>{branchStr}</Text>
-          {(agent.dirty || 0) > 0
-            ? <Text color={theme.yellow}> +{agent.dirty}</Text>
-            : <Text color={theme.green}> ●clean</Text>}
-          {agent.ahead  > 0 && <Text color={theme.accent}> ↑{agent.ahead}</Text>}
-          {agent.behind > 0 && <Text color={theme.yellow}> ↓{agent.behind}</Text>}
+          {dirtyChip !== '' && (
+            <Text color={!dirtyKnown ? theme.dim : (agent.dirty || 0) > 0 ? theme.yellow : theme.green}>{dirtyChip}</Text>
+          )}
+          {aheadChip  !== '' && <Text color={theme.accent}>{aheadChip}</Text>}
+          {behindChip !== '' && <Text color={theme.yellow}>{behindChip}</Text>}
         </Box>
         <Box flexGrow={1} />
         <Box flexShrink={0}>

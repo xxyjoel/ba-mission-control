@@ -3,10 +3,9 @@
 //
 // Covers the invariants the CURRENT rules satisfy: purity (same input → same
 // output, no clock, no mutation), no latching, terminal states, stuck
-// suppression during fan-out, and which detector a branch may consult. Two
-// plan invariants do not hold today and are recorded as test.todo rather
-// than forced — changing them is a behavior change, not part of the 0285
-// refactor (see TODO(stuck-waiting) in server/deriveStatus.mjs).
+// suppression during fan-out, and which detector a branch may consult.
+// 0450: the two plan invariants that were test.todo (inv.5 stuck never beside
+// waiting, inv.6 paused wins on a hooked slot) now hold and are real tests.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -138,7 +137,28 @@ test('un-hooked paused and error pass through untouched by detectors', () => {
   }
 });
 
-test.todo('0295 inv.6: paused should win on a HOOKED slot (today hookStatus=working reads working while SIGSTOPped)');
+// 0450 (was test.todo, 0295 inv.6): a SIGSTOPped slot is paused no matter what
+// the hook channel last said. A stopped process reads as a settled PTY, so the
+// approval scrape must not flip it either, and it never accrues stuck.
+test('0295 inv.6: paused wins on every hooked branch, with no approval scrape and no stuck', () => {
+  const stale = NOW - 30 * MIN;
+  const cases = [
+    { hookStatus: 'working', hookStatusTs: stale },
+    { hookStatus: 'working', hookStatusTs: stale, scanApproval: () => true },
+    { hookStatus: 'working', hookStatusTs: stale, awaitingPrompt: { kind: 'single-select', tool: 'AskUserQuestion' } },
+    { hookStatus: 'waiting', hookStatusTs: stale },
+    { hookStatus: 'idle', hookStatusTs: 9, lastConnectorTs: 10 },
+    { hookStatus: 'idle', hookStatusTs: 11, lastConnectorTs: 10 },
+    { hookStatus: null, scanTrust: () => true },
+  ];
+  for (const c of cases) {
+    const r = deriveStatus(sig({ connectorStatus: 'paused', paused: true, lastEventTs: stale, ...c }), NOW);
+    assert.equal(r.status, 'paused', JSON.stringify(c));
+    assert.equal(r.reason, 'paused', JSON.stringify(c));
+    assert.equal(r.approvalWaiting, false, JSON.stringify(c));
+    assert.equal(r.stuckMin, 0, JSON.stringify(c));
+  }
+});
 
 // ── hook precedence and which detector a branch may consult ───────────────────
 
@@ -255,7 +275,40 @@ test('stuck threshold is whole minutes from lastEventTs', () => {
   assert.equal(at(12.9 * MIN), 12);
 });
 
-test.todo('0295 inv.5: stuck should never coexist with waiting (today the 0384 tool-prompt branch and an un-hooked stored waiting both accrue it)');
+// 0450 (was test.todo, 0295 inv.5): a card parked on the user is not wedged.
+// Sweep every branch that yields 'waiting' with a stale clock.
+test('0295 inv.5: stuck never coexists with waiting, on any branch', () => {
+  const stale = NOW - 30 * MIN;
+  const cases = [
+    { hookStatus: 'waiting', hookStatusTs: stale },
+    { hookStatus: 'working', hookStatusTs: stale, awaitingPrompt: { kind: 'single-select', tool: 'AskUserQuestion' } },
+    { hookStatus: 'working', hookStatusTs: stale, scanApproval: () => true },
+    { hookStatus: 'working', hookStatusTs: stale, scanTrust: () => true },
+    { connectorStatus: 'waiting' },
+    { connectorStatus: 'working', scanApproval: () => true },
+    { connectorStatus: 'working', scanTrust: () => true },
+  ];
+  for (const c of cases) {
+    const r = deriveStatus(sig({ lastEventTs: stale, ...c }), NOW);
+    assert.equal(r.status, 'waiting', JSON.stringify(c));
+    assert.equal(r.stuckMin, 0, JSON.stringify(c));
+  }
+});
+
+// 0450: the stuck clock is real events only. A hook event counts as one; PTY
+// bytes never do (lastPtyTs is not read for stuck).
+test('stuck clock: fresh PTY bytes do not reset it; a fresh hook event does', () => {
+  const stale = NOW - 30 * MIN;
+  const r1 = deriveStatus(sig({ hookStatus: 'working', hookStatusTs: stale, lastEventTs: stale, lastPtyTs: NOW }), NOW);
+  assert.equal(r1.stuckMin, 30);
+  const r2 = deriveStatus(sig({ hookStatus: 'working', hookStatusTs: NOW - MIN, lastEventTs: stale }), NOW);
+  assert.equal(r2.stuckMin, 0);
+  const r3 = deriveStatus(sig({ connectorStatus: 'working', lastEventTs: stale, lastPtyTs: NOW }), NOW);
+  assert.equal(r3.stuckMin, 30);
+  // An absent clock stays "not stuck" (NaN), never a 0-epoch giant.
+  const r4 = deriveStatus(sig({ hookStatus: 'working', hookStatusTs: 0, lastEventTs: undefined }), NOW);
+  assert.equal(r4.stuckMin, 0);
+});
 
 // ── background work ───────────────────────────────────────────────────────────
 

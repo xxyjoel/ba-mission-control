@@ -85,7 +85,11 @@ export const SETTINGS_DEFAULTS = {
   // boot egress must have an opt-out).
   syncModelsOnBoot: true,
   defaultPermission: 'acceptEdits', // default | acceptEdits | bypassPermissions | plan
-  gitPollSec: 6,
+  // 0452: gitPollSec removed — nothing ever read it. Git state refreshes only
+  // via refreshGit in the agents (on spawn; also on turn end in server/agent.mjs),
+  // which this lane does not own. A leftover key in an old settings.json merges
+  // in harmlessly and is ignored.
+  // TODO(0452): a periodic git refresh, if wanted, belongs in the agents' lane.
   // Repo scan locations for the New Session picker. Empty = use the
   // built-in defaults (or the REPO_PARENTS env var). When non-empty these
   // REPLACE the defaults — only these dirs are walked. Set via the repo
@@ -95,14 +99,19 @@ export const SETTINGS_DEFAULTS = {
   autoCompactSuggest: true,
   toastDurationMs: 4000,
   // Per-slot session cost cap (USD). 0 disables. When a slot's
-  // costSession crosses this number, Agent.send() refuses further
-  // user-driven messages until the cap is reset via :resetcap <slot>.
+  // costSession reaches this number, send() (and zoom's writeInput) refuses
+  // further user-driven messages until the cap is raised or disabled via
+  // :cap <slot> <usd> (0 disables). There is no :resetcap verb (0452).
   // Designed to catch runaway Bash-loops before they cost $20.
   costCapUSD: 0,
   // Fleet-wide cumulative spend cap for the calendar day (UTC). 0
-  // disables. Fleet.launch() refuses new sessions once today's total
-  // exceeds this number. Existing sessions keep running — this guards
-  // against starting new work, not against ongoing turns.
+  // disables. budgetBlocked() in tui/App.jsx refuses the launch paths
+  // (New Session, :template, :resume, :resume-all, boot auto-resume,
+  // :clear/:restart, :cr) once today's total reaches this number (>=).
+  // Crash auto-restart and the :model/:perm respawn are not gated.
+  // Fleet.launch() itself does not check it (0447; comment fixed in 0467).
+  // Existing sessions keep running — this guards against starting new
+  // work, not against ongoing turns.
   dailyBudgetUSD: 0,
   // Slack Incoming Webhook URL — used by :feedback and :request. Leave
   // empty to disable. Set with `:slack <url>` from the command bar.
@@ -168,7 +177,6 @@ function subscriptionStatusRow(id, label, desc) {
 export const SETTINGS_SCHEMA = [
   { id: 'general', title: 'GENERAL', items: [
     { key: 'tickRate',     label: 'Update rate',          kind: 'number', min: 200, max: 5000, step: 100, unit: ' ms', desc: 'How often the UI re-samples derived stats' },
-    { key: 'gitPollSec',   label: 'Git status poll',      kind: 'number', min: 1, max: 60, step: 1, unit: ' s' },
     { key: 'broadcastStaggerMs', label: 'Broadcast stagger', kind: 'number', min: 0, max: 2000, step: 50, unit: ' ms', desc: 'Delay between each per-session send in a broadcast / resume-all, so mc does not open many API connections at once. 0 = all at once.' },
     { key: 'vimKeys',      label: 'Vim keys (h j k l)',   kind: 'toggle', desc: 'Use hjkl alongside arrow keys' },
     { key: 'clock24',      label: '24-hour clock',        kind: 'toggle' },
@@ -201,8 +209,8 @@ export const SETTINGS_SCHEMA = [
   ]},
   { id: 'safety', title: 'SAFETY', items: [
     { key: 'broadcastConfirm', label: 'Confirm before broadcast', kind: 'toggle', desc: 'Stops a stray ↵ from blasting all sessions' },
-    { key: 'costCapUSD',       label: 'Per-slot cost cap',  kind: 'number', min: 0, max: 100, step: 0.5, unit: ' USD', desc: '0 disables. When a session crosses this, further sends are refused until :resetcap <slot>.' },
-    { key: 'dailyBudgetUSD',   label: 'Fleet daily budget', kind: 'number', min: 0, max: 1000, step: 1, unit: ' USD', desc: '0 disables. Refuses new launches once today\'s fleet total exceeds.' },
+    { key: 'costCapUSD',       label: 'Per-slot cost cap',  kind: 'number', min: 0, max: 100, step: 0.5, unit: ' USD', desc: '0 disables. When a session reaches this, further sends are refused until you raise or disable it with :cap <slot> <usd> (0 disables).' },
+    { key: 'dailyBudgetUSD',   label: 'Fleet daily budget', kind: 'number', min: 0, max: 1000, step: 1, unit: ' USD', desc: '0 disables. Refuses new launches and resumes once today\'s fleet total reaches this.' },
   ]},
   // PLUGINS — memory-management features. Each row toggles a plugin
   // declared in tui/lib/plugins.js. The `desc` column shows what the

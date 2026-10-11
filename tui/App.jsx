@@ -55,7 +55,8 @@ import { readUsage, fmtReset } from './lib/usage.js';
 import { dlog } from './lib/debugLog.js';
 import { postSlack } from './lib/slack.js';
 import { listRecentRepos } from '../server/repos.mjs';
-import { transcriptPathFor, TRANSCRIPT_BASE_DIR } from '../server/agent.mjs';
+import { claudeSessionPath } from '../server/sessionFileTailer.mjs';
+import { findTranscriptPath as findCursorTranscriptPath } from '../server/providers/cursor/transcriptTailer.mjs';
 import { getConfigDir, isSandboxed } from './lib/configDir.js';
 import { isDebugKeysActive, setDebugKeysActive, clearDebugKeysLog, DEBUG_KEYS_PATH } from './lib/debugKeys.js';
 import { appendMemoryNote, readProjectMemory, injectMemoryIntoPrompt, memoryPathFor } from './lib/projectMemory.js';
@@ -72,12 +73,42 @@ import { wireCursorUsageSync } from './lib/cursorUsage.js';
 //   plan                 — read-only planning; no edits issued
 //   dontAsk              — never prompt; for safe/observed sessions
 //   bypassPermissions    — no guardrails. Scratch dirs only.
+// TODO(0439): import CLAUDE_PERMISSION_MODES from server/permissionModes.mjs — this copy can drift from the list the hook/transcript validators accept.
 const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions'];
 
 // 0420: which CLI runs a slot. Snapshots and records from before providers
 // existed carry no field and are Claude.
 function providerOf(agentOrRecord) {
   return agentOrRecord?.provider || 'claude';
+}
+
+// 0462: the session's REAL transcript — the file the CLI writes and the tailer
+// follows — for `:transcript` / `:where`. These verbs used to print mc's legacy
+// stream-json log (~/.local/state/claude-mc/sessions/<sid>.jsonl, which a PTY
+// slot never writes) or `null` for a non-UUID sid. Claude: the tailer re-points
+// agent.sessionId when claude rotates its file (/clear), so cwd + sessionId at
+// command time name the live file. Cursor: whatever findTranscriptPath finds.
+// Returns null when there is no file to name.
+const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
+function transcriptPathOf(agent) {
+  if (providerOf(agent) === 'cursor') {
+    try { return findCursorTranscriptPath(agent.sessionId) || null; } catch { return null; }
+  }
+  if (providerOf(agent) !== 'claude') return null;
+  // claudeSessionPath throws on a non-UUID sid (path-traversal guard). It only
+  // builds the path, so check the disk too: a fresh --session-id launch has no
+  // file until claude writes its first line.
+  try {
+    const p = claudeSessionPath({ cwd: agent.cwd, sessionId: agent.sessionId });
+    return existsSync(p) ? p : null;
+  } catch { return null; }
+}
+// 0462: a path toast must stay copyable, so it skips humanize() (which turns
+// HOME into `~`, cuts any path over 60 chars to `…/leaf` and UUIDs to 8 chars)
+// but keeps its terminal-safety half: no C0/C1 control bytes, no line breaks.
+// A Cursor path carries readdir-derived names, so this is not optional.
+function pathSafe(p) {
+  return String(p ?? '').replace(/[\r\n\t]+/g, ' ').replace(/[\x00-\x1f\x7f-\x9f]/g, '');
 }
 
 // Launch defaults for a non-Claude provider: its own settings when they name a
@@ -142,6 +173,27 @@ const RENDER_COALESCE_MS = 100;
 // clock backs off to this cadence instead of the active tickRate — no
 // per-second CPU wakeups when nothing is happening.
 const IDLE_TICK_MS = 3000;
+
+// 0464: a string signature of everything a fleet snapshot can draw. Two
+// snapshots with the same signature draw the same screen. The top-level `now`
+// stamp differs on every snapshot() call and is not drawn, so it is left out.
+// A string, not a structural compare against the previous object: a field a
+// toJSON returns by reference (and later mutates in place) would be the SAME
+// object in both snapshots and hide a real change.
+// The sampled process stats are compared at the resolution the card shows
+// (whole % and MiB, the same rounding Fleet uses to decide whether to emit):
+// raw ps samples jitter every few seconds on an idle claude.
+const sigReplacer = (k, v) => {
+  if (k === 'procCpu' && typeof v === 'number') return Math.round(v);
+  if (k === 'procMemKb' && typeof v === 'number') return Math.round(v / 1024);
+  return v;
+};
+export const snapshotSig = (snap) => JSON.stringify(snap ? { ...snap, now: 0 } : null, sigReplacer);
+// 0464: the fleet is "active" while any agent is working or waiting. Only then
+// does the header clock tick in seconds; at idle it shows minutes, so an idle
+// screen changes at most once a minute.
+const fleetActive = (agents) => (agents || []).some(a => a.status === 'working' || a.status === 'waiting');
+const clockStamp = (active, ms = Date.now()) => (active ? ms : Math.floor(ms / 60_000) * 60_000);
 // How long a terminal resize must be quiet before the fleet's PTY geometry
 // follows it. A window drag emits a stream of intermediate sizes and each one
 // applied would make every session's claude reprint its whole frame, leaving
@@ -181,7 +233,7 @@ export default function App({
   providers: providerList = listProviders(), loginSpawn,
   onProviderConnected: onProviderConnectedProp, onProviderDisconnected: onProviderDisconnectedProp,
 }) {
-  const { exit } = useApp();
+  const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
 
   const [snapshot, _setSnapshot] = useState(() => fleet.snapshot());
@@ -192,7 +244,15 @@ export default function App({
   // (audit #57). The ref read is sync and always points to the last
   // committed render's snapshot.
   const snapshotRef = useRef(snapshot);
+  // 0464: an equal snapshot is dropped before it reaches React. The idle tick
+  // used to hand React a new object every 3 s, so App re-rendered and Ink
+  // rewrote the whole screen with nothing changed.
+  const snapshotSigRef = useRef(null);
+  if (snapshotSigRef.current === null) snapshotSigRef.current = snapshotSig(snapshot);
   const setSnapshot = (snap) => {
+    const sig = snapshotSig(snap);
+    if (sig === snapshotSigRef.current) return;
+    snapshotSigRef.current = sig;
     snapshotRef.current = snap;
     _setSnapshot(snap);
   };
@@ -207,8 +267,39 @@ export default function App({
   const [newSlot, setNewSlot] = useState(null);
   const [zoomedId, setZoomedId] = useState(null);
   const [repos, setRepos] = useState([]);
-  const [now, setNow] = useState(Date.now());
-  const [aggSpark, setAggSpark] = useState(() => Array(22).fill(0)); // 0 = idle (blank spark), not fill(1) which pinned a full block (M2)
+  // 0464: `now` is minute-floored while the fleet is idle (see clockStamp).
+  // The refs let the tick skip a setter whose value would not change.
+  // The zoom view keeps the seconds clock even at idle: its "in <status>" and
+  // "session age" rows read Date.now() at render, so they only move when App
+  // re-renders (review of 0464, finding 3).
+  const zoomOpenRef = useRef(false);
+  zoomOpenRef.current = modal === 'zoom';
+  const secondsClock = (agents) => fleetActive(agents) || zoomOpenRef.current;
+  const [now, _setNow] = useState(() => clockStamp(fleetActive(snapshot.agents)));
+  const nowRef = useRef(now);
+  const setNow = (t) => { if (t === nowRef.current) return; nowRef.current = t; _setNow(t); };
+  // Opening or closing zoom switches the clock resolution straight away.
+  useEffect(() => {
+    setNow(clockStamp(secondsClock(snapshotRef.current.agents)));
+  }, [modal]);
+  // 0464 (review finding 2): after `kill -STOP` / `kill -CONT` main.jsx
+  // re-enters the alternate screen, which comes back blank. With
+  // incrementalRendering Ink rewrites only CHANGED lines, and an idle fleet
+  // may not commit at all for a minute, so the screen would stay blank. A
+  // suspend/resume round trip is Ink's own forced full redraw (it also
+  // re-asserts raw mode). main.jsx registers its SIGCONT listener first, so
+  // the alt-screen switch is written before this redraw.
+  useEffect(() => {
+    const onCont = () => {
+      (async () => {
+        try { const s = await suspendTerminal(); await s.resume(); } catch {}
+      })();
+    };
+    process.on('SIGCONT', onCont);
+    return () => { process.off('SIGCONT', onCont); };
+  }, [suspendTerminal]);
+  const [aggSpark, _setAggSpark] = useState(() => Array(22).fill(0)); // 0 = idle (blank spark), not fill(1) which pinned a full block (M2)
+  const aggSparkRef = useRef(aggSpark);
 
   // Force re-render bumper, used by SIGWINCH listener so cardW recomputes
   // when the user resizes the terminal.
@@ -251,7 +342,14 @@ export default function App({
   const changeTimerRef = useRef(null);
   const changePendingRef = useRef(false);
   useEffect(() => {
-    const flush = () => { changePendingRef.current = false; setSnapshot(fleet.snapshot()); };
+    const flush = () => {
+      changePendingRef.current = false;
+      const snap = fleet.snapshot();
+      setSnapshot(snap);
+      // 0464: an idle → working transition switches the clock to seconds now,
+      // not on the next tick, so it never shows a minute-floored ":00".
+      setNow(clockStamp(secondsClock(snap.agents)));
+    };
     const onChange = () => {
       if (changeTimerRef.current) { changePendingRef.current = true; return; }
       flush(); // leading edge — first change paints now
@@ -293,8 +391,11 @@ export default function App({
     const activeMs = Math.max(300, settings.tickRate);
     let timer = null;
     const tick = () => {
-      setNow(Date.now());
       const fresh = fleet.snapshot();
+      const active = fleetActive(fresh.agents);
+      // 0464: both setters skip a value equal to the current one, so an idle
+      // tick with an unchanged fleet causes no render at all.
+      setNow(clockStamp(secondsClock(fresh.agents)));
       setSnapshot(fresh);
       // Read `fresh` directly (snapshot isn't in our deps — listing it would
       // tear down + rebuild this timer on every change; audit #57).
@@ -306,8 +407,14 @@ export default function App({
       // sparkLine's all-zero guard render nothing.
       const rate = fresh.agents.reduce((s, a) =>
         a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0);
-      setAggSpark(prev => [...prev.slice(1), Math.max(0, rate)]);
-      const active = fresh.agents.some(a => a.status === 'working' || a.status === 'waiting');
+      // 0464: an all-zero spark that would shift in another 0 is unchanged.
+      const sample = Math.max(0, rate);
+      const prevSpark = aggSparkRef.current;
+      if (!prevSpark.every(v => v === sample)) {
+        const next = [...prevSpark.slice(1), sample];
+        aggSparkRef.current = next;
+        _setAggSpark(next);
+      }
       timer = setTimeout(tick, active ? activeMs : IDLE_TICK_MS);
     };
     timer = setTimeout(tick, activeMs);
@@ -480,8 +587,9 @@ export default function App({
       const anyLive = snap.agents.some(a => a.status !== 'empty');
       if (anyLive) return;
       if (settings.autoResumeOnStart) {
-        const { scheduled, total } = resumeAllSessions(snap.agents);
-        pushToast(`auto-resuming ${scheduled}/${total} saved session${total === 1 ? '' : 's'}`, scheduled ? 'ok' : 'info');
+        const { scheduled, total, blocked } = resumeAllSessions(snap.agents);
+        // 0447: when blocked the budget toast already says why.
+        if (!blocked) pushToast(`auto-resuming ${scheduled}/${total} saved session${total === 1 ? '' : 's'}`, scheduled ? 'ok' : 'info');
       } else {
         pushToast(`${recs.length} saved session${recs.length === 1 ? '' : 's'} — :resume-all to restore`, 'info');
       }
@@ -504,18 +612,42 @@ export default function App({
     return () => clearTimeout(t);
   }, [toasts]);
 
-  const pushToast = (text, kind = 'info') => {
+  const pushToast = (text, kind = 'info', { path } = {}) => {
     const id = toastIdRef.current++;
     const expiresAt = Date.now() + (settings.toastDurationMs || 4000);
     // 0408/S3+R5: toast text can carry session-derived content (agent names,
     // error causes, api strings) — sanitize at push time so escape sequences
     // never reach the terminal and the strip's one-row-per-toast budget holds.
-    text = humanize(String(text ?? ''));
+    // 0462: `path` is appended verbatim (control bytes stripped) so the user
+    // can copy it; humanize would abbreviate it past use.
+    text = humanize(String(text ?? '')) + (path != null ? pathSafe(path) : '');
     // Keep at most MAX_TOAST_ROWS alive — that number IS the height the grid
     // layout reserves for the strip (gridLayout.FEEDBACK_H). Letting more
     // through would render rows nothing budgeted for, which pushes the frame
     // past the last screen row and tears the view.
     setToasts(prev => [...prev.slice(-(MAX_TOAST_ROWS - 1)), { id, kind, text, expiresAt }]);
+  };
+
+  // 0447: the ONE fleet-wide daily-budget gate. Every path that starts a
+  // claude — launchSession, launchFromRecord (:resume, multi-restore,
+  // :resume-all, boot auto-resume), :clear/:restart and :cr — calls this
+  // first. Before 0447 only launchSession checked, so the others spent past
+  // the budget. Reads settings through a ref so a delayed launch (resume-all
+  // stagger, :cr after the summary) sees the CURRENT budget, not the one in
+  // the closure that scheduled it. Existing sessions keep running; this only
+  // blocks NEW work. :budget 0 disables. Returns true (and toasts) when blocked.
+  const budgetSettingsRef = useRef(settings);
+  budgetSettingsRef.current = settings;
+  const budgetBlocked = () => {
+    const budget = budgetSettingsRef.current.dailyBudgetUSD || 0;
+    if (!(budget > 0)) return false;
+    const spent = costStoreRef.current.dayCost();
+    if (spent < budget) return false;
+    pushToast(
+      `daily budget reached · $${spent.toFixed(2)} / $${budget.toFixed(2)} · :budget <usd> to raise`,
+      'error',
+    );
+    return true;
   };
 
   // ── Cost store wiring ───────────────────────────────────
@@ -587,8 +719,8 @@ export default function App({
   // ── Session persistence (for resume) ───────────────────
   // Mirror the snapshot into ~/.config/claude-mc/sessions.json so sessions can be
   // resumed later. THROTTLED to ~2s: each syncFromSnapshot() does a readFileSync +
-  // JSON.parse AND — because quitMode defaults to 'save', every in-session sync is
-  // "dirty" — a persist() (copyFileSync + writeFileSync + renameSync). Keyed on
+  // JSON.parse, plus a persist() (copyFileSync + writeFileSync + renameSync) when
+  // a record really changed (0464: save mode used to persist on EVERY sync). Keyed on
   // snapshot (frame rate while active, every 3s idle) that was a full read+write
   // disk cycle up to ~10×/s. Nothing needs sub-2s persistence (lastSeen only moves
   // every 60s), and shutdown calls persistOpenSet() DIRECTLY (main.jsx), bypassing
@@ -609,7 +741,10 @@ export default function App({
     } else if (!syncTimerRef.current) {
       syncTimerRef.current = setTimeout(() => { syncTimerRef.current = null; run(); }, THROTTLE_MS - since);
     }
-  }, [snapshot, settings.sessionHistoryLimit]);
+    // 0464: `now` is a dep so an idle fleet (whose snapshot no longer changes)
+    // still syncs once a minute and the >60 s lastSeen refresh keeps running.
+    // The store writes only when a record changed or lastSeen is >60 s old.
+  }, [snapshot, now, settings.sessionHistoryLimit]);
   // Clear the trailing timer on unmount only (not on every dep change — that would
   // starve the trailing flush during a burst).
   useEffect(() => () => { if (syncTimerRef.current) clearTimeout(syncTimerRef.current); }, []);
@@ -749,18 +884,12 @@ export default function App({
 
   const focusedAgent = agents.find(a => a.slot === focusedSlot) || agents[0];
   // For zoom we MUST pass the live Agent / PtyAgent instance, not the
-  // toJSON snapshot in `agents`. PtyPane's attachZoomView path
-  // (single-pipeline rewrite) duck-types on agent.attachZoomView ===
-  // 'function'; on a plain snapshot object that method is missing so
-  // PtyPane falls back to startZoomSession which spawns a SECOND
-  // claude against the same session file. The two compete, then the
-  // legacy dispose kills the original on exit — the exact "claude
-  // stopped thinking and no output exists" symptom users hit on the
-  // first re-zoom.
-  //
-  // The legacy stream-json Agent path (FLEET_USE_PTY=0) is ALSO
-  // happier with the live instance because startZoomSession reads
-  // agent.proc / mutates agent.sessionId — both no-ops on a snapshot.
+  // toJSON snapshot in `agents`. PtyPane duck-types on
+  // agent.attachZoomView === 'function'; a plain snapshot object has no
+  // such method, so the zoom would show "zoom is not supported" instead.
+  // (0444: before, PtyPane fell back to startZoomSession and spawned a
+  // SECOND claude against the same session file. That fallback and
+  // server/zoomSession.mjs are gone.)
   // 0417: the zoom view and the card must not read status from different
   // places. `fleet.agentById()` hands back the LIVE PtyAgent, and on that
   // object `.status` is only the connector's opinion — ptyAgent.mjs:1161
@@ -810,8 +939,14 @@ export default function App({
     return Math.round(agents.reduce((s, a) =>
       a.status === 'working' ? s + (a.lastTokRate || 0) : s, 0));
   }, [agents]);
-  const sessionStr = fmtDuration(now - snapshot.sessionStart);
-  const nowStr = fmtClock(now, settings.clock24);
+  // 0464: minutes only while idle — a seconds digit would change the screen on
+  // every tick and defeat Ink's identical-frame skip.
+  // Must match the predicate the tick uses to floor `now`. The session length
+  // is clamped at 0: an idle `now` is floored to the minute and can be earlier
+  // than a sessionStart taken just before boot (review finding 1: "-1:-1").
+  const clockSeconds = secondsClock(agents);
+  const sessionStr = fmtDuration(Math.max(0, now - snapshot.sessionStart), { seconds: clockSeconds });
+  const nowStr = fmtClock(now, settings.clock24, { seconds: clockSeconds });
 
   // ── Command bar processing ──────────────────────────────
   // Run `:cmd args` against a tiny dispatch table. Returns a status string
@@ -990,6 +1125,9 @@ export default function App({
           pushToast(`no live session focused`, 'warn');
           return null;
         }
+        // 0447: check BEFORE the kill — over budget, keep the session we
+        // could not replace instead of killing it and refusing the relaunch.
+        if (budgetBlocked()) return null;
         const cfg = {
           slot: target.slot,
           cwd: target.cwd,
@@ -1049,6 +1187,8 @@ export default function App({
         if (refusedFor(target, 'compact')) return null;
         const a = fleet.agentById(target.id);
         if (!a) { pushToast(`session not found`, 'warn'); return null; }
+        // 0447: over budget, don't spend a summary turn on a relaunch we'd refuse.
+        if (budgetBlocked()) return null;
         const cfg = {
           slot: target.slot,
           cwd: target.cwd,
@@ -1080,6 +1220,12 @@ export default function App({
           if (!reply) return;
           clearInterval(poll);
           const summary = reply.text;
+          // 0447: re-check at relaunch time (budget may have been crossed
+          // while waiting); refuse before the kill so the session survives.
+          if (budgetBlocked()) {
+            pushToast(`compact-restart abandoned · slot ${cfg.slot} kept running, summary discarded`, 'warn');
+            return;
+          }
           try { fleet.kill(target.id); } catch {}
           setTimeout(() => {
             try {
@@ -1263,10 +1409,19 @@ export default function App({
         //                         slot, several, or a comma-separated list).
         // Distinct from `:resume-all` (whole open-set) and `:history`
         // (view-only reference list).
-        const tokens = (arg || '')
-          .split(/[\s,]+/)
-          .map(s => parseInt(s, 10))
-          .filter(n => n >= 1 && n <= (settings.maxSlots || 10));
+        // 0455: branch on whether an argument was GIVEN, not on whether any
+        // token survived parsing. Invalid tokens used to be dropped silently,
+        // so `:resume 99` fell into the bare-verb branch and resumed the
+        // focused slot (default 1) with a success toast. Any invalid token now
+        // warns with the valid range and nothing launches.
+        const max = settings.maxSlots || 10;
+        const raw = (arg || '').split(/[\s,]+/).filter(Boolean);
+        const bad = raw.filter(s => !/^\d+$/.test(s) || +s < 1 || +s > max);
+        if (bad.length) {
+          pushToast(`resume: invalid slot ${bad.join(', ')} — use :resume <slot 1-${max}>`, 'warn');
+          return null;
+        }
+        const tokens = raw.map(s => parseInt(s, 10));
         if (tokens.length === 0) {
           // Bare verb: un-pause the focused live session…
           if (focusedAgent && focusedAgent.status !== 'empty') {
@@ -1293,30 +1448,41 @@ export default function App({
           return null;
         }
         // Multi-restore: iterate, skip slots in use or without records.
-        let resumed = 0, fresh = 0, skipped = 0, missing = 0;
+        let resumed = 0, fresh = 0, fallback = 0, skipped = 0, missing = 0, blocked = false;
         for (const slot of tokens) {
           const rec = getResumeRecord(slot);
           if (!rec) { missing++; continue; }
           if (agents.find(a => a.slot === slot && a.status !== 'empty')) { skipped++; continue; }
           try {
-            if (launchFromRecord(slot, rec) === 'fresh') fresh++; else resumed++;
+            const how = launchFromRecord(slot, rec);
+            // 0447: over budget — the rest would be refused too; one toast is
+            // enough. dayCost() can't move inside this synchronous loop, so a
+            // refusal only ever happens on the first launch attempted.
+            if (how === 'blocked') { blocked = true; break; }
+            // 0454: only a real resume counts as "resumed".
+            if (how === 'fresh') fresh++;
+            else if (how === 'fallback') fallback++;
+            else resumed++;
           } catch (e) {
             pushToast(`slot ${slot} failed: ${e?.message || String(e)}`, 'warn');
           }
         }
-        const parts = [`resumed ${resumed + fresh}/${tokens.length}`];
+        if (blocked) return null; // 0447: budget toast says it all; nothing launched
+        const parts = [`resumed ${resumed}/${tokens.length}`];
         if (fresh) parts.push(`${fresh} fresh`);
+        if (fallback) parts.push(`${fallback} opened fresh (no saved transcript)`);
         if (skipped) parts.push(`${skipped} skipped (in use)`);
         if (missing) parts.push(`${missing} unknown`);
-        pushToast(parts.join(' · '), (resumed + fresh) ? 'ok' : 'warn');
+        pushToast(parts.join(' · '), (resumed + fresh + fallback) ? 'ok' : 'warn');
         return null;
       }
       case 'resume-all': {
         // Restart the sessions open at last close (the open-set in bySlot).
         // Cold starts are staggered (broadcastStaggerMs) to avoid opening every
         // streaming connection at once.
-        const { scheduled, skipped, total, counts } = resumeAllSessions(agents);
+        const { scheduled, skipped, total, counts, blocked } = resumeAllSessions(agents);
         if (total === 0) { pushToast(`no saved sessions to resume`, 'info'); return null; }
+        if (blocked) return null; // 0447: budget toast already shown
         const parts = [`resuming ${scheduled}/${total}`];
         if (counts?.fresh) parts.push(`${counts.fresh} fresh`);
         if (skipped) parts.push(`${skipped} skipped (slot in use)`);
@@ -1403,14 +1569,12 @@ export default function App({
       case 'log': {
         const focused = focusedAgent;
         if (!focused || focused.status === 'empty') {
-          pushToast(`transcripts dir · ${TRANSCRIPT_BASE_DIR}`, 'info');
+          pushToast('transcripts dir · ', 'info', { path: CLAUDE_PROJECTS_DIR });
           return null;
         }
-        // TODO(cursor-transcript-path): transcriptPathFor is claude's layout;
-        // Cursor's lives under ~/.cursor/projects/*/agent-transcripts/<chatId>/.
-        if (refusedFor(focused)) return null;
-        const p = transcriptPathFor(focused.sessionId);
-        pushToast(`transcript · ${p}`, 'info');
+        const p = transcriptPathOf(focused);
+        if (p) pushToast('transcript · ', 'info', { path: p });
+        else pushToast('transcript · none on disk yet for this session', 'info');
         return null;
       }
       // GitHub Issues for the focused session's repo. First step toward
@@ -1485,12 +1649,12 @@ export default function App({
         // One-stop "where does mc keep things?" report.
         const focused = focusedAgent;
         pushToast(`config · ${getConfigDir()}`, 'info');
-        if (focused && focused.status !== 'empty' && providerOf(focused) !== 'claude') {
-          refusedFor(focused);
-        } else if (focused && focused.status !== 'empty') {
-          pushToast(`transcript · ${transcriptPathFor(focused.sessionId)}`, 'info');
+        if (focused && focused.status !== 'empty') {
+          const p = transcriptPathOf(focused);
+          if (p) pushToast('transcript · ', 'info', { path: p });
+          else pushToast('transcript · none on disk yet for this session', 'info');
         } else {
-          pushToast(`transcripts · ${TRANSCRIPT_BASE_DIR}`, 'info');
+          pushToast('transcripts · ', 'info', { path: CLAUDE_PROJECTS_DIR });
         }
         return null;
       }
@@ -1573,8 +1737,12 @@ export default function App({
         }
         const n = parseInt(first, 10);
         const usd = parseFloat(restArgs[0]);
-        if (!(n >= 1 && n <= 10) || isNaN(usd) || usd < 0) {
-          pushToast(`usage: :cap <slot 1-10> <usd>  or  :cap default <usd>`, 'warn');
+        // 0448: was hard-coded 1-10. Use the fleet's live slot count, which never
+        // drops below the highest occupied slot (setSlots clamps), so a live
+        // session above a lowered maxSlots can still be raised with :cap <slot>.
+        const maxSlot = snapshot.slots || settings.maxSlots || 10;
+        if (!(n >= 1 && n <= maxSlot) || isNaN(usd) || usd < 0) {
+          pushToast(`usage: :cap <slot 1-${maxSlot}> <usd>  or  :cap default <usd>`, 'warn');
           return null;
         }
         const ok = fleet.setSlotCostCap(n, usd);
@@ -1796,13 +1964,52 @@ export default function App({
     // resume handlers below.
     const visList = agents.filter(a => a.status !== 'empty');
     if (visList.length > 0) {
-      const cols = Math.max(1, Math.min(settings.gridCols, visList.length));
       const curIdx = Math.max(0, visList.findIndex(a => a.slot === focusedSlot));
+      // 0457: step by the columns the grid DRAWS, not settings.gridCols. On a
+      // narrow terminal computeGridLayout drops columns, so a gridCols stride
+      // skipped cards (50 cols: Down went 1 → 4). Same call as the [ / ]
+      // handler below and the render path, so all three agree.
+      const nl = computeGridLayout({
+        termCols: termSize.cols,
+        termRows: termSize.rows,
+        gridCols: settings.gridCols,
+        count: visList.length,
+        fleetLogLines: settings.fleetLogLines,
+        showFleetLog: settings.showFleetLog,
+        windowsPerPane: settings.windowsPerPane,
+        focusedIndex: curIdx,
+      });
+      const cols = nl.effectiveCols;
+      // Rows are chunked per pane from pageStart (chunkRows in the render
+      // path), so the column is relative to the pane, and a pane's last row
+      // can be short when perPage is not a multiple of cols.
+      const col = (curIdx - nl.pageStart) % cols;
+      const lastIdx = visList.length - 1;
       let nextIdx = curIdx;
       if (key.leftArrow  || (settings.vimKeys && input === 'h')) nextIdx = (curIdx - 1 + visList.length) % visList.length;
       if (key.rightArrow || (settings.vimKeys && input === 'l')) nextIdx = (curIdx + 1) % visList.length;
-      if (key.upArrow    || (settings.vimKeys && input === 'k')) nextIdx = Math.max(0, curIdx - cols);
-      if (key.downArrow  || (settings.vimKeys && input === 'j')) nextIdx = Math.min(visList.length - 1, curIdx + cols);
+      if (key.upArrow    || (settings.vimKeys && input === 'k')) {
+        if (curIdx - cols >= nl.pageStart) nextIdx = curIdx - cols;
+        else if (nl.pageIndex > 0) {
+          // Top row of a pane → same column on the previous pane's last row.
+          const prevStart = nl.pageStart - nl.perPage;
+          const prevLastRow = prevStart + Math.floor((nl.perPage - 1) / cols) * cols;
+          nextIdx = Math.min(prevLastRow + col, nl.pageStart - 1);
+        } else nextIdx = 0;  // top row of the first pane: as before, go to card 1
+      }
+      if (key.downArrow  || (settings.vimKeys && input === 'j')) {
+        // 0457: start of the pane's last (possibly short) row.
+        const lastRowStart = nl.pageStart + Math.floor((nl.pageEnd - 1 - nl.pageStart) / cols) * cols;
+        if (curIdx + cols < nl.pageEnd) nextIdx = curIdx + cols;
+        else if (curIdx - col < lastRowStart) {
+          // A row below exists in this pane but is short and lacks this
+          // column → its last card, not a jump past it to the next pane.
+          nextIdx = nl.pageEnd - 1;
+        } else if (nl.pageEnd <= lastIdx) {
+          // Bottom row of a pane → same column on the next pane's first row.
+          nextIdx = Math.min(lastIdx, nl.pageEnd + col);
+        } else nextIdx = lastIdx;  // last pane: as before, go to the last card
+      }
       if (nextIdx !== curIdx) {
         setFocusedSlot(visList[nextIdx].slot);
         return;
@@ -1958,19 +2165,8 @@ export default function App({
 
   const launchSession = (payload) => {
     try {
-      // Fleet-wide daily budget guardrail — refuse new launches once
-      // today's spend exceeds the configured budget. Existing sessions
-      // keep running; this only blocks NEW work that would compound the
-      // overage. Bypass with :budget 0 to disable.
-      const budget = settings.dailyBudgetUSD || 0;
-      const spent = costStoreRef.current.dayCost();
-      if (budget > 0 && spent >= budget) {
-        pushToast(
-          `daily budget reached · $${spent.toFixed(2)} / $${budget.toFixed(2)} · :budget <usd> to raise`,
-          'error',
-        );
-        return;
-      }
+      // Fleet-wide daily budget guardrail (0447: shared gate, see budgetBlocked).
+      if (budgetBlocked()) return;
 
       let { slot, repoPath, branch, model, permissionMode, prompt } = payload;
       const provider = providerOf(payload);
@@ -2056,8 +2252,11 @@ export default function App({
   //   - location-only ("fresh") record → fleet.launch a brand-new session in
   //     the repo, no history, totals at 0. This is what every non-save exit
   //     (don't-save, terminal close, crash) leaves behind.
-  // Returns 'resumed' | 'fresh'. Throws on launch failure.
+  // Returns 'resumed' | 'fresh' | 'fallback' (0454: a resume opened fresh
+  // because the transcript was missing) | 'blocked' (0447: daily budget
+  // reached — budgetBlocked already toasted). Throws on launch failure.
   const launchFromRecord = (slot, rec) => {
+    if (budgetBlocked()) return 'blocked';
     // 0365: identity trail — every record→slot mapping is logged so a future
     // crossover (wrong repo/sid landing on a slot) leaves evidence. The 2026-08-09
     // incident was undiagnosable because MC_DEBUG was off and no path logged this.
@@ -2084,6 +2283,15 @@ export default function App({
       model: rec.resolvedModel || rec.model, name: rec.name, permissionMode, provider,
       autoTrust: provider === 'cursor' ? !!settings.cursorAutoTrust : false,
     });
+    // 0454: the agent falls back to a fresh `--session-id` when the transcript
+    // is missing (resuming flips to false in start()). That is a new, empty
+    // conversation — say so, and don't carry the old totals onto it.
+    if (agent && agent.resuming === false) {
+      dlog('store', 'launchFromRecord: transcript missing, opened fresh', {
+        slot, sid: String(rec.sessionId).slice(0, 8),
+      });
+      return 'fallback';
+    }
     if (agent) {
       if (rec.tokensIn != null) agent.tokensIn = rec.tokensIn;
       if (rec.tokensCacheRead != null) agent.tokensCacheRead = rec.tokensCacheRead;
@@ -2096,10 +2304,16 @@ export default function App({
   const resumeSession = (slot, rec) => {
     try {
       const how = launchFromRecord(slot, rec);
+      if (how === 'blocked') return; // 0447: budget toast already shown
       setModal(null);
       setNewSlot(null);
       setFocusedSlot(slot);
-      pushToast(`${how === 'fresh' ? 'opened fresh' : 'resumed'} slot ${slot} · ${rec.name}`, 'ok');
+      if (how === 'fallback') {
+        // 0454: same wording as :resume-all for the same event.
+        pushToast(`slot ${slot}: no saved transcript — opened fresh · ${rec.name}`, 'warn');
+      } else {
+        pushToast(`${how === 'fresh' ? 'opened fresh' : 'resumed'} slot ${slot} · ${rec.name}`, 'ok');
+      }
     } catch (e) {
       pushToast(`resume failed: ${e?.message || String(e)}`, 'error');
     }
@@ -2128,10 +2342,21 @@ export default function App({
     // Planned fresh vs. resumed split, computed up-front so the toast is accurate
     // even though the actual launches are staggered (and thus async).
     const plannedFresh = toResume.filter(r => r.fresh || !r.sessionId).length;
+    // 0447: the budget gate runs inside EACH delayed launch (launchFromRecord),
+    // so a budget crossed mid-stagger stops the rest. After the first refusal
+    // the remaining launches are dropped quietly — one budget toast, not N.
+    let refused = false;
     toResume.forEach((r, i) => {
       const doResume = () => {
+        if (refused) return;
         try {
-          launchFromRecord(r.slot, r);
+          const how = launchFromRecord(r.slot, r);
+          if (how === 'blocked') refused = true;
+          // 0454: planned as a resume but the transcript was missing — the
+          // up-front "resuming N" toast can't know, so say it per slot.
+          else if (how === 'fallback') {
+            pushToast(`slot ${r.slot}: no saved transcript — opened fresh`, 'warn');
+          }
         } catch (e) {
           pushToast(`slot ${r.slot} failed: ${e?.message || String(e)}`, 'warn');
         }
@@ -2139,7 +2364,9 @@ export default function App({
       if (gap === 0 || i === 0) doResume();
       else setTimeout(doResume, gap * i);
     });
-    return { scheduled: toResume.length, skipped, total: recs.length, counts: { fresh: plannedFresh } };
+    // `blocked`: the first (synchronous) launch was refused by the budget gate,
+    // so nothing will start — callers skip their "resuming N" toast (0447).
+    return { scheduled: toResume.length, skipped, total: recs.length, counts: { fresh: plannedFresh }, blocked: refused };
   };
 
   const sendOne = (text, id) => {
@@ -2174,7 +2401,8 @@ export default function App({
   // Card width fills the terminal evenly across however many are live,
   // capped at settings.gridCols columns so wide terminals don't end up
   // with a single huge card. AND auto-reduces column count when the
-  // terminal is too narrow to fit gridCols cards at the 20-col minimum
+  // terminal is too narrow to fit gridCols cards at MIN_CARD_W (34 cols,
+  // tui/lib/gridLayout.js; was 20 before 0459 — comment fixed in 0467)
   // (audit: cards used to spill past the right edge and overlap when
   // a 5-col grid was forced into an 80-col terminal).
   const termCols = termSize.cols;

@@ -39,12 +39,27 @@ export class FakeFleet extends EventEmitter {
   snapshot() { return { ...this._snap, now: Date.now() }; }
   agentBySlot(s) { return this._snap.agents[s - 1]; }
   agentById(id) { return this._snap.agents.find(a => a.id === id) || null; }
-  setCostCap() {} setSlots(n) { return n; } setViewport() { return 0; } killAll() {}
+  // 0448: setSlots tracks the slot count like the real fleet; `slotFloor`
+  // stands in for the real fleet's refusal to shrink below an occupied slot.
+  setSlots(n) {
+    const got = Math.max(n, this.slotFloor || 1);
+    if (got !== this.slots) { this.slots = this._snap.slots = got; this.emit('change'); }
+    return got;
+  }
+  setCostCap() {} setViewport() { return 0; } killAll() {}
   launch(cfg) { this.calls.push(['launch', cfg]); }
-  resume(cfg) { this.calls.push(['resumeFromRecord', cfg]); return null; }
+  // 0454: return an agent like the real fleet does. `resumeAgent(cfg)` lets a
+  // test shape it — e.g. { resuming: false } for a transcript-missing fallback,
+  // or throw to stand in for the fleet refusing a sid live in another slot.
+  resume(cfg) {
+    this.calls.push(['resumeFromRecord', cfg]);
+    if (typeof this.resumeAgent === 'function') return this.resumeAgent(cfg);
+    return { slot: cfg.slot, sessionId: cfg.sessionId, resuming: true };
+  }
   kill(id) { this.calls.push(['kill', id]); }
   broadcast(ids, text) { this.calls.push(['broadcast', ids, text]); return { sent: ids.length, skipped: 0 }; }
-  setSlotCostCap() { return true; }
+  // 0448: recorded so :cap tests can see which slot reached the fleet.
+  setSlotCostCap(slot, usd) { this.calls.push(['slotCap', slot, usd]); return true; }
 }
 
 export const strip = (s) => (s || '').replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');

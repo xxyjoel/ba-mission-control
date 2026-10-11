@@ -1,0 +1,80 @@
+{
+ "task": "0438",
+ "captured": "2026-10-08",
+ "claudeVersion": "2.1.294 (Claude Code)",
+ "source": "mc PtyAgent emulator rows (probe B), 120x40 terminal = 110x26 zoom body. Trailing blank rows trimmed. No update notice was on screen; the test adds it.",
+ "runs": [
+  {
+   "mode": "acceptEdits",
+   "cols": 110,
+   "rows": 26,
+   "cursorY": 6,
+   "lines": [
+    "▗ ▗   ▖ ▖  Claude Code v2.1.294",
+    "           Haiku 5.5 · Claude Max",
+    " ▘▘   ▝▝   ~/source/git/projects/bluearch/ba-mission-control",
+    "",
+    "",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "❯ Try \"fix lint errors\"",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  ⏵⏵ accept edits on (shift+tab to cycle) · ← 1 agent                                     ◐ medium · /effort",
+    "                                                                                                         /rc"
+   ]
+  },
+  {
+   "mode": "plan",
+   "cols": 110,
+   "rows": 26,
+   "cursorY": 6,
+   "lines": [
+    "▗ ▗   ▖ ▖  Claude Code v2.1.294",
+    "           Haiku 5.5 · Claude Max",
+    " ▘▘   ▝▝   ~/source/git/projects/bluearch/ba-mission-control",
+    "",
+    "",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "❯ Try \"how do I log an error?\"",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  ⏸ plan mode on (shift+tab to cycle) · ← 1 agent                                         ◐ medium · /effort",
+    "                                                                                                         /rc"
+   ]
+  },
+  {
+   "mode": "auto",
+   "cols": 110,
+   "rows": 26,
+   "cursorY": 6,
+   "lines": [
+    "▗ ▗   ▖ ▖  Claude Code v2.1.294",
+    "           Haiku 5.5 · Claude Max",
+    " ▘▘   ▝▝   ~/source/git/projects/bluearch/ba-mission-control",
+    "",
+    "",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "❯ Try \"fix lint errors\"",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent                                        ◐ medium · /effort",
+    "                                                                                                         /rc"
+   ]
+  },
+  {
+   "mode": "default",
+   "cols": 110,
+   "rows": 26,
+   "cursorY": 6,
+   "lines": [
+    "▗ ▗   ▖ ▖  Claude Code v2.1.294",
+    "           Haiku 5.5 · Claude Max",
+    " ▘▘   ▝▝   ~/source/git/projects/bluearch/ba-mission-control",
+    "",
+    "",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "❯ Try \"how does settings.js work?\"",
+    "──────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+    "  ⏸ manual mode on · ← 1 agent                                                            ◐ medium · /effort",
+    "                                                                                                         /rc"
+   ]
+  }
+ ]
+}

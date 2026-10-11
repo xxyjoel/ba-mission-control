@@ -140,9 +140,12 @@ export class Agent extends EventEmitter {
     // costWeek is owned by tui/lib/costStore.js (per-run ISO-week bucket
     // persisted to disk). The TUI overlays the persisted value onto each
     // snapshot, so we don't track it here.
-    this.dirty = 0;
-    this.ahead = 0;
-    this.behind = 0;
+    // 0452: git state is unknown (null) until refreshGit reads it; isRepo
+    // null = not checked yet, false = cwd is not a repo (no git chips).
+    this.isRepo = null;
+    this.dirty = null;
+    this.ahead = null;
+    this.behind = null;
     this.spark = Array(SPARK_LEN).fill(0); // 0385: blank cold-start — fill(1) rendered a FULL bar at 0 tok/min
     this.activity = 'Awaiting first instruction';
     this.tail = [];
@@ -159,6 +162,10 @@ export class Agent extends EventEmitter {
 
     // Internals
     this.proc = null;
+    // 0443: true while this.proc is SIGSTOPped by pause(). `status` is not a
+    // safe stand-in: the JSONL tailer and the send path rewrite it while the
+    // process stays frozen. tui/lib/pausedPids.js reads this flag.
+    this.paused = false;
     this.buffer = '';
     this.lastTokRate = 0;
     this.lastTokSampleTs = Date.now();
@@ -332,6 +339,7 @@ export class Agent extends EventEmitter {
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    this.paused = false; // 0443: a fresh process is not stopped
     const kind = this.resuming ? 'resume' : 'spawn';
     this.appendTail({ kind: 'sys', text: `${kind} pid=${this.proc.pid} model=${modelArg} cwd=${this.cwd}${this.resuming ? ` session=${this.sessionId.slice(0,8)}` : ''}` });
 
@@ -351,9 +359,17 @@ export class Agent extends EventEmitter {
     this.emit('change');
   }
 
-  async refreshGit() {
-    const st = await fullStatus(this.cwd);
-    if (!st.isRepo) return;
+  // 0452: every turn end starts a refresh without waiting for the last one.
+  // Only the newest call may write, so a slow older read can't overwrite a
+  // newer one. `read` is a test seam; the app always uses fullStatus.
+  #gitSeq = 0;
+  async refreshGit(read = fullStatus) {
+    const seq = ++this.#gitSeq;
+    const st = await read(this.cwd);
+    if (seq !== this.#gitSeq) return;
+    // 0452: assign the non-repo result too — isRepo false and null counts are
+    // what tell the Card/Zoom to draw no clean dot. Null is unknown, never 0.
+    this.isRepo = st.isRepo;
     if (st.branch) this.branch = st.branch;
     this.dirty = st.dirty;
     this.ahead = st.ahead;
@@ -579,9 +595,10 @@ export class Agent extends EventEmitter {
   }
 
   #onExit(code, signal) {
-    this.proc = null;
-    if (this.killed) return; // we asked for this; fleet has already set status='empty'
     if (signal === 'SIGSTOP' || signal === 'SIGCONT') return; // not real exits
+    this.proc = null;
+    this.paused = false; // 0443: the process is gone, nothing is stopped
+    if (this.killed) return; // we asked for this; fleet has already set status='empty'
     this.appendTail({ kind: 'sys', text: `process exited code=${code} signal=${signal || ''}` });
 
     // Auto-restart on non-zero / non-null exit codes (process crashed
@@ -744,6 +761,7 @@ export class Agent extends EventEmitter {
     if (!this.proc) return false;
     try {
       this.proc.kill('SIGSTOP');
+      this.paused = true; // 0443
       this.status = 'paused';
       this.appendTail({ kind: 'sys', text: 'SIGSTOP — process frozen' });
       this.emit('change');
@@ -758,6 +776,7 @@ export class Agent extends EventEmitter {
     if (!this.proc) return false;
     try {
       this.proc.kill('SIGCONT');
+      this.paused = false; // 0443
       this.status = 'working';
       this.appendTail({ kind: 'sys', text: 'SIGCONT — process resumed' });
       this.emit('change');
@@ -779,11 +798,21 @@ export class Agent extends EventEmitter {
       this.restartTimer = null;
     }
     if (this.proc) {
+      this.#wakeIfPaused(); // 0443: a stopped process never handles SIGTERM
       try { this.proc.kill('SIGTERM'); } catch {}
     }
     if (this.transcriptStream) {
       this._closeTranscript();
     }
+  }
+
+  // 0443: SIGCONT a paused proc before SIGTERM, like PtyCore.kill (P6/0408).
+  // Without it the SIGTERM stays queued, the process stays frozen, and when
+  // mc exits it is left in state T under pid 1.
+  #wakeIfPaused() {
+    if (!this.paused || !this.proc) return;
+    try { this.proc.kill('SIGCONT'); } catch {}
+    this.paused = false;
   }
 
   // hardKill — SIGKILL escalation for shutdown; see ptyAgent.hardKill.
@@ -821,6 +850,7 @@ export class Agent extends EventEmitter {
     // exit handler to be a no-op-ish since we're about to restart).
     if (this.proc) {
       try { this.proc.removeAllListeners('exit'); } catch {}
+      this.#wakeIfPaused(); // 0443: a stopped process never handles SIGTERM
       try { this.proc.kill('SIGTERM'); } catch {}
       this.proc = null;
     }
@@ -846,6 +876,7 @@ export class Agent extends EventEmitter {
     this.appendTail({ kind: 'sys', text: `model: ${prev} → ${model}` });
     if (this.proc) {
       try { this.proc.removeAllListeners('exit'); } catch {}
+      this.#wakeIfPaused(); // 0443: a stopped process never handles SIGTERM
       try { this.proc.kill('SIGTERM'); } catch {}
       this.proc = null;
     }
@@ -877,6 +908,7 @@ export class Agent extends EventEmitter {
       // immediately visible. null until first init event.
       resolvedModel: this.resolvedModel,
       branch: this.branch,
+      isRepo: this.isRepo,
       dirty: this.dirty,
       ahead: this.ahead,
       behind: this.behind,

@@ -76,13 +76,21 @@ test('P1: changeModel — the old PTY exit does not clobber the new PTY state', 
   p.start();
   const old = fake.spawned[0];
   p.changeModel('opus-4.7');
+  // 0441: deliberately re-pinned. The respawn waits for the old claude to
+  // end, so nothing spawns yet, and the old pty keeps ONE exit listener: the
+  // stop tracker (clears the SIGKILL timer, then runs the deferred start). It
+  // never reaches #onExit, so P1's guarantee is unchanged.
+  assert.equal(fake.spawned.length, 1, 'no respawn while the old claude runs');
+  assert.equal(p.pty, null);
+  assert.equal(old._handlers.exit.size, 1, 'only the 0441 stop tracker is left');
+  assert.equal(old._handlers.data.size, 0, 'old onData disposed at teardown');
+  old.fireExit({ exitCode: 0, signal: 15 }); // the SIGTERM landed
   assert.equal(fake.spawned.length, 2, 'changeModel respawns once');
   const fresh = fake.spawned[1];
   assert.equal(p.pty, fresh);
 
   // The teardown must have unsubscribed the old PTY's listeners.
   assert.equal(old._handlers.exit.size, 0, 'old onExit disposed at teardown');
-  assert.equal(old._handlers.data.size, 0, 'old onData disposed at teardown');
 
   // Even if an exit was already queued (fired against surviving handlers),
   // the identity guard must ignore it. Simulate by re-invoking through a
@@ -112,6 +120,7 @@ test('P1: old PTY bytes stop reaching the shared emulator after changeModel', ()
   // into this agent (the "two pids writing into one emulator" garble).
   assert.equal(old._handlers.data.size, 0);
   old.fireData('garbage from the dying process');
+  old.fireExit({ exitCode: 0, signal: 15 }); // 0441: the respawn follows the exit
   // The new pty's data handler is the only subscriber left.
   assert.equal(fake.spawned[1]._handlers.data.size, 1);
   p.kill();
@@ -146,43 +155,69 @@ test('P2: start() refuses to spawn a sibling next to a live PTY', () => {
 
 // ─── P6: kill on a paused slot ─────────────────────────────────────
 
+// 0442: deliberately re-pinned. pause / kill / the restart teardown now signal
+// claude's whole process group (process.kill(-pid, sig)), so each P6 pin
+// injects a group recorder and asserts on it; pty.kill must stay unused.
+function groupRecorder() {
+  const calls = [];
+  const fn = (pid, sig) => { calls.push(`${pid}:${sig}`); };
+  fn.calls = calls;
+  return fn;
+}
+
 test('P6: kill() on a PAUSED agent sends SIGCONT before SIGTERM', () => {
   const fake = makeFakeSpawn();
-  const p = makeAgent(fake);
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
   p.start();
   p.pause();
   assert.equal(p.paused, true);
   p.kill();
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM'],
-    'a stopped process must be woken or the SIGTERM stays pending forever');
+  assert.deepEqual(signalGroup.calls, ['4321:SIGSTOP', '4321:SIGCONT', '4321:SIGTERM'],
+    'a stopped group must be woken or the SIGTERM stays pending forever');
+  assert.deepEqual(fake.spawned[0]._kills, []);
 });
 
 test('P6: kill() on a running (never paused) agent sends no SIGCONT', () => {
   const fake = makeFakeSpawn();
-  const p = makeAgent(fake);
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
   p.start();
   p.kill();
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGTERM']);
+  assert.deepEqual(signalGroup.calls, ['4321:SIGTERM']);
 });
 
 test('P6: pause then resume then kill — no spurious SIGCONT at kill time', () => {
   const fake = makeFakeSpawn();
-  const p = makeAgent(fake);
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
   p.start();
   p.pause();
   p.resume();
   p.kill();
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM']);
+  assert.deepEqual(signalGroup.calls, ['4321:SIGSTOP', '4321:SIGCONT', '4321:SIGTERM']);
 });
 
-test('P6: changeModel on a PAUSED agent wakes the old process before SIGTERM', () => {
+test('P6: changeModel on a PAUSED agent wakes the old process group before SIGTERM', () => {
+  const fake = makeFakeSpawn();
+  const signalGroup = groupRecorder();
+  const p = makeAgent(fake, { signalGroup });
+  p.start();
+  p.pause();
+  p.changeModel('opus-4.7');
+  // 0442: the teardown signals the OLD group (4321), not the successor's.
+  assert.deepEqual(signalGroup.calls.slice(0, 3), ['4321:SIGSTOP', '4321:SIGCONT', '4321:SIGTERM']);
+  assert.deepEqual(fake.spawned[0]._kills, []);
+  p.kill();
+});
+
+test('P6: with no group signaller (fake spawn), the signals fall back to pty.kill', () => {
   const fake = makeFakeSpawn();
   const p = makeAgent(fake);
   p.start();
   p.pause();
-  p.changeModel('opus-4.7');
-  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM']);
   p.kill();
+  assert.deepEqual(fake.spawned[0]._kills, ['SIGSTOP', 'SIGCONT', 'SIGTERM']);
 });
 
 // ─── P7: restart budget resets after a stable run ──────────────────
@@ -236,6 +271,7 @@ test('M1: relaunch passes the resolved model cli id when the catalog knows it', 
   // A `/model` switch typed inside claude lands in resolvedModel only.
   p.resolvedModel = 'claude-fable-5';
   p.changePermissionMode('plan'); // any teardown+restart path
+  fake.spawned[0].fireExit({ exitCode: 0, signal: 15 }); // 0441: respawn waits for the old exit
   const args = fake.spawned[1]._args;
   const mi = args.indexOf('--model');
   assert.notEqual(mi, -1);
@@ -249,6 +285,7 @@ test('M1: an unknown resolved model falls back to the launch model', () => {
   p.start();
   p.resolvedModel = 'claude-mystery-99'; // not in the catalog
   p.changePermissionMode('plan');
+  fake.spawned[0].fireExit({ exitCode: 0, signal: 15 }); // 0441: respawn waits for the old exit
   const args = fake.spawned[1]._args;
   const mi = args.indexOf('--model');
   assert.equal(args[mi + 1], 'claude-sonnet-4-6', 'unknown resolved model → launch model');
@@ -261,6 +298,7 @@ test('M1: a deliberate changeModel() from mc still wins over resolvedModel', () 
   p.start();
   p.resolvedModel = 'claude-fable-5';
   p.changeModel('haiku-4.5'); // nulls resolvedModel by design
+  fake.spawned[0].fireExit({ exitCode: 0, signal: 15 }); // 0441: respawn waits for the old exit
   const args = fake.spawned[1]._args;
   const mi = args.indexOf('--model');
   assert.equal(args[mi + 1], 'claude-haiku-4-5-20251001');

@@ -12,6 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PtyAgent } from '../server/ptyAgent.mjs';
+import { childEnv } from '../server/ptyCore.mjs';
 import { clampPtyDims } from '../tui/lib/zoomGeometry.js';
 
 const T0 = 1_800_000_000_000;
@@ -82,7 +83,8 @@ test('spawn: bin, argv prefix, and PTY options', (t) => {
   assert.equal(p._opts.cols, 80);
   assert.equal(p._opts.rows, 24);
   assert.equal(p._opts.cwd, CWD);
-  assert.deepEqual(p._opts.env, { ...process.env, TERM: 'xterm-256color' });
+  // 0469: the default env is process.env minus claude's session markers.
+  assert.deepEqual(p._opts.env, childEnv());
 });
 
 test('spawn: viewport geometry from the constructor, clamped like clampPtyDims', (t) => {
@@ -125,12 +127,12 @@ test('start: emits change, builds the emulator with 5000 rows of scrollback', (t
   assert.ok(agent.readyTimer);
 });
 
-test('onData: stamps both activity clocks', (t) => {
+test('onData: stamps the PTY clock only, not the stuck clock (0450)', (t) => {
   const { agent, spawn } = makeAgent(t);
   agent.start();
   t.mock.timers.tick(1234);
   spawn.spawned[0].fireData('hello from claude\r\n');
-  assert.equal(agent.lastEventTs, T0 + 1234);
+  assert.equal(agent.lastEventTs, T0, 'stamped by the spawn, not by the bytes');
   assert.equal(agent.lastPtyTs, T0 + 1234);
 });
 
@@ -269,7 +271,9 @@ test('write: slash command with paste off also defers the CR', (t) => {
   t.mock.timers.tick(3000);
   agent.send('  /compact');
   assert.deepEqual(spawn.spawned[0]._writes, ['  /compact']);
-  t.mock.timers.runAll();
+  // 0465: only a mocked setImmediate is queued now (the tailer creation timers
+  // run from the Fleet tick); Node 26's runAll() throws "time -1" on that.
+  t.mock.timers.tick(0);
   assert.deepEqual(spawn.spawned[0]._writes, ['  /compact', '\r']);
 });
 
@@ -312,9 +316,102 @@ test('pause / resume: signals, status, tail; no pty → false', (t) => {
   assert.equal(agent.status, 'paused');
   assert.equal(agent.resume(), true);
   assert.equal(agent.paused, false);
-  assert.equal(agent.status, 'working');
+  // 0442: deliberately re-pinned. Un-pause used to force 'working'; it now
+  // restores the status held before the pause (idle here — nothing was sent).
+  assert.equal(agent.status, 'idle');
+  // A fake spawn has no real process group, so the signals fall back to
+  // pty.kill (no group signaller is injected here).
   assert.deepEqual(spawn.spawned[0]._kills, ['SIGSTOP', 'SIGCONT']);
   assert.deepEqual(tailTexts(agent).slice(-2), ['sys:SIGSTOP — process frozen', 'sys:SIGCONT — process resumed']);
+});
+
+// 0442: pause / resume / kill / hardKill signal claude's whole process group.
+const groupRecorder = () => {
+  const calls = [];
+  const fn = (pid, sig) => { calls.push(`${pid}:${sig}`); };
+  fn.calls = calls;
+  return fn;
+};
+
+test('0442: the group signaller is on for the real node-pty spawn, off for a fake one', (t) => {
+  // Production (Fleet) constructs PtyAgent with no spawn → node-pty → group on.
+  assert.equal(typeof new PtyAgent({ slot: 1 })._signalGroup, 'function');
+  // A fake spawn's made-up pids must never be group-signalled for real.
+  const { agent } = makeAgent(t);
+  assert.equal(agent._signalGroup, null);
+});
+
+test('0442: pause / resume signal the process group, not pty.kill', (t) => {
+  const signalGroup = groupRecorder();
+  const { agent, spawn } = makeAgent(t, { signalGroup });
+  agent.start();
+  agent.pause();
+  agent.resume();
+  assert.deepEqual(signalGroup.calls, ['6200:SIGSTOP', '6200:SIGCONT']);
+  assert.deepEqual(spawn.spawned[0]._kills, []);
+});
+
+test('0442: kill on a paused slot wakes then terminates the group; hardKill SIGKILLs it', (t) => {
+  const signalGroup = groupRecorder();
+  const { agent, spawn } = makeAgent(t, { signalGroup });
+  agent.start();
+  agent.pause();
+  agent.kill();
+  agent.hardKill();
+  assert.deepEqual(signalGroup.calls, ['6200:SIGSTOP', '6200:SIGCONT', '6200:SIGTERM', '6200:SIGKILL']);
+  assert.deepEqual(spawn.spawned[0]._kills, []);
+});
+
+for (const code of ['ESRCH', 'EPERM']) {
+  test(`0442: a group signal that throws ${code} falls back to pty.kill`, (t) => {
+    const signalGroup = () => { throw Object.assign(new Error(code), { code }); };
+    const { agent, spawn } = makeAgent(t, { signalGroup });
+    agent.start();
+    assert.equal(agent.pause(), true);
+    assert.equal(agent.resume(), true);
+    assert.deepEqual(spawn.spawned[0]._kills, ['SIGSTOP', 'SIGCONT']);
+  });
+}
+
+test('0442: any other group-signal error reports "pause failed"', (t) => {
+  const signalGroup = () => { throw Object.assign(new Error('boom'), { code: 'EINVAL' }); };
+  const { agent, spawn } = makeAgent(t, { signalGroup });
+  agent.start();
+  assert.equal(agent.pause(), false);
+  assert.equal(tailTexts(agent).at(-1), 'err:pause failed: boom');
+  assert.deepEqual(spawn.spawned[0]._kills, []);
+});
+
+test('0442: un-pause restores the status held before the pause', (t) => {
+  const { agent } = makeAgent(t);
+  agent.start();
+  for (const before of ['idle', 'waiting', 'working']) {
+    agent.status = before;
+    agent.pause();
+    assert.equal(agent.status, 'paused');
+    agent.resume();
+    assert.equal(agent.status, before, `resume after pausing from ${before}`);
+  }
+});
+
+test('0442: a second pause does not overwrite the saved status', (t) => {
+  const { agent } = makeAgent(t);
+  agent.start();
+  agent.status = 'waiting';
+  agent.pause();
+  agent.pause();
+  agent.resume();
+  assert.equal(agent.status, 'waiting');
+});
+
+test('0442: a status written while paused is kept on resume', (t) => {
+  const { agent } = makeAgent(t);
+  agent.start();
+  agent.status = 'working';
+  agent.pause();
+  agent.status = 'error'; // e.g. an exit path wrote it while stopped
+  agent.resume();
+  assert.equal(agent.status, 'error');
 });
 
 test('pause / resume: a throwing kill reports and returns false', (t) => {
@@ -342,11 +439,18 @@ test('kill: clears timers, stops tailers, disposes subs + term, SIGTERMs', (t) =
   assert.equal(agent.term, null);
   assert.equal(agent.cell, null);
   assert.equal(p._handlers.data.size, 0);
-  assert.equal(p._handlers.exit.size, 0);
+  // 0441: deliberately re-pinned. One exit listener remains: the stop
+  // tracker that clears the SIGKILL timer (it never reaches #onExit).
+  assert.equal(p._handlers.exit.size, 1);
   assert.deepEqual(p._kills, ['SIGTERM']);
+  assert.equal(agent.stopping, true, '0441: stopping until exit or SIGKILL');
   assert.equal(agent.pty, p, 'kill() leaves pty set; the exit callback would null it');
   agent.hardKill();
   assert.deepEqual(p._kills, ['SIGTERM', 'SIGKILL']);
+  assert.equal(agent.stopping, false);
+  assert.equal(p._handlers.exit.size, 0);
+  t.mock.timers.tick(1500);
+  assert.deepEqual(p._kills, ['SIGTERM', 'SIGKILL'], '0441: hardKill cleared the escalation timer');
 });
 
 test('hardKill with no pty is a no-op', (t) => {
@@ -493,6 +597,9 @@ test('changePermissionMode: same mode no-op; else tail, SIGTERM old, respawn, se
   assert.equal(agent.changePermissionMode(''), false);
   const term = agent.term;
   assert.equal(agent.changePermissionMode('plan'), true);
+  // 0441: deliberately re-pinned — the respawn waits for the old exit.
+  assert.equal(spawn.spawned.length, 1, 'no respawn while the old claude runs');
+  spawn.spawned[0].fireExit({ exitCode: 0, signal: 15 });
   assert.equal(spawn.spawned.length, 2);
   assert.deepEqual(spawn.spawned[0]._kills, ['SIGTERM']);
   assert.equal(agent.killed, false);
@@ -514,14 +621,19 @@ test('changeModel: tail names old → new, nulls resolvedModel', (t) => {
   assert.equal(agent.changeModel('haiku-4.5'), true);
   assert.equal(agent.resolvedModel, null);
   assert.ok(tailTexts(agent).includes('sys:model: sonnet-4.6 → haiku-4.5'));
+  // 0441: deliberately re-pinned — the respawn waits for the old exit.
+  assert.equal(spawn.spawned.length, 1);
+  spawn.spawned[0].fireExit({ exitCode: 0, signal: 15 });
   assert.equal(spawn.spawned.length, 2);
 });
 
 test('teardown clears the ready timer of the old process and re-arms for the new', (t) => {
-  const { agent } = makeAgent(t);
+  const { agent, spawn } = makeAgent(t);
   agent.start();
   const oldTimer = agent.readyTimer;
   agent.changePermissionMode('plan');
+  assert.equal(agent.readyTimer, null, '0441: no timer while the respawn waits');
+  spawn.spawned[0].fireExit({ exitCode: 0, signal: 15 }); // 0441: old claude ends
   assert.notEqual(agent.readyTimer, oldTimer);
   assert.equal(agent.ready, false);
   t.mock.timers.tick(3000);

@@ -22,8 +22,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
-import { MODELS, modelColor } from '../lib/models.js';
-import { fmtK, fmtMoney, fmtMoneyMeasured, fmtDuration, trunc, UNMEASURED } from '../lib/format.js';
+import { modelColor, resolveAgentModel } from '../lib/models.js';
+import { fmtK, fmtMoney, fmtMoneyMeasured, fmtDuration, trunc, padCol, humanize, UNMEASURED } from '../lib/format.js';
 
 // Ordered list of sortable columns — `S` cycles through these.
 const SORT_KEYS = ['slot', 'status', 'ctx', 'tpm', 'cost', 'age'];
@@ -54,8 +54,10 @@ const STATUS_LABEL = {
 // return null for "unmeasured" so the cells print UNMEASURED and the sorts put
 // the slot last — never NaN, never a fabricated 0. A catalog entry without a
 // maxCtx (non-Claude models) has no ctx % either.
+// 0453: m is the RUNNING model (resolveAgentModel) — a CLI-form id in
+// a.model or a mid-session /model switch must not read as unknown (CTX 0%).
 function ctxFrac(a) {
-  const m = MODELS[a.model];
+  const m = resolveAgentModel(a);
   if (a.context === null || (m && !(m.maxCtx > 0))) return null;
   return m ? (a.context || 0) / m.maxCtx : 0;
 }
@@ -213,6 +215,7 @@ export default function Dashboard({
         </Box>
       ) : sorted.map(a => {
         const sel = a.slot === hiInList;
+        const runId = resolveAgentModel(a)?.id ?? a.model; // 0453: running model
         const frac = ctxFrac(a);
         const ctxPct = frac === null ? null : Math.round(frac * 100);
         const rate = sparkRate(a);
@@ -223,15 +226,22 @@ export default function Dashboard({
           <Box key={a.id}>
             <Text color={sel ? theme.accent : theme.faint}>{sel ? '▶ ' : '  '}</Text>
             <Text color={sel ? theme.accent : theme.dim}>{`[${a.slot}]`.padEnd(4)}</Text>
-            <Text color={sel ? theme.fg : theme.dim} bold={sel}>{trunc(a.name || '—', 17).padEnd(18)}</Text>
-            <Text color={modelColor(a.model, theme)}>{modelBadge(a.model).padEnd(6)}</Text>
+            {/* 0460: pad in display cells (padCol), not code units — a wide-glyph
+                name misaligned every column to its right. humanize() strips any
+                escape a name could carry, same as Zoom; the '—' fallback comes
+                after it so an escape-only name still shows a placeholder. */}
+            <Text color={sel ? theme.fg : theme.dim} bold={sel}>{padCol(trunc(humanize(a.name || '') || '—', 17), 18)}</Text>
+            <Text color={modelColor(runId, theme)}>{modelBadge(runId).padEnd(6)}</Text>
             <Text color={statusColor(a.status, theme)}>{(STATUS_LABEL[a.status] || a.status).padEnd(8)}</Text>
             <Text color={ctxPct >= 90 ? theme.red : ctxPct >= 80 ? theme.yellow : theme.fg}>{(ctxPct === null ? UNMEASURED : `${ctxPct}%`).padEnd(7)}</Text>
             <Text color={theme.fg}>{(tpm === null ? UNMEASURED : fmtK(tpm)).padEnd(8)}</Text>
             <Text color={theme.fg}>{fmtMoneyMeasured(a.costSession).padEnd(9)}</Text>
             <Text color={theme.faint}>{ageStr.padEnd(8)}</Text>
             <Box flexGrow={1} flexShrink={1} overflow="hidden">
-              <Text color={theme.faint} wrap="truncate">{a.activity || ''}</Text>
+              {/* 0460: activity is raw session text (a Bash command line); humanize()
+                  strips OSC 8 / BEL / C1 so it cannot reach the terminal, as Card does
+                  for its todo and subagent rows. */}
+              <Text color={theme.faint} wrap="truncate">{humanize(a.activity || '')}</Text>
             </Box>
           </Box>
         );

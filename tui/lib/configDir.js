@@ -22,8 +22,23 @@ const ENV_OVERRIDE = process.env.MC_CONFIG_DIR;
 
 let cached = null;
 
+// 0436: under `node --test` (NODE_TEST_CONTEXT is set for the test process and
+// inherited by everything it spawns) with no MC_CONFIG_DIR, falling back to
+// ~/.config/claude-mc would write test state into the user's real config. Fail
+// loudly instead. scripts/run-tests.mjs (`npm test`) always sets MC_CONFIG_DIR.
+function assertNotRealDirUnderTest() {
+  if (process.env.NODE_TEST_CONTEXT && !(ENV_OVERRIDE && ENV_OVERRIDE.length > 0)) {
+    throw new Error(
+      'configDir: running under node --test with no MC_CONFIG_DIR would use the real '
+      + '~/.config/claude-mc. Run tests via `npm test` (scripts/run-tests.mjs sets '
+      + 'MC_CONFIG_DIR, HOME and XDG_STATE_HOME to a temp dir).',
+    );
+  }
+}
+
 export function getConfigDir() {
   if (cached) return cached;
+  assertNotRealDirUnderTest();
   cached = ENV_OVERRIDE && ENV_OVERRIDE.length > 0
     ? ENV_OVERRIDE
     : join(homedir(), '.config', 'claude-mc');
