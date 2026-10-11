@@ -20,7 +20,7 @@ behaves correctly (or doesn't) inside Mission Control's Zoom modal.
 | Synchronized output (`CSI ?2026h`) | ✓ Internal | xterm-headless buffers writes between BSU / ESU markers. |
 | Bell (`\x07`) | ✗ Dropped | `term.onBell` fires but we don't forward. Easy fix: subscribe and write `\x07` to `process.stdout`. |
 | Title set (`OSC 0/1/2`) | ✗ Dropped | `term.onTitleChange` fires but we don't surface. Could overlay in the Zoom header (e.g. claude's current working topic). |
-| Hyperlinks (`OSC 8`) | ⚠ Partial | xterm-headless stores the URL as cell metadata, but Ink's `<Text>` doesn't re-emit `OSC 8` to the host terminal, so clickable links won't reach iTerm / Terminal.app. Workaround: print the URL inline (claude usually does). |
+| Hyperlinks (`OSC 8`) | ✓ Forwarded (zoom) | 0472: `rowToRuns` puts link cells in their own run; `PtyPane.jsx` writes that run back out inside `OSC 8` (http/https only, control bytes stripped). Ink 7 measures and truncates `OSC 8` text correctly. The URL lookup uses xterm's internal `_oscLinkService` (no public API in @xterm/headless 6.0.0); if it moves, links fall back to plain text. The shell pane and login pane do not forward links. |
 | Clipboard (`OSC 52`) | ✗ Dropped | If claude writes to the clipboard, the sequence dies in xterm-headless. Fix: register an OSC 52 handler that pipes raw payload through `process.stdout.write` so the host terminal honors it. |
 | `cwd` reporting (`OSC 7`) | ✗ Dropped | claude rarely uses this; ignore unless a real bug surfaces. |
 | Application cursor keys (`DECCKM`) | ⚠ Partial | `term.modes.applicationCursorKeysMode` tracked; our `ptyKeys.js` always emits the cursor-keys variant (`CSI` form). Claude doesn't appear to depend on the application-mode variant (`ESC O X`) but if a future version does, arrows in claude's prompt editor could feel off. |
@@ -35,14 +35,6 @@ Some gaps are not bugs but consequences of rendering claude's terminal
 output through Ink rather than connecting the PTY directly to the host
 terminal:
 
-- **No clickable links.** OSC 8 hyperlink markers are stored by
-  xterm-headless on the affected cells, but Ink renders `<Text>`
-  nodes without re-emitting OSC 8 to the host terminal. Even if we
-  forwarded the sequence, the link's position in our rendered output
-  wouldn't match where it landed in the host terminal's row/col grid
-  (Ink reflows our Box layout independently). Fix would require
-  bypassing Ink for the cell range covered by the link — not
-  feasible.
 - **No image protocols.** Kitty graphics, iTerm2 inline images, and
   Sixel are not supported by xterm-headless and would not survive
   Ink's re-rendering pipeline. claude doesn't use these today.

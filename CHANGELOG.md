@@ -7,6 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- Links claude draws in zoom keep their URL. When claude writes only a link's
+  title (it does this in terminals that can follow links), zoom now passes the
+  link through, so an artifact link can be opened from mc.
 - Zoom no longer hides a line of your own typing when it reads like claude's
   "update available" notice. Rows inside claude's composer are never treated
   as the notice.

@@ -22,7 +22,7 @@ import { clampPtyDims } from '../lib/zoomGeometry.js';
 import { Box, Text, useInput } from 'ink';
 import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
-import { rowToRuns } from './ptyCells.js';
+import { rowToRuns, safeLinkUrl } from './ptyCells.js';
 import { throttleDecision } from '../lib/leadingThrottle.js';
 import { matchUpdateBanner, composerSpan, footerStart } from './claudeBanner.js';
 import { dlog } from '../lib/debugLog.js';
@@ -658,12 +658,22 @@ export default function PtyPane({
       composer = composerSpan(texts, cursorRow);
       footer = footerStart(texts, cursorRow);
     }
+    // 0472: resolve OSC 8 link ids to URLs so link text can be written back
+    // out as a link. claude writes ONLY the title inside OSC 8 when it thinks
+    // the host terminal follows links, so dropping the link drops the URL —
+    // an artifact link claude drew that way had nothing to open. The lookup
+    // is xterm-internal (no public API in @xterm/headless 6.0.0); if it moves,
+    // links fall back to plain text.
+    const linkOf = (id) => {
+      try { return safeLinkUrl(term._core?._oscLinkService?.getLinkData(id)?.uri); }
+      catch { return undefined; }
+    };
     const out = [];
     let banner = null;
     for (let y = 0; y < viewRows; y++) {
       const line = buf.getLine(startY + y);
       const cxForRow = (cursorInView && y === cursorRow) ? cursorX : -1;
-      const runs = rowToRuns(line, cell, readCols, cxForRow, cursorStyle);
+      const runs = rowToRuns(line, cell, readCols, cxForRow, cursorStyle, linkOf);
       // Claude prints its own "update available" notice into this body region.
       // When suppression is on, recognise that row (never a composer or cursor
       // row), blank it here, and surface it as `banner` so the parent can show
@@ -729,7 +739,7 @@ export default function PtyPane({
               dimColor={r.props.dimColor}
               inverse={r.props.inverse}
               strikethrough={r.props.strikethrough}
-            >{r.text}</Text>
+            >{r.link ? `\x1b]8;;${r.link}\x1b\\${r.text}\x1b]8;;\x1b\\` : r.text}</Text>
           ))}
         </Text>
       ))}
