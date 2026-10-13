@@ -19,7 +19,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { clampPtyDims } from '../lib/zoomGeometry.js';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useCursor, useInput, useStdout } from 'ink';
 import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
 import { rowToRuns, safeLinkUrl } from './ptyCells.js';
@@ -76,6 +76,21 @@ const RENDER_INTERVAL_MS = 33;
 //                        claude now so its native perm cycler works);
 //                        kept on the prop API for App.jsx symmetry.
 //   theme              — for the spinner / error fallback
+// boxOrigin — a mounted Ink element's top-left cell relative to Ink's output
+// origin: the sum of yoga's computed offsets up to the root, plus the root's
+// height. null before the first layout pass.
+function boxOrigin(node) {
+  if (!node?.yogaNode) return null;
+  let x = 0, y = 0, rootHeight = 0;
+  for (let n = node; n; n = n.parentNode) {
+    if (!n.yogaNode) continue;
+    x += n.yogaNode.getComputedLeft();
+    y += n.yogaNode.getComputedTop();
+    rootHeight = n.yogaNode.getComputedHeight();
+  }
+  return { x, y, rootHeight };
+}
+
 export default function PtyPane({
   agent, width, height,
   focus = true,
@@ -91,6 +106,7 @@ export default function PtyPane({
   // PTY + emulator live across renders.
   const ptyRef  = useRef(null);
   const termRef = useRef(null);
+  const boxRef  = useRef(null);
   const cellRef = useRef(null);
   const disposeRef = useRef(null);
   const renderTimerRef = useRef(null);
@@ -688,7 +704,7 @@ export default function PtyPane({
       }
       out.push(runs);
     }
-    return { rows: out, banner };
+    return { rows: out, banner, cursor: cursorInView ? { x: cursorX, y: cursorRow } : null };
     // tick drives re-renders; cols/rows already trigger via resize effect.
     // viewRows is in the deps because entering scroll mode reserves a row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -700,6 +716,32 @@ export default function PtyPane({
     if (view?.banner) onClaudeUpdate?.(view.banner);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view?.banner?.text]);
+
+  // Park the terminal's REAL cursor on claude's cursor cell. The painted block
+  // above is only a picture; macOS dictation and IMEs draw their live preview
+  // at the real cursor, which Ink otherwise leaves hidden at the bottom of the
+  // screen — dictated words appeared over the status bar, not in claude's
+  // composer. Ink wants the position relative to its output origin, so add
+  // this box's offset from the root, read from the last layout pass (the box
+  // only moves when the zoom chrome around it changes).
+  const { setCursorPosition } = useCursor();
+  const { stdout } = useStdout();
+  const origin = boxOrigin(boxRef.current);
+  // TODO(ink-cursor-fullscreen): Ink 7.1.1 measures the cursor move from the
+  // row BELOW its output, but a frame that fills the screen is written with no
+  // trailing newline, so the cursor lands one row high. mc always fills the
+  // screen. Drop this +1 when Ink fixes buildCursorSuffix for that case
+  // (tests/zoom/ptyPane.realCursor.test.jsx fails if it is wrong either way).
+  const fullscreenFix = origin && stdout?.rows && origin.rootHeight >= stdout.rows ? 1 : 0;
+  setCursorPosition(view?.cursor && origin
+    ? { x: origin.x + view.cursor.x, y: origin.y + view.cursor.y + fullscreenFix }
+    : undefined);
+  // The first render has no layout yet; render once more after it so an idle
+  // claude (no tick) still gets its cursor placed.
+  const [, bumpLayout] = useState(0);
+  useEffect(() => {
+    if (!origin && boxRef.current?.yogaNode) bumpLayout((n) => n + 1);
+  });
 
   if (error) {
     return (
@@ -719,7 +761,7 @@ export default function PtyPane({
   }
 
   return (
-    <Box flexDirection="column" width={cols} height={rows} overflow="hidden">
+    <Box ref={boxRef} flexDirection="column" width={cols} height={rows} overflow="hidden">
       {view.rows.map((runs, y) => (
         // Each row is one terminal line — pin its height to 1 and
         // disable text wrapping so claude's "thinking" animation

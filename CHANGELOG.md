@@ -7,6 +7,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- Dictation and other input tools show their live preview in claude's input
+  box in zoom. mc used to leave the terminal's real cursor at the bottom of
+  the screen, so dictated words appeared over the status bar.
 - Links claude draws in zoom keep their URL. When claude writes only a link's
   title (it does this in terminals that can follow links), zoom now passes the
   link through, so an artifact link can be opened from mc.
