@@ -7,6 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - A session claude compacts on its own while idle no longer shows WORKING.
   mc read claude's compaction summary as a new message from you.
 - Dictation and other input tools show their live preview in claude's input
@@ -96,12 +97,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [1.2.2] — 2026-09-24
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - Release CI flakes: wait for Settings disconnect auth re-probe; freeze
   Dashboard elapsed clock in null-meter comparison.
 
 ## [1.2.1] — 2026-09-24
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - Release CI: wait for Settings disconnect re-probe; skip hung characterize
   pins under CI (macOS · node 20 wall-clock).
 
@@ -117,6 +120,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   each row keeps its own plan meters; nothing is blended across vendors.
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - **Zoom/Card `ctx ?%` and missing model chip after resume.** Launch/`resume`
   often stores a CLI id (`claude-opus-5`) as `model`; resolve that back to the
   catalog so maxCtx and `[OPUS …]` render.
@@ -131,6 +135,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 six-hour cap, so the run is recorded as cancelled and named no file.
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - **The zoom view and the card showed different status for one session.** The
   card renders the DERIVED status from the fleet snapshot; zoom rendered the
   live agent instance, where `.status` is only the connector's opinion and the
@@ -171,6 +176,7 @@ six-hour cap, so the run is recorded as cancelled and named no file.
 developer machine and cannot pass on a headless runner.
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - **Colour-dependent assertions no longer depend on the environment.** The
   ShellOverlay tests locate the cursor by the background colour it is painted
   in. chalk picks its colour level once, at import, from the environment:
@@ -191,6 +197,7 @@ Entries for 1.1.2 through 1.1.14 were never written; the git log is the record
 for those.
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - **The fleet log was empty after every resume or restart.** Attaching to a
   session replayed the last 256 KiB of its transcript into a scratch object and
   threw the parsed tail away, then moved the read offset past it. Four earlier
@@ -238,6 +245,7 @@ for those.
 Stability + release-integrity patch.
 
 ### Fixed
+- The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - **`!` shell overlay no longer crashes the app.** On hosts where node-pty's
   prebuilt `spawn-helper` lost its executable bit (npm/npx skip the `postinstall`
   that chmods it), `pty.spawn` threw `posix_spawnp failed` out of a React effect

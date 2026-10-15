@@ -66,9 +66,9 @@ export default function QuitConfirm({ onCancel, onQuit, theme, agentCount = 0 })
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Box>
-          <Text color={theme.accent}>[s]</Text>
+          <Text color={theme.accent}>[q]</Text>
           <Text color={theme.fg}> save & quit</Text>
-          <Text color={theme.dim}>     keep conversations · q/y/↵</Text>
+          <Text color={theme.dim}>     keep conversations · s/↵</Text>
         </Box>
         <Box>
           <Text color={theme.accent}>[d]</Text>
