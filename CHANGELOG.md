@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- A session claude compacts on its own while idle no longer shows WORKING.
+  mc read claude's compaction summary as a new message from you.
 - Dictation and other input tools show their live preview in claude's input
   box in zoom. mc used to leave the terminal's real cursor at the bottom of
   the screen, so dictated words appeared over the status bar.

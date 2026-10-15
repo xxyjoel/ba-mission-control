@@ -924,3 +924,32 @@ test('0399: a plain prompt merely MENTIONING the tags is still a real prompt', (
   assert.equal(a.status, 'working');
   assert.ok(a.lastConnectorTs > 0);
 });
+
+// ─── 0474: claude's compaction summary is not a prompt ───────────
+
+test('0474: compaction summary (idle auto-compact) → stays idle, no clock bump', () => {
+  // Shape copied from a real transcript (gtm-gov-miner, 2026-10-15): a
+  // compact_boundary, then this user record, then attachments — no turn.
+  const a = makeAgent({ status: 'idle', lastEventTs: 5, lastConnectorTs: 5 });
+  const changed = parseEvent({
+    type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true,
+    message: { role: 'user', content: 'This session is being continued from a previous conversation…' },
+    permissionMode: 'acceptEdits',
+  }, a);
+  assert.equal(changed, false);
+  assert.equal(a.status, 'idle', 'nobody typed this — not working');
+  assert.equal(a.lastEventTs, 5);
+  assert.equal(a.lastConnectorTs, 5, 'cannot out-fresh the last Stop hook');
+  assert.equal(a.tail.length, 0);
+});
+
+test('0474: compaction summary still reports a changed permission mode', () => {
+  const a = makeAgent({ status: 'idle', permissionMode: 'default' });
+  const changed = parseEvent({
+    type: 'user', isCompactSummary: true,
+    message: { role: 'user', content: 'summary' }, permissionMode: 'auto',
+  }, a);
+  assert.equal(changed, true);
+  assert.equal(a.permissionMode, 'auto');
+  assert.equal(a.status, 'idle');
+});
