@@ -91,6 +91,34 @@ function boxOrigin(node) {
   return { x, y, rootHeight };
 }
 
+// nudgeFullscreenCursor — TODO(ink-cursor-fullscreen): Ink 7.1.1 places the
+// cursor by moving up from the row BELOW its output, but a frame that fills
+// the screen has no trailing newline, so the cursor lands one row high. Ink's
+// own return trip to the bottom (before its next frame) is right, so the
+// position handed to Ink must stay true; the correction goes on the terminal
+// instead. Every Ink cursor placement ends with SHOW_CURSOR; while `active()`
+// says the frame is fullscreen, one cursor-down follows it. A cursor-down on
+// the bottom row does nothing, so a stray one is harmless. (0476: the earlier
+// +1 on the position fixed text frames but drifted the cursor up a row on
+// every frame where only the cursor moved.) Returns the undo function.
+const SHOW_CURSOR = '\x1b[?25h';
+export function nudgeFullscreenCursor(stdout, active) {
+  if (!stdout || typeof stdout.write !== 'function') return () => {};
+  const orig = stdout.write;
+  const wrapped = function write(chunk, ...rest) {
+    if (typeof chunk === 'string' && active()) {
+      const at = chunk.lastIndexOf(SHOW_CURSOR);
+      if (at >= 0) {
+        const cut = at + SHOW_CURSOR.length;
+        chunk = chunk.slice(0, cut) + '\x1b[B' + chunk.slice(cut);
+      }
+    }
+    return orig.call(this, chunk, ...rest);
+  };
+  stdout.write = wrapped;
+  return () => { if (stdout.write === wrapped) stdout.write = orig; };
+}
+
 export default function PtyPane({
   agent, width, height,
   focus = true,
@@ -727,14 +755,13 @@ export default function PtyPane({
   const { setCursorPosition } = useCursor();
   const { stdout } = useStdout();
   const origin = boxOrigin(boxRef.current);
-  // TODO(ink-cursor-fullscreen): Ink 7.1.1 measures the cursor move from the
-  // row BELOW its output, but a frame that fills the screen is written with no
-  // trailing newline, so the cursor lands one row high. mc always fills the
-  // screen. Drop this +1 when Ink fixes buildCursorSuffix for that case
-  // (tests/zoom/ptyPane.realCursor.test.jsx fails if it is wrong either way).
-  const fullscreenFix = origin && stdout?.rows && origin.rootHeight >= stdout.rows ? 1 : 0;
+  // Fullscreen frames need the cursor nudged down a row after Ink places it
+  // (see nudgeFullscreenCursor). Read at write time, from this render's layout.
+  const fullscreenRef = useRef(false);
+  fullscreenRef.current = Boolean(origin && stdout?.rows && origin.rootHeight >= stdout.rows);
+  useEffect(() => nudgeFullscreenCursor(stdout, () => fullscreenRef.current), [stdout]);
   setCursorPosition(view?.cursor && origin
-    ? { x: origin.x + view.cursor.x, y: origin.y + view.cursor.y + fullscreenFix }
+    ? { x: origin.x + view.cursor.x, y: origin.y + view.cursor.y }
     : undefined);
   // The first render has no layout yet; render once more after it so an idle
   // claude (no tick) still gets its cursor placed.

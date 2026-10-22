@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- In zoom, moving the cursor in claude's input box without typing (arrow keys)
+  no longer lifts mc's cursor a row higher each time.
 - The quit menu names `[q]` for save and quit, the key people press twice. `s` and Enter still work.
 - A session claude compacts on its own while idle no longer shows WORKING.
   mc read claude's compaction summary as a new message from you.
