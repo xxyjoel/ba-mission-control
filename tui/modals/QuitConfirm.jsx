@@ -11,7 +11,7 @@
 //
 // Save is the DEFAULT: every exit preserves resumable conversations + token/cost
 // totals UNLESS the user explicitly picks [d]. Closing the terminal (cmd+W →
-// SIGHUP), Ctrl-C, and this modal's [s]/[q] all keep the sessions; only [d]
+// SIGHUP), Ctrl-C, and this modal's save keys all keep the sessions; only [d]
 // quit-no-save downgrades to a "clear". Enter maps to SAVE so an instinctive
 // Enter never loses work. onQuit sets the persist mode in the session store
 // BEFORE Ink tears down; the final write in main.jsx then records the right

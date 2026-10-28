@@ -438,12 +438,12 @@ no automatic stage-bound summary today.
 | `?` | Help |
 | `/` | Filter — type a substring (matches name/branch/model/status); non-matches dim. Press `/` again to clear. |
 | `:` | Command bar (see below) |
-| `q` | Quit — opens a confirm: **`[s]` save & quit** (also `q`, `y` or `Enter`, so `q` `q` saves) vs **`[d]` quit, no save** vs `[n]`/`Esc` cancel |
-| `Ctrl-C` | Quit immediately and save, the same as `[s]` (see below) |
+| `q` | Quit — opens a confirm: **`[q]` save & quit**, so `q` `q` saves (`s`, `y` and `Enter` also save, unlisted) vs **`[d]` quit, no save** vs `[n]`/`Esc` cancel |
+| `Ctrl-C` | Quit immediately and save, the same as `q` `q` (see below) |
 
 ### Session save / restore
 
-**Every exit saves except `[d]`.** `[s]` save & quit, `q` `q`, `Ctrl-C`, closing
+**Every exit saves except `[d]`.** `q` `q` (save & quit), `Ctrl-C`, closing
 the terminal (SIGHUP) and SIGTERM all keep the live conversations *and* their
 token/cost totals, so `:resume-all` can bring them back with `claude --resume`.
 Only **`[d]` quit, no save** records just the open repo **locations**:
