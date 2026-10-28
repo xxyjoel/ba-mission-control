@@ -111,7 +111,7 @@ test('hotkey: q opens QuitConfirm (does NOT exit immediately)', async () => {
   await press(stdin, 'q');
   const frame = strip(lastFrame());
   assert.match(frame, /Quit mc\?/);
-  assert.match(frame, /\[s\] save & quit/);
+  assert.match(frame, /\[q\] save & quit/);
   assert.match(frame, /\[d\] quit, no save/);
   unmount();
 });

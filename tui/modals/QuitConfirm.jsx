@@ -4,13 +4,14 @@
 //   s/S/Enter/y/Y/q/Q → save & quit   (onQuit('save'))  — keep conversations + totals
 //   d/D               → quit, no save (onQuit('clear')) — reopen fresh
 //   n/N/Esc           → cancel        (onCancel())
-// `q` and `y` are aliases for muscle memory: q→q saves (owner decision
-// 2026-10-08, task 0456; it used to discard), q→y confirms as older Notes
-// said. Discard is [d] only. Every other key is ignored (no auto-dismiss).
+// The menu names ONE save key, `q`, so q then q is the command (owner
+// 2026-10-22, task 0477: showing both q and s confused). s, y and Enter still
+// save, unlisted, so old habits never lose work. Discard is [d] only. Every
+// other key is ignored (no auto-dismiss).
 //
 // Save is the DEFAULT: every exit preserves resumable conversations + token/cost
 // totals UNLESS the user explicitly picks [d]. Closing the terminal (cmd+W →
-// SIGHUP), Ctrl-C, and this modal's [s]/[q] all keep the sessions; only [d]
+// SIGHUP), Ctrl-C, and this modal's save keys all keep the sessions; only [d]
 // quit-no-save downgrades to a "clear". Enter maps to SAVE so an instinctive
 // Enter never loses work. onQuit sets the persist mode in the session store
 // BEFORE Ink tears down; the final write in main.jsx then records the right
@@ -66,9 +67,9 @@ export default function QuitConfirm({ onCancel, onQuit, theme, agentCount = 0 })
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Box>
-          <Text color={theme.accent}>[s]</Text>
+          <Text color={theme.accent}>[q]</Text>
           <Text color={theme.fg}> save & quit</Text>
-          <Text color={theme.dim}>     keep conversations · q/y/↵</Text>
+          <Text color={theme.dim}>     keep conversations</Text>
         </Box>
         <Box>
           <Text color={theme.accent}>[d]</Text>

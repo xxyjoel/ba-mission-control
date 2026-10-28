@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- In zoom, moving the cursor in claude's input box without typing (arrow keys)
+  no longer lifts mc's cursor a row higher each time.
+- The quit menu names one save key, `[q]`, so q then q is the command. `s` and Enter still save but are no longer listed.
+- A session claude compacts on its own while idle no longer shows WORKING.
+  mc read claude's compaction summary as a new message from you.
+- Dictation and other input tools show their live preview in claude's input
+  box in zoom. mc used to leave the terminal's real cursor at the bottom of
+  the screen, so dictated words appeared over the status bar.
+- Links claude draws in zoom keep their URL. When claude writes only a link's
+  title (it does this in terminals that can follow links), zoom now passes the
+  link through, so an artifact link can be opened from mc.
 - Zoom no longer hides a line of your own typing when it reads like claude's
   "update available" notice. Rows inside claude's composer are never treated
   as the notice.

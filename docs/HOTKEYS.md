@@ -29,8 +29,8 @@ out on purpose: they went stale after every change (0467).
 | `,` / `Esc` | Open Settings |
 | `b` / `B` | Open Broadcast |
 | `d` / `D` | Open Dashboard |
-| `q` / `Q` | Open QuitConfirm. Inside it `s`, `q`, `y` or `Enter` save and quit (so `q` `q` saves), `d` quits without saving, `n` / `Esc` cancel |
-| `Ctrl+C` | Quit and save (same as `[s]`) |
+| `q` / `Q` | Open QuitConfirm. Inside it `q` saves and quits (so `q` `q` saves; `s`, `y` and `Enter` also save, unlisted), `d` quits without saving, `n` / `Esc` cancel |
+| `Ctrl+C` | Quit and save (same as `q` `q`) |
 | `n` / `Ctrl+N` | Open NewSession. Uppercase `N` is not bound |
 | `!` | Open the shell overlay |
 | `Shift+L` | Fleet log: all ↔ narrative |

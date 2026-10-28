@@ -228,6 +228,16 @@ export function parseEvent(ev, agent) {
     }
   }
 
+  // 0474: the summary claude writes after a compaction is a user record too
+  // (isCompactSummary, plain-string content), but nobody typed it. claude
+  // ≥2.1.29x compacts idle sessions on its own ("Compacted while idle, before
+  // the prompt cache expired"), with no turn and so no Stop hook after it —
+  // reading the summary as a prompt pinned idle cards to WORKING for hours
+  // (outbound-orchestrator, gtm-gov-miner, 2026-10-15). Same skip as 0399.
+  if (ev.type === 'user' && ev.isCompactSummary) {
+    return applyPermissionMode(agent, ev.permissionMode);
+  }
+
   agent.lastEventTs = Date.now();
   // 0229-fix: JSONL-only activity clock. lastEventTs above is also bumped by
   // spawn, send, resume and auto-restart (and, on Cursor slots only, by every

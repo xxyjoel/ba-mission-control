@@ -19,10 +19,10 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { clampPtyDims } from '../lib/zoomGeometry.js';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useCursor, useInput, useStdout } from 'ink';
 import { keyToBytes } from './ptyKeys.js';
 import { classifyZoomKey } from './zoomKeys.js';
-import { rowToRuns } from './ptyCells.js';
+import { rowToRuns, safeLinkUrl } from './ptyCells.js';
 import { throttleDecision } from '../lib/leadingThrottle.js';
 import { matchUpdateBanner, composerSpan, footerStart } from './claudeBanner.js';
 import { dlog } from '../lib/debugLog.js';
@@ -76,6 +76,49 @@ const RENDER_INTERVAL_MS = 33;
 //                        claude now so its native perm cycler works);
 //                        kept on the prop API for App.jsx symmetry.
 //   theme              — for the spinner / error fallback
+// boxOrigin — a mounted Ink element's top-left cell relative to Ink's output
+// origin: the sum of yoga's computed offsets up to the root, plus the root's
+// height. null before the first layout pass.
+function boxOrigin(node) {
+  if (!node?.yogaNode) return null;
+  let x = 0, y = 0, rootHeight = 0;
+  for (let n = node; n; n = n.parentNode) {
+    if (!n.yogaNode) continue;
+    x += n.yogaNode.getComputedLeft();
+    y += n.yogaNode.getComputedTop();
+    rootHeight = n.yogaNode.getComputedHeight();
+  }
+  return { x, y, rootHeight };
+}
+
+// nudgeFullscreenCursor — TODO(ink-cursor-fullscreen): Ink 7.1.1 places the
+// cursor by moving up from the row BELOW its output, but a frame that fills
+// the screen has no trailing newline, so the cursor lands one row high. Ink's
+// own return trip to the bottom (before its next frame) is right, so the
+// position handed to Ink must stay true; the correction goes on the terminal
+// instead. Every Ink cursor placement ends with SHOW_CURSOR; while `active()`
+// says the frame is fullscreen, one cursor-down follows it. A cursor-down on
+// the bottom row does nothing, so a stray one is harmless. (0476: the earlier
+// +1 on the position fixed text frames but drifted the cursor up a row on
+// every frame where only the cursor moved.) Returns the undo function.
+const SHOW_CURSOR = '\x1b[?25h';
+export function nudgeFullscreenCursor(stdout, active) {
+  if (!stdout || typeof stdout.write !== 'function') return () => {};
+  const orig = stdout.write;
+  const wrapped = function write(chunk, ...rest) {
+    if (typeof chunk === 'string' && active()) {
+      const at = chunk.lastIndexOf(SHOW_CURSOR);
+      if (at >= 0) {
+        const cut = at + SHOW_CURSOR.length;
+        chunk = chunk.slice(0, cut) + '\x1b[B' + chunk.slice(cut);
+      }
+    }
+    return orig.call(this, chunk, ...rest);
+  };
+  stdout.write = wrapped;
+  return () => { if (stdout.write === wrapped) stdout.write = orig; };
+}
+
 export default function PtyPane({
   agent, width, height,
   focus = true,
@@ -91,6 +134,7 @@ export default function PtyPane({
   // PTY + emulator live across renders.
   const ptyRef  = useRef(null);
   const termRef = useRef(null);
+  const boxRef  = useRef(null);
   const cellRef = useRef(null);
   const disposeRef = useRef(null);
   const renderTimerRef = useRef(null);
@@ -658,12 +702,22 @@ export default function PtyPane({
       composer = composerSpan(texts, cursorRow);
       footer = footerStart(texts, cursorRow);
     }
+    // 0472: resolve OSC 8 link ids to URLs so link text can be written back
+    // out as a link. claude writes ONLY the title inside OSC 8 when it thinks
+    // the host terminal follows links, so dropping the link drops the URL —
+    // an artifact link claude drew that way had nothing to open. The lookup
+    // is xterm-internal (no public API in @xterm/headless 6.0.0); if it moves,
+    // links fall back to plain text.
+    const linkOf = (id) => {
+      try { return safeLinkUrl(term._core?._oscLinkService?.getLinkData(id)?.uri); }
+      catch { return undefined; }
+    };
     const out = [];
     let banner = null;
     for (let y = 0; y < viewRows; y++) {
       const line = buf.getLine(startY + y);
       const cxForRow = (cursorInView && y === cursorRow) ? cursorX : -1;
-      const runs = rowToRuns(line, cell, readCols, cxForRow, cursorStyle);
+      const runs = rowToRuns(line, cell, readCols, cxForRow, cursorStyle, linkOf);
       // Claude prints its own "update available" notice into this body region.
       // When suppression is on, recognise that row (never a composer or cursor
       // row), blank it here, and surface it as `banner` so the parent can show
@@ -678,7 +732,7 @@ export default function PtyPane({
       }
       out.push(runs);
     }
-    return { rows: out, banner };
+    return { rows: out, banner, cursor: cursorInView ? { x: cursorX, y: cursorRow } : null };
     // tick drives re-renders; cols/rows already trigger via resize effect.
     // viewRows is in the deps because entering scroll mode reserves a row.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -690,6 +744,31 @@ export default function PtyPane({
     if (view?.banner) onClaudeUpdate?.(view.banner);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view?.banner?.text]);
+
+  // Park the terminal's REAL cursor on claude's cursor cell. The painted block
+  // above is only a picture; macOS dictation and IMEs draw their live preview
+  // at the real cursor, which Ink otherwise leaves hidden at the bottom of the
+  // screen — dictated words appeared over the status bar, not in claude's
+  // composer. Ink wants the position relative to its output origin, so add
+  // this box's offset from the root, read from the last layout pass (the box
+  // only moves when the zoom chrome around it changes).
+  const { setCursorPosition } = useCursor();
+  const { stdout } = useStdout();
+  const origin = boxOrigin(boxRef.current);
+  // Fullscreen frames need the cursor nudged down a row after Ink places it
+  // (see nudgeFullscreenCursor). Read at write time, from this render's layout.
+  const fullscreenRef = useRef(false);
+  fullscreenRef.current = Boolean(origin && stdout?.rows && origin.rootHeight >= stdout.rows);
+  useEffect(() => nudgeFullscreenCursor(stdout, () => fullscreenRef.current), [stdout]);
+  setCursorPosition(view?.cursor && origin
+    ? { x: origin.x + view.cursor.x, y: origin.y + view.cursor.y }
+    : undefined);
+  // The first render has no layout yet; render once more after it so an idle
+  // claude (no tick) still gets its cursor placed.
+  const [, bumpLayout] = useState(0);
+  useEffect(() => {
+    if (!origin && boxRef.current?.yogaNode) bumpLayout((n) => n + 1);
+  });
 
   if (error) {
     return (
@@ -709,7 +788,7 @@ export default function PtyPane({
   }
 
   return (
-    <Box flexDirection="column" width={cols} height={rows} overflow="hidden">
+    <Box ref={boxRef} flexDirection="column" width={cols} height={rows} overflow="hidden">
       {view.rows.map((runs, y) => (
         // Each row is one terminal line — pin its height to 1 and
         // disable text wrapping so claude's "thinking" animation
@@ -729,7 +808,7 @@ export default function PtyPane({
               dimColor={r.props.dimColor}
               inverse={r.props.inverse}
               strikethrough={r.props.strikethrough}
-            >{r.text}</Text>
+            >{r.link ? `\x1b]8;;${r.link}\x1b\\${r.text}\x1b]8;;\x1b\\` : r.text}</Text>
           ))}
         </Text>
       ))}

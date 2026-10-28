@@ -86,19 +86,37 @@ function propsFromCell(cell) {
   };
 }
 
+// 0472: the OSC 8 link id on a cell (0 = no link). xterm keeps it on the
+// cell's extended attrs; the public typings do not declare it.
+function linkId(cell) {
+  return cell.hasExtendedAttrs?.() ? (cell.extended?.urlId || 0) : 0;
+}
+
+// 0472: a URL fit to write back out inside OSC 8 — http(s) only, control
+// bytes stripped, bounded length. Anything else returns undefined and the
+// cells render as plain text.
+export function safeLinkUrl(u) {
+  if (typeof u !== 'string' || u.length > 2048) return undefined;
+  const clean = u.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+  return /^https?:\/\/[^\s]+$/i.test(clean) ? clean : undefined;
+}
+
 // Walk one terminal row and return a list of styled runs:
-//   [{ props, text }, ...]
+//   [{ props, text, link? }, ...]
+// 0472: linkOf(id) resolves a cell's OSC 8 link id to a safe URL; link
+// cells get their own run so the caller can wrap just them.
 // Adjacent cells with identical style are merged. The cursor cell (if
 // cursorX is in range) is rendered as a hard-painted high-contrast
 // block using cursorStyle. We avoid Ink's `inverse` prop for the
 // cursor because it's flaky on whitespace-only cells (terminals don't
 // always paint the inverse background when there's no glyph).
-export function rowToRuns(line, cellRef, cols, cursorX = -1, cursorStyle = null) {
+export function rowToRuns(line, cellRef, cols, cursorX = -1, cursorStyle = null, linkOf = null) {
   const runs = [];
   if (!line) return runs;
   let curKey = null;
   let curProps = null;
   let curText = '';
+  let curLink;
   for (let x = 0; x < cols; x++) {
     line.getCell(x, cellRef);
     // Width 0 means this cell is the right half of a wide (CJK / emoji)
@@ -109,10 +127,13 @@ export function rowToRuns(line, cellRef, cols, cursorX = -1, cursorStyle = null)
     const isCursor = x === cursorX;
     let key = styleKey(cellRef);
     if (isCursor) key += '|@';
+    const lid = linkOf ? linkId(cellRef) : 0;
+    if (lid) key += `|L${lid}`;
     if (key !== curKey) {
-      if (curText.length > 0) runs.push({ props: curProps, text: curText });
+      if (curText.length > 0) runs.push({ props: curProps, text: curText, link: curLink });
       curKey = key;
       curProps = propsFromCell(cellRef);
+      curLink = lid ? linkOf(lid) : undefined;
       if (isCursor && cursorStyle) {
         // Hard-paint the cursor cell. cursorStyle.backgroundColor +
         // cursorStyle.color override whatever was at the cell so the
@@ -134,6 +155,6 @@ export function rowToRuns(line, cellRef, cols, cursorX = -1, cursorStyle = null)
     if (ch === '') ch = ' ';
     curText += ch;
   }
-  if (curText.length > 0) runs.push({ props: curProps, text: curText });
+  if (curText.length > 0) runs.push({ props: curProps, text: curText, link: curLink });
   return runs;
 }
