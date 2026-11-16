@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.5] — 2026-11-16
+
+1.2.4 never reached npm: its release run failed on a test that needs a real
+terminal. 1.2.5 includes every change listed under 1.2.4.
+
 ### Added
 - Claude Fable 5.2, Sonnet 5.5 and Haiku 5.5 can be picked in New Session and
   with `:model`, at their published rates. Haiku 5.5 is priced at its rate for
