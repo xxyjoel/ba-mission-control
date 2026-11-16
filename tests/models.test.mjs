@@ -100,10 +100,37 @@ test('fable-5.1 pricing is flagged estimated, not presented as verified', () => 
   assert.equal(m.costPerMTokOut, MODELS['fable-5'].costPerMTokOut);
 });
 
-test('fable-5.1 outranks fable-5 as the newest of its kind', () => {
+test('fable-5.2 outranks fable-5.1 and fable-5 as the newest of its kind', () => {
   // newestModelId parses the trailing version, so a '5.1' that parsed as 5
   // would tie with fable-5 and resolve by iteration order instead of version.
-  assert.equal(newestModelId('fable'), 'fable-5.1');
+  // 0481: Fable 5.2 joined the catalog on 2026-11-10.
+  assert.equal(newestModelId('fable'), 'fable-5.2');
   // The fable entries must not disturb the opus lineage that 'auto' follows.
   assert.equal(newestModelId('opus'), 'opus-5.5');
+});
+
+// 0481: the three models released after the 2026-09-24 catalog, with the
+// published rates (platform.claude.com pricing, read 2026-11-10) and the limits
+// GET /v1/models reports. claude 2.1.322's own cost figure for a probe turn on
+// each matched these rates exactly (1-hour cache writes).
+test('0481: Fable 5.2, Sonnet 5.5 and Haiku 5.5 are selectable at published rates', () => {
+  const want = {
+    'fable-5.2':  { cliModel: 'claude-fable-5-2',  kind: 'fable',  in: 8,   out: 40,  cw: 10,    cr: 0.2 },
+    'sonnet-5.5': { cliModel: 'claude-sonnet-5-5', kind: 'sonnet', in: 2,   out: 10,  cw: 2.5,   cr: 0.1 },
+    'haiku-5.5':  { cliModel: 'claude-haiku-5-5',  kind: 'haiku',  in: 0.1, out: 0.5, cw: 0.125, cr: 0.01 },
+  };
+  for (const [id, w] of Object.entries(want)) {
+    assert.ok(modelIds().includes(id), `${id} missing from the picker list`);
+    const m = MODELS[id];
+    assert.equal(m.cliModel, w.cliModel);
+    assert.equal(m.kind, w.kind);
+    assert.equal(m.maxCtx, 1000000);
+    assert.equal(m.maxOut, 128000);
+    assert.deepEqual(
+      [m.costPerMTokIn, m.costPerMTokOut, m.costPerMTokCacheCreation, m.costPerMTokCacheRead],
+      [w.in, w.out, w.cw, w.cr], `${id} rates`);
+    assert.ok(!m.estimatedPricing, `${id} rates are published, not estimated`);
+  }
+  assert.equal(newestModelId('sonnet'), 'sonnet-5.5');
+  assert.equal(newestModelId('haiku'), 'haiku-5.5');
 });

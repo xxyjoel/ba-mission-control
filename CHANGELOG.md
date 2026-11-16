@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Claude Fable 5.2, Sonnet 5.5 and Haiku 5.5 can be picked in New Session and
+  with `:model`, at their published rates. Haiku 5.5 is priced at its rate for
+  prompts up to 100,000 tokens; longer prompts cost 5× and are undercounted.
+
 ## [1.2.4] — 2026-11-06
 
 ### Fixed

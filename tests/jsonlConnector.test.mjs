@@ -572,7 +572,7 @@ test('deriveCost: unknown model of a KNOWN family prices at the newest family ra
   const u = { input_tokens: 100, output_tokens: 50 };
   const cost = deriveCost(u, 'claude-fable-9-9');
   assert.ok(cost > 0, '0408-M2: never $0 for an unknown model');
-  const newestFable = expectedCost(u, 'fable-5.1');
+  const newestFable = expectedCost(u, newestModelId('fable'));
   assert.ok(Math.abs(cost - newestFable) < 1e-9,
     `inherits the newest fable rate; got ${cost}, expected ${newestFable}`);
 });

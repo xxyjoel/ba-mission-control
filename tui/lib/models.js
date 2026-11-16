@@ -56,10 +56,20 @@ export const MODELS = {
   'opus-4.8':   { label: 'OPUS 4.8',   cliModel: 'claude-opus-4-8',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.7':   { label: 'OPUS 4.7',   cliModel: 'claude-opus-4-7',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
   'opus-4.6':   { label: 'OPUS 4.6',   cliModel: 'claude-opus-4-6',           kind: 'opus',   maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 5,  costPerMTokOut: 25, costPerMTokCacheCreation: 6.25,  costPerMTokCacheRead: 0.5 },
+  // 0481: added 2026-11-10 from the published price table (platform.claude.com
+  // pricing). Limits from GET /v1/models. Cache hits on Fable 5.2 are 0.025x input.
+  'fable-5.2':  { label: 'FABLE 5.2',  cliModel: 'claude-fable-5-2',          kind: 'fable',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 8,  costPerMTokOut: 40, costPerMTokCacheCreation: 10,    costPerMTokCacheRead: 0.2 },
   'fable-5.1':  { label: 'FABLE 5.1',  cliModel: 'claude-fable-5-1',          kind: 'fable',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 10, costPerMTokOut: 50, costPerMTokCacheCreation: 12.5,  costPerMTokCacheRead: 1.0, estimatedPricing: true },
   'fable-5':    { label: 'FABLE 5',    cliModel: 'claude-fable-5',            kind: 'fable',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 10, costPerMTokOut: 50, costPerMTokCacheCreation: 12.5,  costPerMTokCacheRead: 1.0 },
+  // 0481: Sonnet 5.5, same source. Cache hits are 0.05x input.
+  'sonnet-5.5': { label: 'SONNET 5.5', cliModel: 'claude-sonnet-5-5',         kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 2,  costPerMTokOut: 10, costPerMTokCacheCreation: 2.5,   costPerMTokCacheRead: 0.1 },
   'sonnet-5':   { label: 'SONNET 5',   cliModel: 'claude-sonnet-5',           kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
   'sonnet-4.6': { label: 'SONNET 4.6', cliModel: 'claude-sonnet-4-6',         kind: 'sonnet', maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 3,  costPerMTokOut: 15, costPerMTokCacheCreation: 3.75,  costPerMTokCacheRead: 0.3 },
+  // 0481: Haiku 5.5 has two price tiers. These are the rates for prompts up
+  // to 100,000 tokens; over that, every rate is 5x. mc prices one tier per
+  // model, so a Haiku 5.5 turn with a longer prompt is undercounted.
+  // TODO(haiku-tier): price turns by prompt size once the cost path can.
+  'haiku-5.5':  { label: 'HAIKU 5.5',  cliModel: 'claude-haiku-5-5',          kind: 'haiku',  maxCtx: 1000000, maxOut: 128000, costPerMTokIn: 0.1, costPerMTokOut: 0.5, costPerMTokCacheCreation: 0.125, costPerMTokCacheRead: 0.01 },
   'haiku-4.5':  { label: 'HAIKU 4.5',  cliModel: 'claude-haiku-4-5-20251001', kind: 'haiku',  maxCtx: 200000,  maxOut: 64000,  costPerMTokIn: 1,  costPerMTokOut: 5,  costPerMTokCacheCreation: 1.25,  costPerMTokCacheRead: 0.1 },
 };
 // PRICING_CHECKED — the day a person last compared the rates above against

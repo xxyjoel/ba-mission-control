@@ -606,6 +606,10 @@ family. Claude Fable 5.1 hit exactly this, so `fable-5.1` is hand-added to
 `tui/lib/models.js` with limits from a live `/v1/models` call. Its pricing is
 inherited from Fable 5 and flagged `estimatedPricing` — treat the cost column
 for that model as an estimate. Remove the entry once discovery finds it.
+`fable-5.2`, `sonnet-5.5` and `haiku-5.5` are hand-added the same way, with
+the published rates. Haiku 5.5 has two price tiers; mc uses the rate for
+prompts up to 100,000 tokens, so a longer Haiku 5.5 prompt (5× the rate) is
+undercounted.
 
 **Minimum claude version.** A model can require a newer CLI than you have.
 claude 2.1.220 rejects Fable 5.1 with `400 … version 2.1.251 or newer is
