@@ -71,7 +71,10 @@ async function placeCursor({ screenRows, headerRows, paneRows, claudeBytes, extr
       <Box flexGrow={1} />
       <Text>status bar</Text>
     </Box>,
-    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+    // interactive: Ink turns it off when it detects CI (the CI env var), and
+    // without it Ink never positions or shows the cursor, so the release run
+    // on GitHub failed these tests (2026-11-06). mc runs interactive.
+    { stdout, stdin, stderr: stdout, interactive: true, exitOnCtrlC: false, patchConsole: false },
   );
   await tick(120);
   await flush(host);
