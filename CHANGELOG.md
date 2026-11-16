@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.6] — 2026-11-16
+
+1.2.5 never reached npm: its release run failed on a timing bug in a test
+on macOS. 1.2.6 fixes that test and includes every change listed under 1.2.5
+and 1.2.4. mc itself is unchanged from 1.2.5.
+
 ## [1.2.5] — 2026-11-16
 
 1.2.4 never reached npm: its release run failed on a test that needs a real
