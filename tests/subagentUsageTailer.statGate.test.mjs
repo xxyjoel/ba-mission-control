@@ -65,10 +65,16 @@ function countReaddirs() {
 
 // A hand-driven clock for the timing tests. It starts at the real time (file
 // mtimes seed lastGrowTs) and only moves forward.
+// syncTo(path): call it after writing a new file, before the scan that first
+// sees it. The tailer seeds that file's lastGrowTs from its real mtime. On a
+// slow machine the setup takes longer than the test's later advance(), so the
+// mtime is ahead of the fake time, and the file never settles and keeps the
+// gate open. The 1.2.5 release run hit this on macOS (695 stats).
 function fakeClock() {
   let t = Date.now();
   const clock = () => t;
   clock.advance = (ms) => { t += ms; };
+  clock.syncTo = (path) => { t = Math.max(t, statSync(path).mtimeMs); };
   return clock;
 }
 
@@ -113,6 +119,7 @@ test('0350 correctness: an append to a settled file is folded within the fallbac
     await tailer.scan(); // prime: empty dir
     const f = join(subDir, 'agent-resume.jsonl');
     writeFileSync(f, usageLine(100, 10));
+    clock.syncTo(f);
     await tailer.scan();
     assert.equal(agent.tokensIn, 100);
     clock.advance(80); await tailer.scan();
@@ -198,6 +205,7 @@ test('0350 gate: a file with an unfinished last line does not switch the gate of
     assert.equal(tailer.settledCount(), 137);
     const p = join(subDir, 'agent-crashed.jsonl');
     writeFileSync(p, usageLine(7, 3) + '{"partial'); // no trailing newline
+    clock.syncTo(p);
     await tailer.scan();
     assert.equal(agent.tokensIn, 7, 'the complete line is folded');
     clock.advance(80); await tailer.scan(); await tailer.scan();
@@ -234,6 +242,7 @@ test('0350 gate: a busy parent sweeps every scan, so a resumed sub-agent shows a
     await tailer.scan();
     const f = join(subDir, 'agent-r.jsonl');
     writeFileSync(f, usageLine(100, 10));
+    clock.syncTo(f);
     await tailer.scan();
     clock.advance(80); await tailer.scan();
     assert.equal(tailer.settledCount(), 1);
