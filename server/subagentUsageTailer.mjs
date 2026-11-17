@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { claudeProjectDir } from './sessionFileTailer.mjs';
 import { deriveCost } from './jsonlConnector.mjs';
 import { updateSpark } from './spark.mjs';
+import { trackSubagentJobs } from './bgShellJobs.mjs';
 
 // Same backstop cadence as the main tailer's stat-poll. The subagents/ dir is
 // tiny (a handful of files) so a periodic readdir is cheap; we only do work
@@ -145,6 +146,11 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
   const settled = new Set();
   const lastSize = new Map();     // relative path → last observed size
   const lastGrowTs = new Map();   // relative path → last time the size changed
+  // 0486: agent id → when its file last grew, kept after settling. Keyed by
+  // id so the per-snapshot lookup for each open agent is one Map get.
+  const grewAt = new Map();
+  const agentIdOf = (rel) => rel.slice(rel.lastIndexOf('/') + 1).replace(/^agent-/, '').replace(/\.jsonl$/, '');
+  const noteGrowth = (rel, ts) => { const id = agentIdOf(rel); if (ts > (grewAt.get(id) || 0)) grewAt.set(id, ts); };
   const SETTLE_IDLE_MS = settleIdleMs;
   // 0350 dir-mtime gate state. Measured before the gate: 64 sessions x 137
   // settled files = 8,768 stats per tick (2,989 stat/s, 5.94% of a core).
@@ -200,6 +206,8 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
       try { ev = JSON.parse(line); } catch { continue; }
       const u = ev?.message?.usage;
       if (u && applySidechainUsage(agent, u, ev.message?.model)) changed = true;
+      // 0488: the sub-agent's background Bash jobs, named on the parent slot.
+      if (agent.bgJobs instanceof Map && trackSubagentJobs(agent, ev)) changed = true;
     }
     return changed;
   }
@@ -218,7 +226,7 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
       // old session's filenames don't linger in `settled`/`offsets` forever.
       if (sid !== lastSid) {
         lastSid = sid;
-        offsets.clear(); settled.clear(); lastSize.clear(); lastGrowTs.clear();
+        offsets.clear(); settled.clear(); lastSize.clear(); lastGrowTs.clear(); grewAt.clear();
         primed = false;
         absentTicks = 0;
         lastDirMtimeMs = null; lastSweepTs = 0;
@@ -273,7 +281,7 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
         const present = new Set(files);
         for (const f of offsets.keys()) {
           if (present.has(f)) continue;
-          offsets.delete(f); settled.delete(f); lastSize.delete(f); lastGrowTs.delete(f);
+          offsets.delete(f); settled.delete(f); lastSize.delete(f); lastGrowTs.delete(f); grewAt.delete(agentIdOf(f));
         }
       }
       let changed = false;
@@ -307,11 +315,12 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
           // A file's age belongs to the file.
           lastSize.set(f, size);
           lastGrowTs.set(f, st.mtimeMs);
+          noteGrowth(f, st.mtimeMs);
           if (!primed) continue;
         }
         // Track growth so an idle, fully-read file can settle out of the poll.
         const now = clock();
-        if (lastSize.get(f) !== size) { lastSize.set(f, size); lastGrowTs.set(f, now); }
+        if (lastSize.get(f) !== size) { lastSize.set(f, size); lastGrowTs.set(f, now); noteGrowth(f, now); }
         if (await readNew(join(dir, f), f, size)) changed = true;
         // 0350: settle on idle alone, even with an unfinished last line (a
         // sub-agent that crashed mid-write). Re-reading that fragment every
@@ -367,6 +376,12 @@ export function startSubagentUsageTailer({ agent, statPollMs = POLL_MS, settleId
     // the launch receipt (claude prints "Backgrounded agent"), not the finish,
     // so the pairing map empties the instant the agents start. That is why the
     // card hardcoded "1bg" for any fan-out of any size.
+    // 0486: when an agent's file last grew, settled or not (lastGrowTs drops a
+    // settled file). Feeds the quiet cap on open background agents. A settled
+    // file's growth is seen on the next sweep (at most settledRecheckMs).
+    lastGrowthOf(agentId) {
+      return grewAt.get(String(agentId)) || 0;
+    },
     liveAgents({ withinMs = 60_000, now = clock() } = {}) {
       const out = [];
       for (const [rel, ts] of lastGrowTs) {

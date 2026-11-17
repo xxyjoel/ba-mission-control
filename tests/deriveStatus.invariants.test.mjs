@@ -320,15 +320,18 @@ test('bg never alters status', () => {
   }
 });
 
-test('bg count precedence: pending map, then live files, then uncounted hook clock', () => {
+test('bg count: the larger of named agents and live files, then the uncounted hook clock', () => {
+  // 0486 changed this on purpose. Live files used to be read only when the
+  // pending map was empty, so one open Task beside two writing agents read 1.
+  // Each live file is an agent that is writing, so the larger number wins.
   const live = thunk([{ id: 'f1', lastGrowTs: NOW - 10 }, { id: 'f2', lastGrowTs: NOW - 20 }]);
   const pending = new Map([['t', { label: 'L', type: 'agent', startTs: NOW - 1000 }]]);
   const r1 = deriveStatus(sig({ pendingSubagents: pending, liveSubAgents: live }), NOW);
-  assert.equal(r1.bgCount, 1);
-  assert.equal(live.calls.length, 0, 'live files not read while the pending map has entries');
+  assert.equal(r1.bgCount, 2);
+  assert.equal(r1.activeSubagents.length, 2, 'the list matches the count');
   const r2 = deriveStatus(sig({ liveSubAgents: live }), NOW);
   assert.equal(r2.bgCount, 2);
-  assert.deepEqual(live.calls, [[{ withinMs: 60_000, now: NOW }]]);
+  assert.deepEqual(live.calls.at(-1), [{ withinMs: 60_000, now: NOW }]);
   assert.equal(deriveStatus(sig({ lastSubHookTs: NOW - 59_999 }), NOW).bgCount, null);
   assert.equal(deriveStatus(sig({ lastSubHookTs: NOW - 60_000 }), NOW).bgCount, 0);
 });

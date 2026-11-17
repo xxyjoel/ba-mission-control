@@ -42,6 +42,7 @@
 // (W5 explainability); nothing reads it for behavior.
 
 import { BG_SUB_ACTIVE_MS } from './bgSessions.mjs';
+import { liveOpenAgents } from './bgShellJobs.mjs';
 
 // How recently claude must have written PTY bytes for the idle→working overlay
 // to trust a lingering "esc to interrupt" hint. A live spinner repaints well
@@ -83,6 +84,8 @@ export function deriveStatus(signals, now) {
     scanWorking,
     liveSubAgents,
     scanTrust,
+    bgAgents = null,
+    agentLastGrowth = null,
   } = signals || {};
 
   // 0180: the JSONL has no permission-prompt event, so when the connector
@@ -205,16 +208,24 @@ export function deriveStatus(signals, now) {
   // sub-agent writes its own agent-<id>.jsonl, and a file still being written
   // is an agent still working.
   let liveSubFiles = [];
-  if (pendingSubagents.size === 0) {
-    try {
-      liveSubFiles = liveSubAgents?.({ withinMs: BG_SUB_ACTIVE_MS, now }) || [];
-    } catch { liveSubFiles = []; }
-  }
+  try {
+    liveSubFiles = liveSubAgents?.({ withinMs: BG_SUB_ACTIVE_MS, now }) || [];
+  } catch { liveSubFiles = []; }
   let bgCount = 0;
   const bgCutoff = now - BG_ABANDON_MS;
   for (const s of pendingSubagents.values()) {
     if ((s?.startTs ?? 0) >= bgCutoff) bgCount++;
   }
+  // 0486: background agents opened by their launch receipt stay counted until
+  // their finish notice, however long they go quiet. The cap is quiet time:
+  // an open agent whose file has not grown for BG_ABANDON_MS is not counted
+  // (a stop from claude's task list leaves no finish notice).
+  const openAgents = liveOpenAgents(bgAgents, agentLastGrowth, now, BG_ABANDON_MS);
+  bgCount += openAgents.length;
+  // Agents mc never saw launch (it started after them) still show by their
+  // files. Each live file is also one of the agents above, so the larger
+  // number wins rather than the sum.
+  if (liveSubFiles.length > bgCount) bgCount = liveSubFiles.length;
   // Fall back to the hook clock when the transcript never showed the Task
   // (a background fork's sub events land in the status file with no matching
   // parent-transcript record — the gtm-gov-miner shape above).
@@ -223,7 +234,6 @@ export function deriveStatus(signals, now) {
   // gtm-gov-miner 2026-09-16). Use bgSessions' 60s window for the chip;
   // SUB_ACTIVE_MS still serves its other, tighter callers.
   // Real count first: one per live agent file.
-  if (bgCount === 0 && liveSubFiles.length > 0) bgCount = liveSubFiles.length;
   // Last resort — a background fork whose sub events reach the status file
   // with no transcript record and no per-agent file. Work IS happening but is
   // not countable, so report it as uncounted instead of inventing a number.
@@ -277,17 +287,21 @@ export function deriveStatus(signals, now) {
     if (m >= STUCK_MIN_THRESHOLD) stuckMin = m;
   }
   // Snapshot in-flight fan-out for the card / Zoom. Elapsed derived at read.
-  const activeSubagents = pendingSubagents.size > 0
-    ? [...pendingSubagents.values()]
-        .sort((a, b) => a.startTs - b.startTs)
-        .map((s) => ({ label: s.label, type: s.type, elapsedMs: now - s.startTs }))
-    // 0411: name the background fan-out from its files so the zoom list and
-    // the card chip agree instead of the list sitting empty beside a count.
-    : liveSubFiles.map((a) => ({
-        label: `agent ${String(a.id).slice(0, 8)}`,
-        type: 'agent',
-        elapsedMs: now - a.lastGrowTs,
-      }));
+  // 0486: foreground calls, then open background agents, both named; then
+  // live files no named agent accounts for, so the list length matches bgCount.
+  const named = [...pendingSubagents.values()]
+    .filter((s) => (s?.startTs ?? 0) >= bgCutoff)
+    .sort((a, b) => a.startTs - b.startTs)
+    .map((s) => ({ label: s.label, type: s.type, elapsedMs: now - s.startTs }))
+    .concat(openAgents.map((a) => ({ label: a.label, type: a.type, elapsedMs: now - a.startTs })));
+  const openIds = new Set(openAgents.map((a) => a.id));
+  // 0411: name the background fan-out from its files so the zoom list and
+  // the card chip agree instead of the list sitting empty beside a count.
+  const extra = liveSubFiles
+    .filter((a) => !openIds.has(a.id))
+    .slice(0, Math.max(0, liveSubFiles.length - named.length))
+    .map((a) => ({ label: `agent ${String(a.id).slice(0, 8)}`, type: 'agent', elapsedMs: now - a.lastGrowTs }));
+  const activeSubagents = named.concat(extra);
 
   return { status, approvalWaiting, stuckMin, bgCount, bgStatus, activeSubagents, reason };
 }

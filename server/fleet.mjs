@@ -16,6 +16,7 @@ import { Agent } from './agent.mjs';
 import { MockAgent } from './mockAgent.mjs';
 import { PtyAgent } from './ptyAgent.mjs';
 import { samplePids } from './procStats.mjs';
+import { sampleClaudeShells, matchShells, UNTRACKED_MIN_AGE_MS } from './bgShellJobs.mjs';
 import { getProvider } from './providers/index.mjs';
 
 const DEFAULT_SLOTS = 10;
@@ -51,6 +52,9 @@ const TAILER_POLL_IDLE_MS = 3000;
 // 0387: per-agent CPU/RSS sampling rides the same tick, divided — one `ps`
 // fork per PROC_SAMPLE_EVERY ticks (→ 3s active / 6s idle) covering all pids.
 const PROC_SAMPLE_EVERY = 2;
+// 0484: the background-shell check runs every this many ticks (6 s active /
+// 12 s idle). Two `ps` calls, about 30 ms in all on 2026-11-17.
+const BG_SHELL_SAMPLE_EVERY = 4;
 
 // When MC_MOCK is set, every launch instantiates a MockAgent that replays
 // the named fixture instead of spawning a real `claude` subprocess. The
@@ -202,7 +206,9 @@ export class Fleet extends EventEmitter {
       try { a.tailerTick?.(); } catch {}
       if (a.status === 'working' || a.status === 'waiting') active = true;
     }
-    if ((this.#tailerTickCount++ % PROC_SAMPLE_EVERY) === 0) this.#sampleProcStats();
+    const tick = this.#tailerTickCount++;
+    if ((tick % PROC_SAMPLE_EVERY) === 0) this.#sampleProcStats();
+    if ((tick % BG_SHELL_SAMPLE_EVERY) === 0) this.#sampleBgShells();
     this.#scheduleTailerPoll(active ? TAILER_POLL_MS : TAILER_POLL_IDLE_MS);
   }
 
@@ -234,6 +240,44 @@ export class Fleet extends EventEmitter {
         if (changed) a.emit?.('change');
       }
     }).catch(() => { this.#procSampleInflight = false; });
+  }
+
+  #bgShellSampleInflight = false;
+
+  // 0483/0484: match each slot's background jobs to the Bash shells its claude
+  // has running. A job whose shell is gone has ended (a stop from claude's task
+  // list leaves no finish notice). A shell no job claims is kept as untracked:
+  // a sub-agent's job, or one from before mc started. The card shows it once
+  // claude's turn is over (visibleJobs). Runs for every slot: a job the log
+  // never named is exactly the one this must find.
+  #sampleBgShells() {
+    if (this.#bgShellSampleInflight) return;
+    const byPid = new Map();
+    for (const a of this.agents) {
+      const pid = a?.pty?.pid;
+      if (a?.bgJobs instanceof Map && Number.isInteger(pid) && pid > 0) byPid.set(pid, a);
+    }
+    if (!byPid.size) return;
+    this.#bgShellSampleInflight = true;
+    const sampleStartTs = Date.now();
+    sampleClaudeShells([...byPid.keys()]).then((shellsByRoot) => {
+      this.#bgShellSampleInflight = false;
+      if (!shellsByRoot) return;
+      for (const [pid, a] of byPid) {
+        // No row for claude (an empty or cut-short ps), or claude restarted
+        // while ps ran: no evidence either way, so change nothing.
+        if (!shellsByRoot.has(pid) || a.pty?.pid !== pid) continue;
+        const { ended, untracked } = matchShells(a.bgJobs, shellsByRoot.get(pid), sampleStartTs);
+        for (const id of ended) a.bgJobs.delete(id);
+        // Emit when the set of shells old enough to show changes, so a shell
+        // that crosses the minimum age between samples still reaches the card.
+        const shown = (list) => (list || [])
+          .filter((x) => sampleStartTs - x.startTs >= UNTRACKED_MIN_AGE_MS).map((x) => x.pid).join(',');
+        const before = shown(a.untrackedShells);
+        a.untrackedShells = untracked;
+        if (ended.length || before !== shown(untracked)) a.emit?.('change');
+      }
+    }).catch(() => { this.#bgShellSampleInflight = false; });
   }
 
   snapshot() {
