@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Every card now says whether the session is ready for you. An idle card with
+  nothing running and no plan left open reads `your turn →` in green; it used
+  to show nothing. A working card with no progress for 5+ minutes reads
+  `take a look →`. Anything still running, in the turn or in the background,
+  never reads green.
+
+### Fixed
+- A Bash command claude runs in the background no longer disappears from view
+  when claude's turn ends. The card's current-item row shows the job with its
+  age (or how many run, and the oldest age), the triage row says
+  `check back`, the zoom header counts the jobs, and Zoom's `Ctrl+U` panel
+  lists them. mc reads all five ways claude reports a background start, jobs a
+  sub-agent starts, and the shells claude has running. A card read IDLE with
+  nothing else for 2 days 18 hours while two leftover wait loops ran.
+- A background agent no longer drops out of the card's count when it goes quiet
+  for more than a minute. It counts from its launch notice until its finish
+  notice. Over 30 days of local logs, half of all sub-agents went quiet that
+  long while running.
+
 ## [1.2.6] — 2026-11-16
 
 1.2.5 never reached npm: its release run failed on a timing bug in a test

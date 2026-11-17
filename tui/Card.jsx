@@ -29,6 +29,7 @@ import { Box, Text } from 'ink';
 import { modelColor, resolveAgentModel } from './lib/models.js';
 import { barCells, sparkLine, fmtK, fmtMem, trunc, humanize, fmtDurShort, UNKNOWN, UNMEASURED, fmtMoneyMeasured, fmtKMeasured } from './lib/format.js';
 import { readProjectHealth, healthColor, healthScoreText } from './lib/projectHealth.js';
+import { triageVerdict, backgroundRowText } from './lib/cardVerdict.js';
 
 const STATUS_GLYPH = { working: '●', waiting: '◉', idle: '○', paused: '⏸', error: '✕', empty: '+' };
 
@@ -305,6 +306,21 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
     ? `⋔ ${trunc(humanize(activeSubagents[0].label || activeSubagents[0].type || 'agent'), 42)}`
     : `⋔${subCount} agents running`;
 
+  // 0483/0487: background agents and shell jobs still running share the ↳
+  // row, never the status row (0418). Counts first, then the oldest job's
+  // age (tui/lib/cardVerdict.js). Labels come from claude's tool input:
+  // humanize (0181).
+  const shellJobs = Array.isArray(agent.shellJobs) ? agent.shellJobs : [];
+  const jobCount = shellJobs.length;
+  // 0409/0416: the count comes from the listed agents only. deriveStatus
+  // builds activeSubagents to the same length as bgCount when it can count;
+  // live work with an empty list is "running, count unknown" (null).
+  const agentCount = subCount > 0 ? subCount : (bgLive ? null : 0);
+  const bgRowText = backgroundRowText({
+    agents: activeSubagents, agentCount, bgLive, jobs: shellJobs,
+    humanize: (t) => trunc(humanize(t), 42),
+  });
+
   // Session vitals — cheap counters already on the snapshot. Anchored to a
   // single `now` so uptime and time-in-state advance together each render.
   // 0409: `(agent.spawnedAt || now)` made a MISSING spawn timestamp render as
@@ -336,34 +352,16 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
   // red needs-you-now, yellow soon, green harvestable, dim leave-alone.
   const allDone = todoTotal > 0 && todoDone >= todoTotal;
   const showBurndown = todoTotal > 0 && (agent.status === 'working' || agent.status === 'idle');
-  let action, actionColor;
-  if (agent.status === 'error') {
-    action = 'errored · see log'; actionColor = theme.red;
-  } else if (agent.status === 'paused') {
-    action = 'paused'; actionColor = theme.dim;
-  } else if (agent.status === 'waiting') {
-    action = approval ? 'needs approval · answer to proceed' : 'needs input · answer to continue';
-    actionColor = approval ? theme.red : theme.yellow;
-  } else if (agent.status === 'idle' && bgLive) {
-    // 0409: reads the same liveness flag as the chip above, so the verb and the
-    // chip can never disagree — and so an unknown-but-live background count
-    // still suppresses "needs a nudge →" on a genuinely busy slot.
-    // 0408/D2: background agents keep working while the foreground turn is
-    // idle (e7e28fa keeps status 'idle' during fan-out). The triage verb must
-    // read the WHOLE card's truth, not status alone — `IDLE · 3bg WORKING`
-    // above a `needs a nudge →` told the operator to interrupt a busy slot.
-    // Use the working-branch verb instead.
-    action = 'check back'; actionColor = theme.dim;
-  } else if (agent.status === 'idle') {
-    // 0386: no `idle · Xm in state` fallback — status already sits top-right
-    // and the duration bottom-right, so the midbox restatement was noise.
-    // The row only speaks when it has something actionable to say.
-    action = allDone ? 'ready to review →' : todoTotal > 0 ? 'needs a nudge →' : '';
-    actionColor = allDone ? theme.green : todoTotal > 0 ? theme.yellow : theme.dim;
-  } else { // working
-    action = todoTotal > 0 ? 'check back' : ''; // 0386: ditto for `working · Xm`
-    actionColor = theme.dim;
-  }
+  // 0487: one verdict per card — does this slot need you, and what to do.
+  // The rules and their order live in tui/lib/cardVerdict.js. Background work
+  // (agents or jobs) on an idle slot reads "check back", never a "done" verb
+  // (0408/D2, 0409, 0483).
+  const verdict = triageVerdict({
+    status: agent.status, approval: !!approval, stuckMin: agent.stuckMin || 0,
+    bgLive, jobCount, todoTotal, todoDone,
+  });
+  const action = verdict.action;
+  const actionColor = { red: theme.red, yellow: theme.yellow, green: theme.green }[verdict.tone] || theme.dim;
 
   // Pre-truncate the two variable-length labels (name, branch) to the actual
   // card width so each renders on ONE line WITHOUT Ink flex-truncation — which
@@ -595,17 +593,10 @@ export default function Card({ agent, focused, threshold, warnPct, borderStyle, 
       <Box>
         <Text color={theme.faint}>↳ </Text>
         <Box flexGrow={1} flexShrink={1} overflow="hidden">
-          {subCount > 0
-            ? <Text color={theme.accent} wrap="truncate">{trunc(subLabel, itemRoom)}</Text>
-            : bgLive
-              /* 0418: background work the server can see but cannot count —
-                 the hook-clock path sets bgStatus live with an empty
-                 activeSubagents array (server/ptyAgent.mjs:1276). Before this
-                 row existed that case showed only in the header chip; with the
-                 chip gone it would have shown nowhere at all. No invented
-                 number: say that it is running, not how many. */
-              ? <Text color={theme.accent} wrap="truncate">{trunc('⋔ background agents running', itemRoom)}</Text>
-              : <Text color={todoCurrent ? theme.dim : theme.faint} wrap="truncate">{trunc(todoCurrent || '—', itemRoom)}</Text>}
+          {bgRowText
+            /* Background agents and shell jobs (bgRowText, built above). */
+            ? <Text color={theme.accent} wrap="truncate">{trunc(bgRowText, itemRoom)}</Text>
+            : <Text color={todoCurrent ? theme.dim : theme.faint} wrap="truncate">{trunc(todoCurrent || '—', itemRoom)}</Text>}
         </Box>
       </Box>
 

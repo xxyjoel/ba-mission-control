@@ -232,10 +232,19 @@ others cannot see it. Open `:bg` to look at them. No mark is drawn when the
 count is zero, and none is drawn when claude's session list could not be read —
 an absent mark never claims there is only one conversation.
 
-The triage row answers the scan-10-cards question "does this need me, when, and
-what next": `check back` (working), `ready to review →` (idle, plan complete),
-`needs a nudge →` (idle, plan unfinished), `needs input · answer to continue`
-(waiting) — colored by urgency.
+The triage row answers the scan-10-cards question "is this ready for me":
+- `your turn →` (green): claude is idle, nothing runs in the background, and
+  no plan is left open. Jump in.
+- `ready to review →` (green): the same, with every planned step done.
+- `check back`: not yet. claude is working through a plan, or its turn is
+  over but background agents or shell jobs still run. The `↳` row says what.
+- `needs a nudge →` (yellow): claude stopped with planned steps left.
+- `take a look →` (yellow): working, but no progress for 5+ minutes (STUCK).
+- `needs input · answer to continue` (yellow) and
+  `needs approval · answer to proceed` (red): claude is waiting on you.
+
+A working card with no plan leaves the row blank; its status already says
+WORKING. Nothing that is still running ever reads green.
 
 **Paging.** The grid shows at most **Max windows per pane** cards at once
 (Settings → LAYOUT, `windowsPerPane`, default 9 — a 3×3); when more sessions
@@ -308,8 +317,26 @@ Verifiability — every action is observable:
   card: when any are in flight the current-item row shows `⋔{n}` (the count, or
   the single agent's label), and Zoom lists each with its elapsed time. The
   server pairs each `tool_use` with its returning `tool_result` to know what's
-  live. STUCK is suppressed while sub-agents run — they work on sidechains the
+  live. A **background** agent counts from its launch notice until its finish
+  notice, however long it goes quiet; an agent whose file has not grown for 30
+  minutes stops counting (a stop from claude's task list leaves no notice).
+  Agents that started before mc did are counted from their files while they
+  write. STUCK is suppressed while sub-agents run — they work on sidechains the
   main thread can't see, so the parent's activity clock legitimately goes quiet.
+- **Background shell jobs** (a Bash command claude runs in the background, or
+  one it moves there when it runs too long) are shown too. claude's turn ends
+  while they run, so the status still reads IDLE, but the current-item row
+  shows `job 36m: <description>` or `2 jobs · oldest 2d18h`, the
+  triage row says `check back`, the zoom header shows `N jobs running`, and
+  Zoom's `Ctrl+U` panel lists each job with its age. The fleet log notes when
+  each one ends.
+  - Names and start times come from claude's session log, including jobs a
+    sub-agent starts.
+  - Every 6–12 seconds mc also lists the shells claude has running for its
+    Bash commands. A job whose shell is gone has ended (a stop from claude's
+    task list leaves no notice). A shell no logged job claims (one started
+    before mc did) shows as an unnamed job once claude's turn is over.
+  - A restarted claude starts with no jobs.
 - **Sub-agent token + cost consumption is counted.** Sub-agent turns are written
   to a separate tree (`<sessionId>/subagents/agent-*.jsonl`) the main tailer
   never reads, so their tokens, `cost`, and **tok/min** used to be invisible — a
