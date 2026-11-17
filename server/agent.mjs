@@ -958,6 +958,10 @@ export class Agent extends EventEmitter {
       // expose one snapshot shape — tests/ptyAgent.test.mjs pins that.
       bgCount: this.pendingSubagents?.size || 0,
       bgStatus: (this.pendingSubagents?.size || 0) > 0 ? 'working' : null,
+      // 0483: background shell jobs. The legacy stream-json path never reads
+      // the session log they are recorded in, so it reports none. Present so
+      // both classes expose one snapshot shape.
+      shellJobs: [],
       // Per-slot cost cap (USD) and whether it's currently capping.
       // 0 means disabled. capReached lets the UI render a card decoration
       // without recomputing thresholds on every render.

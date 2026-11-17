@@ -15,6 +15,12 @@
 // the branch cut to 3 cells and run into the clean-tree dot. The session-id
 // tag (lowest priority) now drops so the row reads `HAIKU 4.5  ⎇ main  …  ●`.
 // Every other case is unchanged.
+//
+// 0487 deliberately changed four idle cases with no plan and nothing running
+// in the background: "idle fable-5.1 …", "unknown model …", "legacy shape …"
+// and "zero-valued fresh session …". Their blank triage row now reads
+// `▸ your turn →`, so the grid says which sessions are ready for the owner.
+// No other line in any case changed (checked line by line on 2026-11-17).
 
 import './lib/force-color.js';
 import React from 'react';

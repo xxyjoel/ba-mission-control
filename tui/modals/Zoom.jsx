@@ -199,7 +199,11 @@ export default function Zoom({
   // Stats panel (shed LAST): 1 marginTop + 9 USAGE rows (title + 8 stat rows)
   // + the ACTIVE AGENTS block when sub-agents run (1 marginTop + 1 title + n).
   const nSub = Array.isArray(agent.activeSubagents) ? agent.activeSubagents.length : 0;
-  const statsRows = 1 + 9 + (nSub > 0 ? 2 + nSub : 0);
+  // 0483: + the BACKGROUND JOBS block (1 marginTop + 1 title + n), charged
+  // exactly like ACTIVE AGENTS so the pane's height stays right (0404).
+  const shellJobs = Array.isArray(agent.shellJobs) ? agent.shellJobs : [];
+  const nJobs = shellJobs.length;
+  const statsRows = 1 + 9 + (nSub > 0 ? 2 + nSub : 0) + (nJobs > 0 ? 2 + nJobs : 0);
   const renderStats = statsExpanded && statsRows <= panelRoom;
   if (renderStats) panelRoom -= statsRows;
 
@@ -231,6 +235,9 @@ export default function Zoom({
   // the fixed chips, the way Card.jsx budgets its title/meta rows. name,
   // branch and resolvedModel come from untrusted session state → humanize().
   const permText = agent.permissionMode ? `perm: ${agent.permissionMode}` : '';
+  // 0483: running background shell jobs, counted in the header so they show
+  // without opening the stats panel. Ctrl+U lists them.
+  const jobsText = nJobs > 0 ? `${nJobs} job${nJobs === 1 ? '' : 's'} running` : '';
   const updateText = claudeUpdate
     ? `⬆ update${claudeUpdate.version ? ` ${claudeUpdate.version}` : ''}` : '';
   const resolvedText = unknownResolved
@@ -246,6 +253,7 @@ export default function Zoom({
   const behindChip = !gitNone && agent.behind > 0 ? ` ↓${agent.behind}` : '';
   const gitChipsW = dirtyChip.length + aheadChip.length + behindChip.length;
   const rightW = (updateText ? updateText.length + 4 : 0)
+    + (jobsText ? jobsText.length + 4 : 0)
     + (permText ? permText.length + 4 : 0)
     + `${statusGlyph} ${statusWord}`.length;
   const nameStr = trunc(humanize(agent.name || '—'), 24);
@@ -304,6 +312,12 @@ export default function Zoom({
               {/* claude's own update notice, lifted out of the PTY body —
                   rendered faint so it reads as ambient chrome (0408/U1). */}
               <Text color={theme.faint}>{updateText}</Text>
+              <Text color={theme.faint}>  · </Text>
+            </>
+          )}
+          {jobsText !== '' && (
+            <>
+              <Text color={theme.accent}>{jobsText}</Text>
               <Text color={theme.faint}>  · </Text>
             </>
           )}
@@ -521,6 +535,18 @@ export default function Zoom({
                     <Text color={theme.fg}>⋔ {humanize(String(s.label || s.type || 'agent')).slice(0, 24)}</Text>
                     <Box flexGrow={1} />
                     <Text color={theme.dim}>{fmtDuration(s.elapsedMs || 0)}</Text>
+                  </Box>
+                ))}
+              </Box>
+            )}
+            {nJobs > 0 && (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color={theme.accent}>BACKGROUND JOBS ({nJobs})</Text>
+                {shellJobs.map((j, i) => (
+                  <Box key={j.id || i}>
+                    <Text color={theme.fg}>{j.label ? humanize(String(j.label)).slice(0, 24) : 'unnamed job'}</Text>
+                    <Box flexGrow={1} />
+                    <Text color={theme.dim}>{fmtDuration(j.elapsedMs || 0)}</Text>
                   </Box>
                 ))}
               </Box>

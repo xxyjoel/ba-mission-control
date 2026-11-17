@@ -21,6 +21,7 @@ import { summarizeToolInput, SUBAGENT_TOOLS, subagentLabel } from './eventShapes
 import { detectPrompt, promptFromToolUse } from './detectPrompt.mjs';
 import { updateSpark } from './spark.mjs';
 import { knownClaudeMode } from './permissionModes.mjs';
+import { noteBashUse, trackJobStart, trackJobEnds, trackJobStop, trackAgentLaunch, trackAgentEnds } from './bgShellJobs.mjs';
 // Ring size + text ceilings are derived from SETTINGS_SCHEMA's `fleetLogLines`
 // max, so the log can always be supplied with as many lines as it may be set to
 // (see the FLEET-LOG SUPPLY BUDGET block in tui/lib/settings.js). This used to
@@ -107,6 +108,29 @@ function trackSubagentEnd(agent, toolUseId) {
   if (typeof toolUseId === 'string') agent.pendingSubagents?.delete(toolUseId);
 }
 
+// 0483: end the background shell jobs a finish notice names, and note each in
+// the fleet log. Returns true when a tracked job ended.
+// 0485: a record's own time (claude stamps every record), else now. The
+// background-job match needs the tool_use time, not the time mc read it: the
+// startup replay and a slow tail read records long after they were written.
+function recordTs(ev) {
+  const t = Date.parse(ev?.timestamp || '');
+  return Number.isFinite(t) ? t : Date.now();
+}
+
+function noteJobEnds(agent, text) {
+  const ended = trackJobEnds(agent, text);
+  for (const j of ended) {
+    pushTail(agent, { kind: 'sys', text: `background job ${j.status || 'ended'}: ${j.label}`.slice(0, 240) });
+  }
+  // 0486: the same notice ends a background agent (its task-id is the agentId).
+  const agentsEnded = trackAgentEnds(agent, text);
+  for (const a of agentsEnded) {
+    pushTail(agent, { kind: 'sys', text: `background agent ${a.status || 'ended'}: ${a.label}`.slice(0, 240) });
+  }
+  return ended.length > 0 || agentsEnded.length > 0;
+}
+
 // Pull whatever text is in a claude message.content payload. The
 // shape varies by event — strings in user events, arrays of
 // {type:text|tool_use|...} in assistant events. Returns null when
@@ -189,12 +213,24 @@ export function parseEvent(ev, agent) {
 
   // Noise we intentionally drop: ai-title, last-prompt, attachment,
   // file-history-snapshot, queue-operation, agent-name, and anything unknown.
+  // (0483: queue-operation and queued_command attachments are read for one
+  // thing only, background-job finish notices, just below — still without
+  // touching the clocks.)
   // CRITICAL (0394): noise must return BEFORE the clock bumps below. The old
   // order bumped lastConnectorTs on every line — so a metadata write (bridge
   // marker, title refresh) HOURS after a turn ended made the connector look
   // "fresher" than the Stop hook, and the idle-branch arbitration handed the
   // card back to a stale connector 'working' (gtm-gov-miner, 2026-08-29:
   // idle session showed WORKING after a 17:23 title touch vs a 16:52 Stop).
+  // 0483: claude was busy when a background job finished, so the notice was
+  // queued: a queue-operation record, repeated as a queued_command
+  // attachment. Read the finish from either one. Both record types are
+  // otherwise noise, so this returns BEFORE the clock bumps (0394).
+  if (ev.type === 'queue-operation') return noteJobEnds(agent, ev.content);
+  if (ev.type === 'attachment') {
+    return ev.attachment?.type === 'queued_command' ? noteJobEnds(agent, ev.attachment.prompt) : false;
+  }
+
   const handler = {
     'user': handleUser,
     'assistant': handleAssistant,
@@ -268,8 +304,13 @@ function handleUserContent(ev, agent) {
   if (Array.isArray(content)) {
     let changed = false;
     let interrupted = false;
+    let jobsEnded = false;
     for (const p of content) {
+      // 0483: a finish notice delivered as a text block of a user record.
+      if (p?.type === 'text' && noteJobEnds(agent, p.text)) jobsEnded = true;
       if (p?.type === 'tool_result') {
+        // 0486: keep the Agent call's label for a background launch receipt.
+        const pendingSub = agent.pendingSubagents?.get(p.tool_use_id);
         trackSubagentEnd(agent, p.tool_use_id);
         const text = typeof p.content === 'string'
           ? p.content
@@ -280,6 +321,11 @@ function handleUserContent(ev, agent) {
         // Without this the card read WORKING while claude sat idle until the
         // next prompt or the 60s idle_prompt; un-hooked sessions went STUCK.
         if (/^\s*\[Request interrupted by user/.test(text)) interrupted = true;
+        // 0483: a Bash call that went to the background. Only the receipt
+        // that OPENS the result counts, and only for a call seen as Bash.
+        trackJobStart(agent, p.tool_use_id, text, recordTs(ev));
+        // 0486: an Agent call whose receipt says it went to the background.
+        if (pendingSub) trackAgentLaunch(agent, text, pendingSub, recordTs(ev));
         pushTail(agent, {
           kind: 'sys',
           text: `← tool_result ${p.is_error ? '(error)' : ''}\n${text.slice(0, 4000)}`,
@@ -311,12 +357,17 @@ function handleUserContent(ev, agent) {
         agent.hookStatusTs = Date.now();
       }
     }
-    return changed;
+    return changed || jobsEnded;
   }
 
   // Plain user prompt.
   const text = extractMessageText(content);
   if (!text) return false;
+
+  // 0483: claude was idle when a background job finished, so the notice
+  // arrives as a user record and starts a turn. End the job; the record is
+  // still read as a prompt below, as before.
+  noteJobEnds(agent, text);
 
   // /clear resets the conversation. It arrives as a user message wrapped in
   // `<command-name>/clear</command-name>` (the local_command system event only
@@ -399,6 +450,10 @@ function handleAssistant(ev, agent) {
       pushTail(agent, { kind: 'tool', tool: p.name, text: summary });
       agent.activity = `${p.name}: ${summary}`.slice(0, 200);
       trackSubagentStart(agent, p);
+      // 0483: pair a Bash call with its background-start receipt, and end a
+      // job that TaskStop names (a stop leaves no finish notice).
+      noteBashUse(agent, p, recordTs(ev));
+      trackJobStop(agent, p);
       // Does this tool block on the user? (AskUserQuestion / ExitPlanMode)
       const tp = promptFromToolUse(p.name, p.input);
       if (tp) blockingPrompt = tp;

@@ -31,6 +31,7 @@
 // - R13: spawn is injectable for tests — defaults to node-pty.spawn.
 
 import { deriveStatus } from './deriveStatus.mjs';
+import { jobsSnapshot, visibleJobs } from './bgShellJobs.mjs';
 import { PtyCore, bottomContentRows, childEnv } from './ptyCore.mjs';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -263,6 +264,16 @@ export class PtyAgent extends PtyCore {
     // mutated by jsonlConnector on tool_use/tool_result. Surfaced as
     // activeSubagents in toJSON for the ⋔{n} card indicator + Zoom list.
     this.pendingSubagents = new Map();
+    // 0483: background shell jobs of the CURRENT claude process —
+    // Map<job id,{label,startTs}>, filled by jsonlConnector from the session
+    // log, pruned by Fleet's liveness check, cleared on every spawn.
+    this.bgJobs = new Map();
+    // 0484: claude Bash shells no tracked job claims ([{pid, startTs}]), set
+    // by Fleet's process check. Shown as jobs once claude's turn is over.
+    this.untrackedShells = [];
+    // 0486: background agents opened by their launch receipt and closed by
+    // their finish notice — Map<agentId,{label,type,startTs}>.
+    this.bgAgents = new Map();
     // 0452: git state is unknown (null) until refreshGit reads it; isRepo
     // null = not checked yet, false = cwd is not a repo (no git chips).
     this.isRepo = null;
@@ -354,6 +365,11 @@ export class PtyAgent extends PtyCore {
   }
 
   onSpawned({ modelArg }) {
+    // 0483: background jobs belong to the process that started them. A new
+    // claude starts with none, and the startup replay never copies old ones.
+    this.bgJobs.clear();
+    this.untrackedShells = [];
+    this.bgAgents.clear();
     const kind = this.resuming ? 'resume' : 'spawn';
     dlog('pty', kind, { slot: this.slot, pid: this.pty?.pid, model: modelArg, sid: String(this.sessionId).slice(0, 8) });
     this.appendTail({
@@ -622,6 +638,9 @@ export class PtyAgent extends PtyCore {
       scanApproval:    () => this.#scanApprovalPrompt(),
       scanWorking:     () => this.#scanWorking(),
       liveSubAgents:   (opts) => this.usageTailer?.liveAgents?.(opts),
+      // 0486: open background agents and when each one's file last grew.
+      bgAgents:        this.bgAgents,
+      agentLastGrowth: (id) => this.usageTailer?.lastGrowthOf?.(id) || 0,
       // 0468: only before the first drain — after it the dialog has been
       // answered, and a quoted copy in the transcript must not flip status.
       scanTrust:       () => !this.ready && this.#scanTrustDialog(),
@@ -632,8 +651,9 @@ export class PtyAgent extends PtyCore {
     // 0286: status, stuckMin, bg and the fan-out snapshot come from the pure
     // deriveStatus (server/deriveStatus.mjs — every branch and the incident
     // notes behind it live there). The one clock read is here.
+    const now = Date.now();
     const { status, stuckMin, bgCount, bgStatus, activeSubagents } =
-      deriveStatus(this.#collectSignals(), Date.now());
+      deriveStatus(this.#collectSignals(), now);
     // 0254: the temporary MC_DEBUG status probe was removed — the hook-based
     // source-of-truth (verified live 2026-07-01) replaced the regex guesswork it
     // was diagnosing.
@@ -678,6 +698,13 @@ export class PtyAgent extends PtyCore {
       stuckMin,
       bgCount,       // 0403: outstanding background agents (Task/Workflow or sub hooks)
       bgStatus,      // 0403: 'working' while any are live, else null
+      // 0483: background shell jobs still running, oldest first. Reported
+      // apart from `status`, like background agents (0403/0418).
+      // 0484: plus claude Bash shells no job claims, once the turn is over
+      // and no background agent runs (visibleJobs explains why).
+      shellJobs: visibleJobs(jobsSnapshot(this.bgJobs, now), this.untrackedShells, {
+        countUntracked: (status === 'idle' || status === 'waiting') && !bgStatus, now,
+      }),
       costCapUSD: this.costCapUSD,
       capReached: this.costCapUSD > 0 && this.costSession >= this.costCapUSD,
       apiErrorCount: this.apiErrorCount || 0,

@@ -364,6 +364,8 @@ export class CursorAgent extends PtyCore {
       stuckMin,
       bgCount,
       bgStatus,
+      // 0483: Cursor's transcript records no background shell jobs.
+      shellJobs: [],
       costCapUSD: this.costCapUSD,
       capReached: this.costCapUSD > 0 && (this.costSession ?? 0) >= this.costCapUSD,
       apiErrorCount: this.apiErrorCount || 0,

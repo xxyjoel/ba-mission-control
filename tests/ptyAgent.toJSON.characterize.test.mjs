@@ -98,7 +98,9 @@ test('toJSON key set and order is pinned', (t) => {
     'procCpu', 'procMemKb', 'lastTokRate', 'activity', 'cwd', 'sessionId',
     'permissionMode', 'workingStartTs', 'spawnedAt', 'sessionStartedAt',
     'claudeVersion', 'stateSince', 'turnCount', 'messageCount', 'lastEventTs',
-    'stuckMin', 'bgCount', 'bgStatus', 'costCapUSD', 'capReached',
+    // 0483: shellJobs added on purpose — background shell jobs, after the
+    // background-agent fields.
+    'stuckMin', 'bgCount', 'bgStatus', 'shellJobs', 'costCapUSD', 'capReached',
     'apiErrorCount', 'lastApiErrorTs', 'tail', 'todos',
   ]);
 });
@@ -495,17 +497,23 @@ test('activeSubagents from the pending map: sorted by startTs, elapsed on the on
   ]);
 });
 
-test('abandoned Task (>30min): not counted, still suppresses stuck, still listed, liveAgents not consulted', (t) => {
+test('abandoned Task (>30min): not counted, not listed, still suppresses stuck; a live file still counts', (t) => {
+  // 0486 changed this on purpose: the abandoned entry used to stay in the list
+  // beside a count of 0, and live files were not read while it sat in the map.
+  // The card's "jump in?" verdict needs the list and the count to agree.
   const { agent } = boot(t);
-  let calls = 0;
-  agent.usageTailer = { liveAgents: () => { calls++; return [{ id: 'x', lastGrowTs: T0 }]; }, stop() {}, scan() {} };
+  let live = [];
+  agent.usageTailer = { liveAgents: () => live, lastGrowthOf: () => 0, stop() {}, scan() {} };
   agent.pendingSubagents.set('old', { label: 'ghost', type: 'agent', startTs: T0 - 30 * MIN - 1 });
   agent._statusValue = 'working';
   agent.lastEventTs = T0 - 40 * MIN;
   const j = agent.toJSON();
   assert.deepEqual(pick(j), { status: 'working', stuckMin: 0, bgCount: 0, bgStatus: null });
-  assert.deepEqual(j.activeSubagents, [{ label: 'ghost', type: 'agent', elapsedMs: 30 * MIN + 1 }]);
-  assert.equal(calls, 0, 'live sub files are read only when the pending map is empty');
+  assert.deepEqual(j.activeSubagents, []);
+  live = [{ id: 'abcdef0123456789', lastGrowTs: T0 }];
+  const k = agent.toJSON();
+  assert.equal(k.bgCount, 1, 'a file still being written is an agent still working');
+  assert.deepEqual(k.activeSubagents, [{ label: 'agent abcdef01', type: 'agent', elapsedMs: 0 }]);
 });
 
 test('Task exactly at the abandon cutoff still counts', (t) => {
