@@ -303,7 +303,10 @@ export default function App({
 
   // Force re-render bumper, used by SIGWINCH listener so cardW recomputes
   // when the user resizes the terminal.
-  const [, bumpResize] = useState(0);
+  const [resizeTick, bumpResize] = useState(0);
+  // Re-render after the post-resize repaint (0478) so zoom re-places the
+  // terminal's real cursor; Ink's forced redraw forgets it.
+  const [, bumpRepaint] = useState(0);
   const [termSize, setTermSize] = useState({ cols: stdout.columns || 180, rows: stdout.rows || 50 });
 
   // Toast queue. Each entry: { id, kind: 'error'|'warn'|'info'|'ok', text, expiresAt }
@@ -455,6 +458,24 @@ export default function App({
     }, VIEWPORT_SETTLE_MS);
     return () => clearTimeout(t);
   }, [fleet, termSize.cols, termSize.rows]);
+
+  // 0478: a resize left rows of the old frame on screen — a second status bar,
+  // card edges at the top. Ink draws each frame with cursor moves relative to
+  // the last one and, with incrementalRendering, rewrites only changed lines.
+  // By the time Ink runs, the terminal has already trimmed or re-flowed the
+  // old frame, so those moves land on the wrong rows. Ink clears only when the
+  // width shrinks, and that erase is relative too. Once the resize settles,
+  // wipe the whole screen and paint the frame in full: the suspend/resume
+  // round trip is Ink's own forced full redraw (as on SIGCONT above).
+  useEffect(() => {
+    if (resizeTick === 0) return;
+    const t = setTimeout(() => {
+      suspendTerminal(() => { stdout.write('\x1b[2J\x1b[H'); })
+        .then(() => bumpRepaint((n) => n + 1))
+        .catch(() => {});
+    }, VIEWPORT_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [resizeTick, suspendTerminal, stdout]);
 
   // ── One-shot auth-status banner ────────────────────────
   // Convert the preflight result into a toast on first render so the user
@@ -2445,6 +2466,7 @@ export default function App({
       cmdBuffer={cmdBuffer}
       filterActive={filterActive}
       theme={theme}
+      cols={termSize.cols}
     />
   );
 

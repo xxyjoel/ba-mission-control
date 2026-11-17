@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- A terminal resize no longer leaves rows of the old screen behind (a second
+  status bar, a stray border, mc's key hints inside claude's text). Once the
+  resize has been quiet for 250 ms, mc repaints its whole screen.
+- A narrow window no longer cuts figures short. The zoom stats line read
+  `$428 (w$506)  7d3` for $4281.56, wk $5068.99 and 7d 35% at 81 columns; it
+  now drops whole items and keeps the rest exact. The status bar no longer runs
+  its two hint strings together.
+- The zoom header keeps claude's status word at every width. At 81 columns it
+  used to lose the permission mode and the status word off its right edge.
+
 ## [1.2.7] — 2026-11-17
 
 ### Added

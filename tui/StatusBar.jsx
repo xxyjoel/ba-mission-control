@@ -6,8 +6,9 @@
 // caret. An active filter is shown as a chip even when not typing.
 
 import React, { useEffect, useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 import { isSandboxed } from './lib/configDir.js';
+import { cellWidth, trunc } from './lib/format.js';
 import { isDebugKeysActive, subscribeDebugKeys } from './lib/debugKeys.js';
 import { isStoreReadOnly } from './lib/sessionStore.js';
 
@@ -47,7 +48,21 @@ function useBlink(enabled, intervalMs = 500) {
   return on;
 }
 
-export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal', cmdBuffer = '', filterActive = '', theme }) {
+const KEY_HINTS = 'esc settings · ? keymap · n new · b bcast · / filter · : cmd';
+const NAV_HINTS = '← ↑ ↓ → move  ↵ open  n new  b bcast  esc settings';
+
+// 0479: which hint strings fit the room left after the chips and the slot
+// label. Ink shrank both strings a little at once, so they ran together on a
+// narrow terminal ("? keym← ↑ ↓ → move"). Now the nav hints show only with
+// room for both and a gap; the key hints are cut with an ellipsis last.
+export function fitHints(room) {
+  const keysW = 4 + cellWidth(KEY_HINTS); // '  : ' + hints
+  if (keysW + 2 + cellWidth(NAV_HINTS) <= room) return { keys: KEY_HINTS, nav: true };
+  if (keysW <= room) return { keys: KEY_HINTS, nav: false };
+  return { keys: room - 4 >= 3 ? trunc(KEY_HINTS, room - 4) : '', nav: false };
+}
+
+export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal', cmdBuffer = '', filterActive = '', theme, cols }) {
   const storeReadOnly = isStoreReadOnly();
   // When the user is typing in the command bar, override the mode chip so
   // the focus is unambiguous.
@@ -57,6 +72,15 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
   const m = MODES[effectiveMode] || MODES.normal;
   const caret = useBlink(cmdMode !== 'normal');
   const debugKeys = useDebugKeys();
+  const { stdout } = useStdout();
+  const width = cols || stdout?.columns || 100;
+  // Room for the hints: the bar's width less paddingX and everything drawn
+  // before them. Mirrors the JSX below.
+  const usedW = 2
+    + (storeReadOnly ? 13 : 0) + (SANDBOXED ? 17 : 0) + (debugKeys ? 12 : 0)
+    + cellWidth(` ${m.label} `) + cellWidth(`  [${focused ? focused.slot : '-'}] ${focused?.name || 'empty'}`)
+    + (filterActive ? cellWidth(`  filter /${filterActive} (/ to clear)`) : 0);
+  const hints = fitHints(width - usedW);
 
   return (
     // 0389: pinned to ONE row and clipped. This bar is the last thing on
@@ -126,8 +150,12 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
               <Text color={theme.faint}> (/ to clear)</Text>
             </>
           )}
-          <Text color={theme.accent}>  : </Text>
-          <Text color={theme.dim} wrap="truncate">esc settings · ? keymap · n new · b bcast · / filter · : cmd</Text>
+          {hints.keys !== '' && (
+            <Box flexShrink={0}>
+              <Text color={theme.accent}>  : </Text>
+              <Text color={theme.dim}>{hints.keys}</Text>
+            </Box>
+          )}
         </>
       )}
 
@@ -137,10 +165,13 @@ export default function StatusBar({ mode = 'normal', focused, cmdMode = 'normal'
           dictated phrase showed as a few characters between two ellipses.
           Hidden while the bar is active; the bar's own "↵ run · esc cancel"
           stays. */}
-      {cmdMode === 'normal' && (
-        <Text color={theme.dim} wrap="truncate">
-          <Text color={theme.accent}>← ↑ ↓ →</Text> move  <Text color={theme.accent}>↵</Text> open  <Text color={theme.accent}>n</Text> new  <Text color={theme.accent}>b</Text> bcast  <Text color={theme.accent}>esc</Text> settings
-        </Text>
+      {/* 0479: shown only when fitHints found room for it beside the key hints. */}
+      {cmdMode === 'normal' && hints.nav && (
+        <Box flexShrink={0}>
+          <Text color={theme.dim}>
+            <Text color={theme.accent}>← ↑ ↓ →</Text> move  <Text color={theme.accent}>↵</Text> open  <Text color={theme.accent}>n</Text> new  <Text color={theme.accent}>b</Text> bcast  <Text color={theme.accent}>esc</Text> settings
+          </Text>
+        </Box>
       )}
     </Box>
   );

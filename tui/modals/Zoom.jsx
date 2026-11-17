@@ -25,7 +25,7 @@
 import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { MODELS, modelColor, resolveAgentModel, modelByCli, resolveModelId } from '../lib/models.js';
-import { barCells, fmtK, fmtMoney, fmtMoneyMeasured, fmtKMeasured, fmtDuration, humanize, trunc, UNKNOWN, UNMEASURED } from '../lib/format.js';
+import { barCells, fitChips, keepWhole, fmtK, fmtMoney, fmtMoneyMeasured, fmtKMeasured, fmtDuration, humanize, trunc, UNKNOWN, UNMEASURED } from '../lib/format.js';
 import { zoomInnerWidth } from '../lib/zoomGeometry.js';
 import { readProjectHealth, healthColor, healthScoreText } from '../lib/projectHealth.js';
 import PtyPane from '../zoom/PtyPane.jsx';
@@ -251,22 +251,76 @@ export default function Zoom({
     : (agent.dirty || 0) > 0 ? ` +${agent.dirty}` : ' ●clean';
   const aheadChip  = !gitNone && agent.ahead  > 0 ? ` ↑${agent.ahead}`  : '';
   const behindChip = !gitNone && agent.behind > 0 ? ` ↓${agent.behind}` : '';
-  const gitChipsW = dirtyChip.length + aheadChip.length + behindChip.length;
-  const rightW = (updateText ? updateText.length + 4 : 0)
-    + (jobsText ? jobsText.length + 4 : 0)
-    + (permText ? permText.length + 4 : 0)
-    + `${statusGlyph} ${statusWord}`.length;
-  const nameStr = trunc(humanize(agent.name || '—'), 24);
-  const leftFixedW = `[${agent.slot}] `.length + nameStr.length + 2
+  // 0479 followup: on a narrow terminal the right-hand chips overflowed the
+  // row and were clipped at its end, where the status word sits (81 columns
+  // lost both perm and the status word, 2026-11-04 recording). Now the status
+  // word always stays and the other chips drop WHOLE, by rank: a
+  // bypassPermissions warning, then running jobs, then perm, then the git
+  // counts, then claude's update notice. The name shrinks to NAME_MIN before
+  // the branch gives up its last BRANCH_MIN cells.
+  const NAME_MIN = 10;
+  const BRANCH_MIN = 3;
+  const statusText = `${statusGlyph} ${statusWord}`;
+  const nameFull = humanize(agent.name || '—');
+  const leftBaseW = `[${agent.slot}] `.length + 2
     + `[${modelLabel}]  `.length
     + (resolvedText ? `⚠ resolved ${resolvedText}  `.length : 0)
     + 2; // '⎇ '
-  const branchStr = trunc(humanize(agent.branch || '—'),
-    Math.max(3, innerW - leftFixedW - gitChipsW - rightW - 1));
+  const permDanger = agent.permissionMode === 'bypassPermissions';
+  const headerRoom = innerW - leftBaseW - Math.min(nameFull.length, NAME_MIN) - BRANCH_MIN - statusText.length - 1;
+  const shown = keepWhole([
+    { key: 'perm', width: permText ? permText.length + 4 : 0, rank: permDanger ? 0 : 2 },
+    { key: 'jobs', width: jobsText ? jobsText.length + 4 : 0, rank: 1 },
+    { key: 'dirty', width: dirtyChip.length, rank: 3 },
+    { key: 'behind', width: behindChip.length, rank: 4 },
+    { key: 'ahead', width: aheadChip.length, rank: 5 },
+    { key: 'update', width: updateText ? updateText.length + 4 : 0, rank: 6 },
+  ], headerRoom);
+  const chipsW = (shown.has('perm') ? permText.length + 4 : 0)
+    + (shown.has('jobs') ? jobsText.length + 4 : 0)
+    + (shown.has('dirty') ? dirtyChip.length : 0)
+    + (shown.has('behind') ? behindChip.length : 0)
+    + (shown.has('ahead') ? aheadChip.length : 0)
+    + (shown.has('update') ? updateText.length + 4 : 0);
+  // Name and branch share what is left; the name takes up to 24 first.
+  const textRoom = innerW - leftBaseW - statusText.length - chipsW - 1;
+  const nameW = Math.min(24, nameFull.length, Math.max(Math.min(nameFull.length, NAME_MIN), textRoom - BRANCH_MIN));
+  const nameStr = trunc(nameFull, nameW);
+  const branchStr = trunc(humanize(agent.branch || '—'), Math.max(BRANCH_MIN, textRoom - nameStr.length));
 
   // Session cost is a ~estimate when the model's pricing row is inherited,
   // not verified (0408/M4) — mark it so it can't pass for a billed figure.
   const costPrefix = model && model.estimatedPricing ? '~' : '';
+
+  // ── Compact stats line, as whole chips (0479) ─────────────────
+  // Too wide for the modal, chips are dropped whole, highest `drop` first:
+  // health, then cache, out and in, then the usage windows, then cost. ctx
+  // goes last. See fitChips.
+  const ctxCol = overT ? theme.red : nearT ? theme.yellow : theme.accent;
+  const fiveH = usage?.fiveHour?.usedPct;
+  const sevenD = usage?.sevenDay?.usedPct;
+  const statChips = fitChips([
+    { group: 'ctx', drop: 0, parts: [['ctx ', theme.dim],
+      [ctxMeasured ? fmtK(agent.context || 0) : UNMEASURED, ctxCol],
+      [`/${ctxMaxText}  `, theme.dim], [ctxPctText, ctxCol]] },
+    { group: 'tok', drop: 3, parts: [['in ', theme.dim], [`${fmtKMeasured(agent.tokensIn)}↓`, theme.fg]] },
+    { group: 'tok', drop: 4, parts: [['out ', theme.dim], [`${fmtKMeasured(agent.tokensOut)}↑`, theme.fg]] },
+    { group: 'tok', drop: 5, parts: [['cache ', theme.dim], [fmtKMeasured(agent.tokensCacheRead), theme.faint]] },
+    { group: 'cost', drop: 1, parts: [[`${costPrefix}${fmtMoneyMeasured(agent.costSession)}`, theme.fg],
+      [' (wk ', theme.dim], [fmtMoney(weekCost || 0), theme.fg], [')', theme.dim]] },
+    ...(fiveH != null ? [{ group: 'usage', drop: 2,
+      parts: [['5h ', theme.dim], [`${fiveH.toFixed(0)}%`, pctColor(fiveH, theme)]] }] : []),
+    ...(sevenD != null ? [{ group: 'usage', drop: 2,
+      parts: [['7d ', theme.dim], [`${sevenD.toFixed(0)}%`, pctColor(sevenD, theme)]] }] : []),
+    // verdictWord is the first token of the verdict string read from
+    // <cwd>/.project-health/history.jsonl — untrusted, and an escape payload
+    // carries no whitespace so it survives the tokenizer. Sanitize before it
+    // reaches the terminal (0181 convention; Card dropped this field entirely
+    // in 0256, Zoom keeps it humanize()'d).
+    ...(health ? [{ group: 'health', drop: 6, parts: [['health ', theme.dim],
+      [`●${health.score.toFixed(0)}${health.arrow}`, healthColor(health, theme)],
+      [` ${humanize(health.verdictWord)}`, theme.dim]] }] : []),
+  ], innerW);
 
   return (
     <Box
@@ -299,15 +353,15 @@ export default function Zoom({
           )}
           <Text color={theme.dim}>⎇ </Text>
           <Text color={theme.fg}>{branchStr}</Text>
-          {dirtyChip !== '' && (
+          {shown.has('dirty') && (
             <Text color={!dirtyKnown ? theme.dim : (agent.dirty || 0) > 0 ? theme.yellow : theme.green}>{dirtyChip}</Text>
           )}
-          {aheadChip  !== '' && <Text color={theme.accent}>{aheadChip}</Text>}
-          {behindChip !== '' && <Text color={theme.yellow}>{behindChip}</Text>}
+          {shown.has('ahead') && <Text color={theme.accent}>{aheadChip}</Text>}
+          {shown.has('behind') && <Text color={theme.yellow}>{behindChip}</Text>}
         </Box>
         <Box flexGrow={1} />
         <Box flexShrink={0}>
-          {updateText !== '' && (
+          {shown.has('update') && (
             <>
               {/* claude's own update notice, lifted out of the PTY body —
                   rendered faint so it reads as ambient chrome (0408/U1). */}
@@ -315,13 +369,13 @@ export default function Zoom({
               <Text color={theme.faint}>  · </Text>
             </>
           )}
-          {jobsText !== '' && (
+          {shown.has('jobs') && (
             <>
               <Text color={theme.accent}>{jobsText}</Text>
               <Text color={theme.faint}>  · </Text>
             </>
           )}
-          {agent.permissionMode && (
+          {shown.has('perm') && (
             <>
               <Text color={agent.permissionMode === 'bypassPermissions' ? theme.red : agent.permissionMode === 'plan' ? theme.cyan : theme.dim}>
                 {permText}
@@ -334,55 +388,15 @@ export default function Zoom({
       </Box>
 
       {/* ── Compact stats line (always visible; pinned to its one budgeted
-          row — a narrow modal clips the tail chips instead of wrapping) ── */}
+          row). statChips already fits innerW, so nothing here shrinks: a chip
+          is shown whole or dropped (0479). ── */}
       <Box marginTop={1} height={1} overflow="hidden">
-        <Text color={theme.dim}>ctx </Text>
-        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxMeasured ? fmtK(agent.context || 0) : UNMEASURED}</Text>
-        <Text color={theme.dim}>/{ctxMaxText}  </Text>
-        <Text color={overT ? theme.red : nearT ? theme.yellow : theme.accent}>{ctxPctText}</Text>
-        <Text color={theme.faint}>  ·  </Text>
-        <Text color={theme.dim}>in </Text>
-        <Text color={theme.fg}>{fmtKMeasured(agent.tokensIn)}↓</Text>
-        <Text color={theme.dim}>  out </Text>
-        <Text color={theme.fg}>{fmtKMeasured(agent.tokensOut)}↑</Text>
-        <Text color={theme.dim}>  cache </Text>
-        <Text color={theme.faint}>{fmtKMeasured(agent.tokensCacheRead)}</Text>
-        <Text color={theme.faint}>  ·  </Text>
-        <Text color={theme.fg}>{costPrefix}{fmtMoneyMeasured(agent.costSession)}</Text>
-        <Text color={theme.dim}> (wk </Text>
-        <Text color={theme.fg}>{fmtMoney(weekCost || 0)}</Text>
-        <Text color={theme.dim}>)</Text>
-        {usage && (usage.fiveHour?.usedPct != null || usage.sevenDay?.usedPct != null) && (
-          <>
-            <Text color={theme.faint}>  ·  </Text>
-            {usage.fiveHour?.usedPct != null && (
-              <>
-                <Text color={theme.dim}>5h </Text>
-                <Text color={pctColor(usage.fiveHour.usedPct, theme)}>{usage.fiveHour.usedPct.toFixed(0)}%</Text>
-              </>
-            )}
-            {usage.fiveHour?.usedPct != null && usage.sevenDay?.usedPct != null && <Text color={theme.dim}>  </Text>}
-            {usage.sevenDay?.usedPct != null && (
-              <>
-                <Text color={theme.dim}>7d </Text>
-                <Text color={pctColor(usage.sevenDay.usedPct, theme)}>{usage.sevenDay.usedPct.toFixed(0)}%</Text>
-              </>
-            )}
-          </>
-        )}
-        {health && (
-          <>
-            <Text color={theme.faint}>  ·  </Text>
-            <Text color={theme.dim}>health </Text>
-            <Text color={healthColor(health, theme)}>●{health.score.toFixed(0)}{health.arrow}</Text>
-            {/* verdictWord is the first token of the verdict string read from
-                <cwd>/.project-health/history.jsonl — untrusted, and an escape
-                payload carries no whitespace so it survives the tokenizer.
-                Sanitize before it reaches the terminal (0181 convention; Card
-                dropped this field entirely in 0256, Zoom keeps it humanize()'d). */}
-            <Text color={theme.dim}> {humanize(health.verdictWord)}</Text>
-          </>
-        )}
+        {statChips.map((chip, i) => (
+          <Box key={i} flexShrink={0}>
+            {chip.sep !== '' && <Text color={theme.faint}>{chip.sep}</Text>}
+            {chip.parts.map(([text, color], j) => <Text key={j} color={color}>{text}</Text>)}
+          </Box>
+        ))}
       </Box>
 
       {/* ── Open tasks panel (from claude's TodoWrite plan) ──
