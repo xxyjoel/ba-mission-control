@@ -106,9 +106,13 @@ test('Agent transcript: UUID guard + 0600/0700 modes', async () => {
   good.start();
   const bad = new Agent({ slot: 2, cwd: base, model: 'sonnet-4.6', sessionId: '../../evil' });
   bad.start();
-  await sleep(700); // let the fake claude's init event land
+  // Wait for the fake claude's init event to land. A fixed 700 ms sleep was
+  // too short once under a loaded full-suite run (2026-11-17), so poll for
+  // the file for up to 5 s instead.
+  const tp = join(TRANSCRIPT_BASE_DIR, `${UU}.jsonl`);
+  for (const t0 = Date.now(); !existsSync(tp) && Date.now() - t0 < 5000;) await sleep(50);
+  await sleep(100); // and give the bad session the same chance to (wrongly) write
   try {
-    const tp = join(TRANSCRIPT_BASE_DIR, `${UU}.jsonl`);
     assert.ok(existsSync(tp), 'valid session transcript exists');
     assert.equal(mode(tp), '600', 'transcript 0600');
     assert.equal(mode(TRANSCRIPT_BASE_DIR), '700', 'transcript dir 0700');
