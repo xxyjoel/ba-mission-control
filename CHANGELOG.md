@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.8] — 2026-11-17
+
 ### Fixed
 - A terminal resize no longer leaves rows of the old screen behind (a second
   status bar, a stray border, mc's key hints inside claude's text). Once the
