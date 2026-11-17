@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.7] — 2026-11-17
+
 ### Added
 - Every card now says whether the session is ready for you. An idle card with
   nothing running and no plan left open reads `your turn →` in green; it used
