@@ -137,9 +137,11 @@ test('0389: the status bar stays ONE row no matter how long the buffer gets', as
 test('0389: the nav hints yield the bar to the buffer while typing a command', async () => {
   const { stdin, lastFrame, unmount } = mount({ liveSlots: [1] });
   await tick(); await tick();
-  // The nav hints truncate to fit the row now (they used to wrap it onto two),
-  // so assert on their leading words, which survive at any usable width.
-  assert.match(strip(lastFrame()), /move/, 'nav hints show when the bar is idle');
+  // 0479: at ink-testing-library's 100 columns the nav hints no longer fit
+  // beside the key hints, so they are hidden rather than cut into them; the
+  // idle bar shows the key hints. tests/StatusBar.fit.test.jsx checks that the
+  // nav hints also step aside while typing on a terminal wide enough for them.
+  assert.match(strip(lastFrame()), /esc settings/, 'key hints show when the bar is idle');
   await press(stdin, ':');
   stdin.write('resume all sessions');
   await tick(); await tick();

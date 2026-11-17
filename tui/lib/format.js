@@ -144,6 +144,47 @@ export function trunc(s, w) {
   return out + '…';
 }
 
+// Display width in terminal cells.
+export const cellWidth = (s) => stringWidth(s == null ? '' : String(s));
+
+// fitChips — fit a one-row stat line into `width` cells by dropping whole
+// chips. Letting Ink shrink each piece cut figures short: zoom showed "$428"
+// for $4281.56 and "7d3" for 7d 35% (0479). A chip is { group, drop, parts:
+// [[text, color], …] }. While the line is too wide, the chip with the highest
+// `drop` rank goes (the later one on a tie); the rest keep their order. Each
+// kept chip gets the `sep` to draw before it: itemSep inside a group,
+// groupSep between groups, none for the first.
+// keepWhole(items, room) → Set of the keys to show. items: [{key, width,
+// rank}]; lower rank is kept first. Strict: once one item does not fit, it
+// and every item ranked after it are dropped, so a short low-priority item can
+// never stay while a higher one went. Items of width 0 are absent and skipped.
+// Used by the zoom header, where every item is shown whole or not at all.
+export function keepWhole(items, room) {
+  const keep = new Set();
+  let left = room;
+  for (const it of [...(items || [])].filter((i) => i && i.width > 0).sort((a, b) => a.rank - b.rank)) {
+    if (it.width > left) break;
+    keep.add(it.key);
+    left -= it.width;
+  }
+  return keep;
+}
+
+export function fitChips(chips, width, { groupSep = '  ·  ', itemSep = '  ' } = {}) {
+  const lay = (list) => list.map((c, i) => ({
+    ...c, sep: i === 0 ? '' : list[i - 1].group === c.group ? itemSep : groupSep,
+  }));
+  const widthOf = (list) => list.reduce(
+    (w, c) => w + stringWidth(c.sep + c.parts.map(([text]) => text).join('')), 0);
+  let kept = lay(chips);
+  while (kept.length && widthOf(kept) > width) {
+    let at = 0;
+    kept.forEach((c, i) => { if ((c.drop ?? 0) >= (kept[at].drop ?? 0)) at = i; });
+    kept = lay(kept.filter((_, i) => i !== at));
+  }
+  return kept;
+}
+
 // padCol — fit a string into exactly `width` display CELLS: grapheme-safe
 // truncate if too long, space-pad if too short. Used for fixed-width columns
 // (e.g. the FleetLog name column) so a multi-byte name is never split mid-

@@ -529,13 +529,26 @@ permission-mode line) is never hidden either. Keys available there:
 
 **Session geometry is fixed, on purpose.** Every session's `claude` runs at the
 zoom body size — computed once from your terminal (`tui/lib/zoomGeometry.js`)
-and applied at spawn — and only a real terminal resize changes it. Claude
-reprints its entire frame on every resize and the pre-resize copy stays in mc's
-scrollback, so a resize costs you one extra, differently-wrapped copy of the
-conversation (measured: 1 copy → 2 after widening → 3 after widening again).
+and applied at spawn — and only a real terminal resize changes it, once the
+resize has been quiet for 250 ms. claude 2.1.220 reprinted its whole frame on
+every resize and left the old copy in mc's scrollback (1 copy → 2 → 3). claude
+2.1.296, 2.1.322 and 2.1.326 redraw cleanly (measured 2026-11-17 with
+`scripts/probe-claude-resize.mjs`), but fewer resizes are still cheaper.
 Zooming in, zooming out, a toast landing, and opening the stats or tasks panel
 therefore resize nothing; the zoom pane renders the bottom slice of the
 emulator instead, and `Ctrl+F` scroll reaches whatever the window skipped.
+
+**After a resize, mc repaints its whole screen** once the resize has been quiet
+for 250 ms. Without it, rows of the old frame stayed on screen (a second status
+bar, a stray border, mc's key hints inside claude's text) until something else
+redrew them.
+
+**Narrow windows drop whole pieces, never cut figures.** The zoom stats line
+drops health, then cache, out, in, the usage windows and cost; `ctx` goes last.
+The zoom header always keeps claude's status word; it drops the update notice,
+then the git counts, then the permission mode, then the job count (a
+`bypassPermissions` mode stays longest). The status bar hides its navigation
+hints when they would run into the key hints.
 
 #### Slash commands (in zoom)
 
